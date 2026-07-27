@@ -2,16 +2,17 @@
   "schema_version": "seektalent.major_refactor_goal.v1",
   "goal_id": "offline-distribution-2026-07",
   "change_type": "major_refactor",
-  "summary": "Ship the reproducible macOS Intel distribution with a verified SeekTalent OpenCLI fork pair.",
-  "rationale": "The workflow, build script, installer, and tests must verify one pinned runtime and extension pair so user machines never fetch or combine browser bridge components themselves.",
+  "summary": "Ship all supported SeekTalent product packages with one verified WTSCLI runtime and extension pair.",
+  "rationale": "Issue #431 extends the existing offline-distribution boundary to Windows x64, macOS arm64, and macOS Intel. Product builds prepare the pinned runtime and exact extension together, while user installs verify and atomically activate the pair without fetching browser components.",
   "touched_layers": [
     "governance",
-    "docs",
-    "tests",
-    "other"
+    "bff",
+    "other",
+    "provider"
   ],
   "red_files": [
-    ".github/workflows/build-macos-intel-offline.yml"
+    ".github/workflows/native-launch-binding-probe.yml",
+    "src/seektalent/providers/liepin/browser_environment.py"
   ],
   "verification": [
     "uv run pytest tests/test_build_offline_macos_intel.py tests/test_pr_governance.py -q",
@@ -20,10 +21,14 @@
     "uv run python tools/check_pr_governance.py --base origin/main"
   ],
   "deletion_targets": [
-    "Manual ad hoc macOS Intel packaging steps"
+    "User-side WTSCLI npm installation and separately supplied extension bundles"
   ],
   "risks": [
-    "The workflow remains manual and pins the exact SeekTalent OpenCLI fork commit used to build both bridge components.",
-    "The generated bundle must be verified from the dist directory rather than trusting intermediate build files."
-  ]
+    "A partial upgrade must never replace only the runtime, extension, manifest, Python prefix, or command shims.",
+    "A stale Chrome extension worker must remain visible and require an explicit extension reload or Chrome restart."
+  ],
+  "line_count_exemptions": [
+    "src/seektalent/cli.py"
+  ],
+  "line_count_rationale": "The existing oversized CLI remains the stable command registry and Workbench entrypoint. This slice adds one small browser-check command and a narrow Liepin-only disable path; environment classification and verification logic live in a focused module."
 }

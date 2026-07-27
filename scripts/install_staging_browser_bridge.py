@@ -74,6 +74,8 @@ def main() -> int:
 
 def _run_with_explicit_package_context() -> int | None:
     source_root = str(SOURCE_ROOT)
+    if not (SOURCE_ROOT / "seektalent").is_dir():
+        return None
     if os.environ.get(PACKAGE_CONTEXT_ENV) == source_root:
         return None
     env = {

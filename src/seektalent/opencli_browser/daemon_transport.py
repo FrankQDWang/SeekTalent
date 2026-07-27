@@ -123,6 +123,34 @@ class OpenCliDaemonClient:
         with self._lock:
             return self._verify_bridge(timeout_seconds=timeout_seconds, validate=validate)
 
+    def inspect_bridge_status(
+        self,
+        *,
+        timeout_seconds: float = 2.0,
+    ) -> tuple[
+        Mapping[str, object],
+        tuple[Literal["bridge", "extension", "process"], str] | None,
+    ]:
+        """Read status once without retrying or changing daemon lifecycle."""
+        with self._lock:
+            status, payload, owner_hash = self._request_json(
+                "GET",
+                f"/status?{urlencode({'contextId': self.context_id})}"
+                if self.context_id
+                else "/status",
+                body=None,
+                timeout_seconds=timeout_seconds,
+            )
+            if status != 200:
+                return payload, ("process", OPENCLI_STATUS_UNAVAILABLE)
+            failure = bridge_status_failure(
+                payload,
+                self.requirement,
+                expected_owner_hash=owner_hash,
+            )
+            self._verified = failure is None
+            return payload, failure
+
     def command(
         self,
         action: OpenCliDaemonAction,

@@ -181,6 +181,30 @@ def test_status_response_without_local_exact_ownership_is_foreign_owner(
     assert captured.value.safe_reason_code == OPENCLI_FOREIGN_OWNER
 
 
+def test_inspect_bridge_status_reads_once_without_retry_or_lifecycle_change() -> None:
+    connection = _Connection(
+        status_payload=_status(extensionBridgeBuildId="stale-build"),
+    )
+    factory_calls: list[bool] = []
+
+    def factory(*_args):
+        factory_calls.append(True)
+        return connection
+
+    client = OpenCliDaemonClient(
+        requirement=_requirement(),
+        connection_factory=factory,
+    )
+
+    _payload, failure = client.inspect_bridge_status()
+
+    assert failure == ("extension", OPENCLI_BRIDGE_BUILD_MISMATCH)
+    assert factory_calls == [True]
+    assert [(method, path) for method, path, _body, _headers in connection.requests] == [
+        ("GET", "/status"),
+    ]
+
+
 @pytest.mark.parametrize(
     ("mutation", "reason"),
     [

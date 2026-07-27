@@ -238,8 +238,11 @@ _seektalent_offline_install() {
   echo "WTSCLI Browser Bridge version: ${installed_extension_version}"
   echo "WTSCLI Browser Bridge build: ${browser_bridge_build_id}"
   echo "WTSCLI extension ID: ${browser_bridge_extension_id}"
-  echo "Chrome extension directory: ${extension_install_dir}"
-  echo "Chrome setup: open chrome://extensions, enable Developer mode, and choose Load unpacked."
+  echo "固定扩展目录：~/.seektalent/chrome-extension/wtscli"
+  echo "Chrome 扩展目录：${extension_install_dir}"
+  echo "打开 chrome://extensions，启用“开发者模式”，选择“加载已解压的扩展程序”，并选择上面的唯一目录。"
+  echo "升级后请在该页面点击 WTSCLI 的“重新加载”；若仍显示旧版本，请完全退出并重启 Chrome。"
+  echo "检查：seektalent browser-check"
   echo "Run: export SEEKTALENT_DOMI_JWT='<new Domi JWT>'; seektalent workbench"
   return 0
 }

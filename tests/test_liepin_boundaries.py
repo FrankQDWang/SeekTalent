@@ -168,6 +168,7 @@ OPENCLI_PYTHON_ALLOWLIST = {
     "src/seektalent/opencli_browser/runtime.py",
     "src/seektalent/opencli_browser/automation.py",
     "src/seektalent/providers/liepin/client.py",
+    "src/seektalent/providers/liepin/browser_environment.py",
     "src/seektalent/providers/liepin/opencli_worker_client.py",
     "src/seektalent/providers/liepin/opencli_retriever.py",
     "src/seektalent/providers/liepin/opencli_browser_cli.py",

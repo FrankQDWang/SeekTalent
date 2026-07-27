@@ -174,6 +174,7 @@ KNOWN_COMMANDS = {
     "llm-prf-live-validate",
     "init",
     "doctor",
+    "browser-check",
     "workbench",
     "version",
     "update",
@@ -1083,6 +1084,19 @@ def _inspect_payload() -> dict[str, object]:
             "outputs": "Human-readable checks on stdout by default. In --json mode, stdout contains one JSON object.",
             "side_effects": "May create the configured output directory to verify writability.",
         },
+        "browser-check": {
+            "description": "Check the installed WTSCLI pair and Liepin browser readiness without restarting it.",
+            "machine_readable": False,
+            "arguments": [
+                _arg_spec("--json", "flag", "Emit a single JSON object."),
+            ],
+            "examples": [
+                "seektalent browser-check",
+                "seektalent browser-check --json",
+            ],
+            "outputs": "A stable readiness reason code and an actionable Chinese next step.",
+            "side_effects": "Reads the installed pair and current WTSCLI status; it does not restart the daemon or change browser tabs.",
+        },
         "liepin-smoke": {
             "description": "Run a manual low-budget live Liepin smoke check.",
             "machine_readable": False,
@@ -1764,6 +1778,34 @@ def _doctor_command(args: argparse.Namespace) -> int:
     return 0 if ok else 1
 
 
+def _browser_check_command(args: argparse.Namespace) -> int:
+    from seektalent.domi_bootstrap import resolve_domi_node
+
+    environment = importlib.import_module("seektalent.providers.liepin.browser_environment")
+    node = resolve_domi_node(env=os.environ)
+    if not node.is_file() or (sys.platform != "win32" and not os.access(node, os.X_OK)):
+        result = environment.BrowserBridgeEnvironmentStatus(
+            ok=False,
+            liepin_enabled=False,
+            reason_code="wtscli_daemon_missing",
+            message="未找到 SeekTalent WTSCLI 使用的 Domi Node 运行时。",
+            action="请确认 Domi 已安装，或设置 SEEKTALENT_DOMI_NODE 后重新运行环境检查。",
+            extension_dir=Path.home() / ".seektalent" / "chrome-extension" / "wtscli",
+        )
+    else:
+        result = environment.check_browser_bridge_environment(
+            install_root=Path.home() / ".seektalent",
+            node=node,
+        )
+    if args.json_output:
+        _emit_json(sys.stdout, result.to_public_dict())
+    else:
+        print(f"{'OK' if result.ok else 'BLOCKED'} {result.reason_code}: {result.message}")
+        print(f"操作：{result.action}")
+        print(f"扩展目录：{result.extension_dir}")
+    return 0 if result.ok else 1
+
+
 _WORKBENCH_DOMI_NODE_ENV_KEYS = ("SEEKTALENT_WTSCLI_NODE", "SEEKTALENT_DOMI_NODE", "DOMI_NODE")
 
 
@@ -1777,7 +1819,8 @@ def _workbench_startup_preflight(env: MutableMapping[str, str]) -> bool:
         )
         return False
     if not _configure_workbench_domi_opencli_node(env):
-        return False
+        _disable_liepin_source(env)
+        return True
 
     try:
         launcher = importlib.import_module("seektalent.opencli_launcher")
@@ -1787,11 +1830,11 @@ def _workbench_startup_preflight(env: MutableMapping[str, str]) -> bool:
     except Exception as exc:
         if exc.__class__.__name__ != "BootstrapError":
             raise
-        _print_workbench_reason(
+        _print_workbench_warning(
             "liepin_opencli_bootstrap_failed",
-            f"WTSCLI/Node 启动失败：{exc}",
+            f"WTSCLI/Node 不可用，已只禁用猎聘 source：{exc}",
         )
-        return False
+        _disable_liepin_source(env)
 
     return True
 
@@ -1813,13 +1856,20 @@ def _configure_workbench_domi_opencli_node(env: MutableMapping[str, str]) -> boo
         if resolved_node.is_file() and (sys.platform == "win32" or os.access(resolved_node, os.X_OK)):
             node = str(resolved_node)
     if node is None:
-        _print_workbench_reason(
+        _print_workbench_warning(
             "domi_node_missing",
-            "未找到 Domi Node 运行时。请在当前终端设置 SEEKTALENT_DOMI_NODE 或 DOMI_NODE 后重试。",
+            "未找到 Domi Node 运行时，已只禁用猎聘 source。请设置 SEEKTALENT_DOMI_NODE 或 DOMI_NODE 后重试。",
         )
         return False
     env["SEEKTALENT_WTSCLI_NODE"] = node
     return True
+
+
+def _disable_liepin_source(env: MutableMapping[str, str]) -> None:
+    env["SEEKTALENT_LIEPIN_WORKER_MODE"] = "disabled"
+    env["SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND"] = "disabled"
+    env.pop("SEEKTALENT_LIEPIN_OPENCLI_COMMAND", None)
+    env.pop(_MANAGED_OPENCLI_COMMAND_MARKER, None)
 
 
 def _first_nonblank_env(env: Mapping[str, str], keys: Sequence[str]) -> str | None:
@@ -1979,9 +2029,9 @@ def _workbench_command(args: argparse.Namespace) -> int:
         "prod",
         "--serve-frontend",
         "--liepin-worker-mode",
-        "opencli",
+        env["SEEKTALENT_LIEPIN_WORKER_MODE"],
         "--liepin-browser-action-backend",
-        "opencli",
+        env["SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND"],
     ]
     if args.lan:
         argv.append("--lan")
@@ -2319,6 +2369,18 @@ def build_exec_parser() -> argparse.ArgumentParser:
     doctor_parser.add_argument("--output-dir", help="Directory to validate as the artifact root.")
     doctor_parser.add_argument("--json", dest="json_output", action="store_true", help="Emit a single JSON object.")
     doctor_parser.set_defaults(handler=_doctor_command)
+
+    browser_check_parser = subparsers.add_parser(
+        "browser-check",
+        help="Check the installed WTSCLI pair and Liepin browser readiness.",
+    )
+    browser_check_parser.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Emit a single JSON object.",
+    )
+    browser_check_parser.set_defaults(handler=_browser_check_command)
 
     version_parser = subparsers.add_parser("version", help="Print the installed seektalent version.")
     version_parser.set_defaults(handler=_version_command)

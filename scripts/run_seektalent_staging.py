@@ -9,7 +9,7 @@ import subprocess
 import sys
 from collections.abc import Mapping, MutableMapping, Sequence
 from pathlib import Path
-from typing import Any
+from typing import Protocol
 
 
 STAGING_ROOT_ENV = "SEEKTALENT_STAGING_ROOT"
@@ -49,6 +49,21 @@ class StagingConfigurationError(RuntimeError):
     pass
 
 
+class _BrowserRuntime(Protocol):
+    node: Path
+    opencli_main: Path
+    bridge_manifest: Path | None
+
+
+class _EnvironmentStatus(Protocol):
+    ok: bool
+    reason_code: str
+    message: str
+    action: str
+    bridge_build_id: str | None
+    extension_dir: Path
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(list(sys.argv[1:] if argv is None else argv))
     try:
@@ -70,13 +85,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND_MANAGED"] = "1"
 
     if args.check:
-        try:
-            _verify_browser_bridge(runtime)
-        except Exception as exc:
-            safe_reason_code = getattr(exc, "safe_reason_code", None)
-            if not isinstance(safe_reason_code, str):
-                raise
-            print(f"reason_code=liepin_{safe_reason_code} staging browser bridge is not ready", file=sys.stderr)
+        status = _verify_browser_bridge(runtime)
+        if not status.ok:
+            print(
+                f"reason_code={status.reason_code} {status.message} 操作：{status.action}",
+                file=sys.stderr,
+            )
             return 1
         from seektalent.version import __version__
 
@@ -89,6 +103,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "runtimeMode": "prod",
                     "provider": "bailian",
                     "browserBridge": "connected",
+                    "browserBridgeBuildId": status.bridge_build_id,
+                    "extensionDir": str(status.extension_dir),
                     "stagingRoot": str(staging_root),
                     "python": sys.executable,
                     "node": str(runtime.node),
@@ -209,7 +225,11 @@ def _resolve_node(env: Mapping[str, str]) -> Path:
     return node
 
 
-def _ensure_browser_runtime(env: MutableMapping[str, str], *, staging_root: Path):
+def _ensure_browser_runtime(
+    env: MutableMapping[str, str],
+    *,
+    staging_root: Path,
+) -> _BrowserRuntime:
     from seektalent.opencli_launcher import ensure_opencli_runtime
 
     runtime_root = staging_root / "home" / ".seektalent" / "wtscli-runtime"
@@ -245,14 +265,18 @@ def _require_staging_port_ownership(staging_root: Path) -> None:
         client.close()
 
 
-def _verify_browser_bridge(runtime: Any) -> None:
-    from seektalent.opencli_browser.daemon_process import connect_installed_opencli_daemon
+def _verify_browser_bridge(runtime: _BrowserRuntime) -> _EnvironmentStatus:
+    from seektalent.providers.liepin.browser_environment import (
+        check_browser_bridge_environment,
+    )
 
-    client = connect_installed_opencli_daemon(runtime)
-    try:
-        client.verify_bridge(timeout_seconds=2.0)
-    finally:
-        client.close()
+    manifest = runtime.bridge_manifest
+    if manifest is None:
+        raise StagingConfigurationError("installed WTSCLI manifest is missing")
+    return check_browser_bridge_environment(
+        install_root=manifest.parent.parent,
+        node=runtime.node,
+    )
 
 
 def _server_command(args: argparse.Namespace) -> list[str]:

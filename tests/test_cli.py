@@ -344,6 +344,7 @@ def test_inspect_json_returns_machine_readable_contract(capsys: pytest.CaptureFi
     assert "run" in payload["commands"]
     assert "benchmark" in payload["commands"]
     assert "doctor" in payload["commands"]
+    assert "browser-check" in payload["commands"]
     assert "llm-prf-live-validate" in payload["commands"]
     assert "prf-sidecar-prefetch" not in payload["commands"]
     assert "inspect" in payload["commands"]
@@ -750,6 +751,11 @@ def test_workbench_command_requires_domi_node_for_domi_opencli(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    launches: list[list[str]] = []
+
+    class Completed:
+        returncode = 0
+
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_PROVIDER_LABEL", "domi")
     monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "domi-test-jwt")
@@ -760,12 +766,18 @@ def test_workbench_command_requires_domi_node_for_domi_opencli(
         "seektalent.opencli_launcher.ensure_opencli_runtime",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("OpenCLI bootstrap must not run without Domi Node")),
     )
+    monkeypatch.setattr(
+        "seektalent.cli.subprocess.run",
+        lambda argv, **_kwargs: launches.append(list(argv)) or Completed(),
+    )
 
-    assert main(["workbench", "--port", "8123"]) == 1
+    assert main(["workbench", "--port", "8123"]) == 0
 
     captured = capsys.readouterr()
-    assert "reason_code=domi_node_missing" in captured.err
+    assert "warning_code=domi_node_missing" in captured.err
     assert "未找到 Domi Node 运行时" in captured.err
+    assert launches[0][launches[0].index("--liepin-worker-mode") + 1] == "disabled"
+    assert launches[0][launches[0].index("--liepin-browser-action-backend") + 1] == "disabled"
 
 
 def test_workbench_command_requires_domi_node_for_prod_opencli(
@@ -773,6 +785,11 @@ def test_workbench_command_requires_domi_node_for_prod_opencli(
     tmp_path: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    launches: list[list[str]] = []
+
+    class Completed:
+        returncode = 0
+
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("SEEKTALENT_TEXT_LLM_API_KEY", "stale-text-key")
     monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "domi-test-jwt")
@@ -783,13 +800,50 @@ def test_workbench_command_requires_domi_node_for_prod_opencli(
         "seektalent.opencli_launcher.ensure_opencli_runtime",
         lambda **_kwargs: (_ for _ in ()).throw(AssertionError("OpenCLI bootstrap must not run without Domi Node")),
     )
+    monkeypatch.setattr(
+        "seektalent.cli.subprocess.run",
+        lambda argv, **_kwargs: launches.append(list(argv)) or Completed(),
+    )
 
-    assert main(["workbench", "--port", "8123"]) == 1
+    assert main(["workbench", "--port", "8123"]) == 0
 
     captured = capsys.readouterr()
-    assert "reason_code=domi_node_missing" in captured.err
+    assert "warning_code=domi_node_missing" in captured.err
     assert "未找到 Domi Node 运行时" in captured.err
     assert "reason_code=liepin_opencli_bootstrap_failed" not in captured.err
+    assert launches[0][launches[0].index("--liepin-worker-mode") + 1] == "disabled"
+
+
+def test_workbench_command_disables_only_liepin_when_wtscli_bootstrap_fails(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    from seektalent.opencli_launcher import BootstrapError
+
+    launches: list[list[str]] = []
+
+    class Completed:
+        returncode = 0
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "domi-test-jwt")
+    _set_workbench_domi_env(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        "seektalent.opencli_launcher.ensure_opencli_runtime",
+        lambda **_kwargs: (_ for _ in ()).throw(BootstrapError("corrupt exact pair")),
+    )
+    monkeypatch.setattr(
+        "seektalent.cli.subprocess.run",
+        lambda argv, **_kwargs: launches.append(list(argv)) or Completed(),
+    )
+
+    assert main(["workbench", "--port", "8123"]) == 0
+
+    captured = capsys.readouterr()
+    assert "warning_code=liepin_opencli_bootstrap_failed" in captured.err
+    assert launches[0][launches[0].index("--liepin-worker-mode") + 1] == "disabled"
+    assert launches[0][launches[0].index("--liepin-browser-action-backend") + 1] == "disabled"
 
 
 def test_workbench_command_does_not_run_opencli_preflight_before_launch(

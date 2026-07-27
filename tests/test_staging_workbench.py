@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -270,7 +271,15 @@ def test_check_reports_paths_without_secret(
         "_ensure_browser_runtime",
         lambda *_args, **_kwargs: Runtime(),
     )
-    monkeypatch.setattr(run_seektalent_staging, "_verify_browser_bridge", lambda _runtime: None)
+    monkeypatch.setattr(
+        run_seektalent_staging,
+        "_verify_browser_bridge",
+        lambda _runtime: SimpleNamespace(
+            ok=True,
+            bridge_build_id="exact-build",
+            extension_dir=root / "home" / ".seektalent" / "chrome-extension" / "wtscli",
+        ),
+    )
 
     assert run_seektalent_staging.main(["--check"]) == 0
 
@@ -300,9 +309,6 @@ def test_check_fails_when_paired_browser_extension_is_not_connected(
         def __init__(self) -> None:
             self.node = node
 
-    class BrowserBridgeError(RuntimeError):
-        safe_reason_code = "opencli_extension_disconnected"
-
     monkeypatch.setattr(
         run_seektalent_staging,
         "_ensure_browser_runtime",
@@ -311,13 +317,18 @@ def test_check_fails_when_paired_browser_extension_is_not_connected(
     monkeypatch.setattr(
         run_seektalent_staging,
         "_verify_browser_bridge",
-        lambda _runtime: (_ for _ in ()).throw(BrowserBridgeError()),
+        lambda _runtime: SimpleNamespace(
+            ok=False,
+            reason_code="wtscli_extension_not_loaded_or_disabled",
+            message="extension unavailable",
+            action="reload extension",
+        ),
     )
 
     assert run_seektalent_staging.main(["--check"]) == 1
 
     captured = capsys.readouterr()
-    assert "reason_code=liepin_opencli_extension_disconnected" in captured.err
+    assert "reason_code=wtscli_extension_not_loaded_or_disabled" in captured.err
     assert captured.out == ""
 
 
