@@ -164,7 +164,6 @@ OPENCLI_PYTHON_ALLOWLIST = {
     "src/seektalent/opencli_browser/daemon_transport.py",
     "src/seektalent/opencli_browser/fault_isolation.py",
     "src/seektalent/opencli_browser/lifecycle.py",
-    "src/seektalent/opencli_browser/lifecycle_registry.py",
     "src/seektalent/opencli_browser/reason_codes.py",
     "src/seektalent/opencli_browser/runtime.py",
     "src/seektalent/opencli_browser/automation.py",
@@ -221,6 +220,39 @@ _LITERAL_CARD_TEXT_TAIL_CONSTANTS = {
     "src/seektalent/providers/liepin/liepin_site_payloads.py": {"FORBIDDEN_CARD_SUMMARY_KEYS"},
     "src/seektalent/providers/liepin/worker_contracts.py": {"LIEPIN_CARD_PAYLOAD_TEXT_TAIL_KEYS"},
 }
+
+
+def test_retired_tab_reclaimer_has_no_production_or_shipped_wiring() -> None:
+    source_files = tuple(SRC.rglob("*.py"))
+    combined_source = "\n".join(path.read_text(encoding="utf-8") for path in source_files)
+
+    for retired_symbol in (
+        "request_reclaim",
+        "BrowserControlLifecycle",
+        "BrowserControlRegistry",
+        "OpenCliDaemonOwnedTabCloser",
+        "pending_tabs",
+        "_reclaim_owned_tab",
+        "browser_control.sqlite3",
+        "reclaim_requested",
+        "reclaim_failed",
+    ):
+        assert retired_symbol not in combined_source
+
+    close_primitive_callers = [
+        path.relative_to(ROOT).as_posix()
+        for path in source_files
+        if 'params["op"] = "close"' in path.read_text(encoding="utf-8")
+    ]
+    assert close_primitive_callers == ["src/seektalent/opencli_browser/automation.py"]
+
+    shipped_wiring = "\n".join(
+        path.read_text(encoding="utf-8", errors="ignore")
+        for root in (ROOT / "scripts", ROOT / "tools", ROOT / ".github")
+        for path in root.rglob("*")
+        if path.is_file()
+    )
+    assert "browser_control.sqlite3" not in shipped_wiring
 
 
 def test_provider_private_continuation_contract_stays_out_of_public_payloads() -> None:

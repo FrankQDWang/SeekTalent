@@ -862,11 +862,10 @@ def test_closed_component_mapping(
     assert result.actual_provider_account_ref == "provider-account-wtscli-1"
     assert result.component_receipt_refs == ("component-receipt-wtscli-1",)
     assert daemon.user_tabs == before_user_tabs
+    assert "tabs.close" not in [call[0] for call in daemon.calls]
+    clock.advance(10)
+    daemon.expire_owned_tabs()
     assert daemon.owned_tabs == set()
-    for label, params, _timeout, _started in daemon.calls:
-        if label == "tabs.close":
-            assert "controlKey" not in params
-            assert "fenceToken" not in params
 
 
 def test_a_host_tab_without_account_search_and_risk_proof_is_never_ready() -> None:
@@ -946,7 +945,7 @@ def test_binding_change_after_state_prevents_cleanup_command_and_leaves_idle_rec
         ConnectionResetError("sidecar process closed"),
     ],
 )
-def test_owned_tab_is_reclaimed_after_typed_failure_exception_eof_or_process_close(
+def test_owned_tab_is_left_to_idle_expiry_after_typed_failure_exception_eof_or_process_close(
     failure: BaseException,
 ) -> None:
     clock = _Clock()
@@ -959,7 +958,10 @@ def test_owned_tab_is_reclaimed_after_typed_failure_exception_eof_or_process_clo
 
     assert isinstance(result, VerifySessionResultV1)
     assert result.session_readiness == "not_ready"
-    assert [call[0] for call in daemon.calls][-1] == "tabs.close"
+    assert "tabs.close" not in [call[0] for call in daemon.calls]
+    assert daemon.owned_tabs == {"owned-search-page"}
+    clock.advance(10)
+    daemon.expire_owned_tabs()
     assert daemon.owned_tabs == set()
     assert daemon.user_tabs == before_user_tabs
 
@@ -984,7 +986,7 @@ def test_lost_tabs_new_response_leaves_only_the_deadline_bounded_idle_reclaim() 
     assert daemon.user_tabs == before_user_tabs
 
 
-def test_unverified_close_is_closed_not_ready_and_retains_the_idle_reclaim() -> None:
+def test_close_outcome_cannot_change_verify_result_when_completion_does_not_close() -> None:
     clock = _Clock()
     daemon = _FakeDaemon(clock)
     daemon.close_payload = {
@@ -999,8 +1001,9 @@ def test_unverified_close_is_closed_not_ready_and_retains_the_idle_reclaim() -> 
     result = _effect(daemon, snapshots, clock)(_request(), clock() + 10)
 
     assert isinstance(result, VerifySessionResultV1)
-    assert result.session_readiness == "not_ready"
-    assert result.safe_reason_code == "liepin_owned_tab_missing"
+    assert result.session_readiness == "ready"
+    assert result.safe_reason_code is None
+    assert "tabs.close" not in [call[0] for call in daemon.calls]
     assert daemon.owned_tabs == {"owned-search-page"}
     clock.advance(10)
     daemon.expire_owned_tabs()
@@ -1076,7 +1079,7 @@ def test_adapter_module_has_zero_production_callers_and_does_not_import_worker_o
 
 
 def test_adapter_result_is_strictly_closed_data_without_raw_daemon_payload() -> None:
-    result, daemon, _clock, _snapshots = _run_ready()
+    result, daemon, clock, _snapshots = _run_ready()
 
     assert isinstance(result, VerifySessionResultV1)
     payload = json.loads(result.model_dump_json())
@@ -1088,4 +1091,8 @@ def test_adapter_result_is_strictly_closed_data_without_raw_daemon_payload() -> 
     assert "user-host-page" not in serialized
     assert "owned-search-page" not in serialized
     assert SEARCH_URL not in serialized
+    assert daemon.owned_tabs == {"owned-search-page"}
+    assert "tabs.close" not in [call[0] for call in daemon.calls]
+    clock.advance(10)
+    daemon.expire_owned_tabs()
     assert daemon.owned_tabs == set()

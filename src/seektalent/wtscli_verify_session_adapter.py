@@ -126,8 +126,6 @@ class _WtsCliVerifySessionEffect:
             apply_command_error(probe, error.safe_reason_code)
         except (ArithmeticError, EOFError, OSError, RuntimeError, TypeError, ValueError):
             probe.safe_reason = "liepin_opencli_status_unavailable"
-        finally:
-            self._reclaim_owned_tab(request_facts, deadline_at, probe)
 
         if binding_changed or not self._binding_is_current(binding, request_facts):
             return failure_reply(request, "sidecar_not_ready")
@@ -135,8 +133,6 @@ class _WtsCliVerifySessionEffect:
             if not probe.wtscli_called:
                 return failure_reply(request, "exchange_deadline_expired")
             probe.safe_reason = "liepin_opencli_timeout"
-        elif probe.cleanup_failed:
-            probe.safe_reason = "liepin_owned_tab_missing"
         return result_reply(request, probe)
 
     def __repr__(self) -> str:
@@ -357,44 +353,6 @@ class _WtsCliVerifySessionEffect:
             "controlKey": self._control_key,
             "fenceToken": probe.control_fence,
         }
-
-    def _reclaim_owned_tab(
-        self,
-        request: _RequestFacts,
-        deadline_at: float,
-        probe: WtsCliReadinessProbe,
-    ) -> None:
-        page = probe.owned_page
-        session = probe.owned_session
-        if page is None or session is None:
-            return
-        try:
-            remaining = self._require_current(request, deadline_at, probe.binding)
-        except (_BindingChanged, _DeadlineExpired):
-            return
-        timeout = _command_timeout_within(remaining)
-        if timeout is None:
-            return
-        closed: object | None = None
-        with suppress(Exception):
-            probe.wtscli_called = True
-            closed = self._daemon.command(
-                "tabs",
-                {"op": "close", "session": session, "surface": "browser", "page": page},
-                timeout_seconds=timeout,
-            )
-        if type(closed) is OpenCliDaemonResult:
-            payload = _mapping(closed.data)
-            if (
-                payload is None
-                or payload.get("requested") != page
-                or payload.get("outcome") not in {"closed", "already_missing"}
-                or payload.get("verified") is not True
-            ):
-                probe.cleanup_failed = True
-        else:
-            probe.cleanup_failed = True
-
 
 def create_wtscli_verify_session_effect(
     *,

@@ -400,7 +400,6 @@ def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerCli
     from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
     from seektalent.opencli_browser.contracts import OpenCliBrowserConfig, OpenCliBrowserError
     from seektalent.opencli_browser.daemon_process import connect_installed_opencli_daemon
-    from seektalent.opencli_browser.lifecycle import BrowserControlLifecycle
     from seektalent.opencli_launcher import BootstrapError, ensure_opencli_runtime
     from seektalent.providers.liepin.opencli_retriever import LiepinOpenCliResumeRetriever
     from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
@@ -432,10 +431,6 @@ def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerCli
         try:
             runtime = ensure_opencli_runtime()
             daemon = connect_installed_opencli_daemon(runtime)
-            lifecycle = BrowserControlLifecycle.shared_from_daemon(
-                registry_path=settings.project_root / ".seektalent" / "browser_control.sqlite3",
-                daemon=daemon,
-            )
         except (BootstrapError, OpenCliBrowserError) as exc:
             raise _liepin_opencli_setup_error(exc) from exc
         return LiepinOpenCliResumeRetriever(
@@ -445,7 +440,6 @@ def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerCli
                 automation=OpenCliBrowserAutomation(
                     config=browser_config,
                     daemon=daemon,
-                    lifecycle=lifecycle,
                     timing_recorder=LiepinOpenCliTimingRecorder(
                         artifact_root=site_config.artifact_root,
                         writes_local_debug_artifacts=(
