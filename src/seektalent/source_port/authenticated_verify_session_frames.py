@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from hashlib import sha256
 import threading
 from typing import Annotated, Literal, Never, SupportsIndex, TypeAlias
+import weakref
 
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 
@@ -37,7 +39,12 @@ from seektalent.source_port.verify_session_contract import (
     validate_verify_session_result_echo_facts,
     verify_session_request_echo,
 )
-from seektalent.source_port.wire_primitives import Opaque96, PositiveJsonInteger, StrictWireModel
+from seektalent.source_port.wire_primitives import (
+    Opaque96,
+    PositiveJsonInteger,
+    StrictWireModel,
+    canonical_json_bytes,
+)
 
 
 MAX_FRAME_BYTES = DEFAULT_MAX_FRAME_BYTES
@@ -299,12 +306,30 @@ class ReceivedVerifySessionRejected:
     payload: VerifySessionRejectedV1
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class ReceivedVerifySessionResult:
     message_id: str
     reply_to: str
     correlation_id: str | None
     payload: VerifySessionResultV1
+
+
+@dataclass(frozen=True, slots=True)
+class AuthenticatedVerifySessionResult:
+    result: VerifySessionResultV1
+    observation_ref: str
+    result_digest: str
+    session_id: str
+    direction_seq: int
+    message_id: str
+    reply_to: str
+
+
+_AUTHENTICATED_RESULTS: weakref.WeakKeyDictionary[
+    ReceivedVerifySessionResult,
+    AuthenticatedVerifySessionResult,
+] = weakref.WeakKeyDictionary()
+_AUTHENTICATED_RESULTS_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -739,12 +764,33 @@ def _received_verify_session_message(envelope: _AuthenticatedEnvelope) -> Receiv
             payload=envelope.payload,
         )
     if isinstance(envelope, _VerifySessionResultEnvelope):
-        return ReceivedVerifySessionResult(
+        received = ReceivedVerifySessionResult(
             message_id=envelope.message_id,
             reply_to=envelope.reply_to,
             correlation_id=envelope.correlation_id,
             payload=envelope.payload,
         )
+        with _AUTHENTICATED_RESULTS_LOCK:
+            _AUTHENTICATED_RESULTS[received] = (
+                AuthenticatedVerifySessionResult(
+                    result=envelope.payload,
+                    observation_ref=sha256(
+                        canonical_json_bytes(
+                            envelope.model_dump(mode="json")
+                        )
+                    ).hexdigest(),
+                    result_digest=sha256(
+                        canonical_json_bytes(
+                            envelope.payload.model_dump(mode="json")
+                        )
+                    ).hexdigest(),
+                    session_id=envelope.session_id,
+                    direction_seq=envelope.direction_seq,
+                    message_id=envelope.message_id,
+                    reply_to=envelope.reply_to,
+                )
+            )
+        return received
     if isinstance(envelope, _VerifySessionFailureEnvelope):
         return ReceivedVerifySessionFailure(
             message_id=envelope.message_id,
@@ -758,6 +804,22 @@ def _received_verify_session_message(envelope: _AuthenticatedEnvelope) -> Receiv
         correlation_id=envelope.correlation_id,
         payload=envelope.payload,
     )
+
+
+def require_authenticated_verify_session_result(
+    received: ReceivedVerifySessionResult,
+) -> AuthenticatedVerifySessionResult:
+    if type(received) is not ReceivedVerifySessionResult:
+        raise VerifySessionFrameError(
+            "verify_session_result_not_authenticated"
+        )
+    with _AUTHENTICATED_RESULTS_LOCK:
+        authenticated = _AUTHENTICATED_RESULTS.get(received)
+    if authenticated is None:
+        raise VerifySessionFrameError(
+            "verify_session_result_not_authenticated"
+        )
+    return authenticated
 
 
 def _verify_session_pending(envelope: _AuthenticatedEnvelope) -> _VerifySessionPending:
@@ -889,4 +951,6 @@ __all__ = [
     "VerifySessionFrameReason",
     "VerifySessionReconcileRequiredV1",
     "VerifySessionRejectedV1",
+    "AuthenticatedVerifySessionResult",
+    "require_authenticated_verify_session_result",
 ]

@@ -246,10 +246,26 @@ class RuntimeUserAction(BaseModel):
     checkpoint_id: str
     checkpoint_hash: str
     candidate_truth_hash: str
+    entry_observation_ref: str
+    entry_observation_digest: str
+    accepted_requirement_revision_id: str
+    runtime_attempt_no: int
+    runtime_attempt_fence_ref: str
+    request_hash: str
+    profile_binding_generation: int
+    browser_control_scope_id: str
+    source_ledger_revision: int
+    source_reconciliation_revision: int
+    dispatch_intent_id: str
+    dispatch_intent_digest: str
+    source_operation_acceptance_ref: str
+    reconciliation_id: str | None = None
+    reconciliation_digest: str | None = None
     failure_id: str
     failure_revision: int
     status: Literal["pending", "resolved", "cancelled", "failed"]
     resolution_evidence_ref: str | None = None
+    resolution_binding_digest: str | None = None
     resolution_at: str | None = None
     authority_mode: Literal["no_owner", "active_owner"]
     owner_lease_id: str | None = None

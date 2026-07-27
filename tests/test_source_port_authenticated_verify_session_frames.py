@@ -26,6 +26,7 @@ from seektalent.source_port.authenticated_verify_session_frames import (
     VerifySessionFrameReason,
     VerifySessionReconcileRequiredV1,
     VerifySessionRejectedV1,
+    require_authenticated_verify_session_result,
 )
 from seektalent.source_port.verify_session_contract import (
     VerifySessionRequestEchoV1,
@@ -311,6 +312,25 @@ def test_submit_ack_and_terminal_result_share_one_authenticated_session_core() -
         ),
     )
     assert RAW_FENCE_TOKEN not in repr(received)
+    authenticated = require_authenticated_verify_session_result(received[0])
+    assert authenticated.result == result
+    assert authenticated.observation_ref
+    assert authenticated.result_digest
+
+
+def test_constructed_result_cannot_claim_authenticated_observation() -> None:
+    request = _request()
+    constructed = ReceivedVerifySessionResult(
+        message_id="result-forged",
+        reply_to="submit-1",
+        correlation_id="correlation-1",
+        payload=_result(request),
+    )
+
+    with pytest.raises(VerifySessionFrameError) as exc_info:
+        require_authenticated_verify_session_result(constructed)
+
+    assert exc_info.value.reason_code == "verify_session_result_not_authenticated"
 
 
 def test_accepted_ack_missing_durable_position_is_rejected_by_the_frame() -> None:
@@ -772,10 +792,12 @@ def test_frame_modules_keep_one_source_port_core_and_no_production_caller() -> N
         "__future__",
         "collections.abc",
         "dataclasses",
-        "enum",
-        "pydantic",
-        "threading",
-        "typing",
+            "enum",
+            "hashlib",
+            "pydantic",
+            "threading",
+            "typing",
+            "weakref",
         "seektalent.source_port.authenticated_frame_core",
         "seektalent.source_port.operation_dispatch",
         "seektalent.source_port.verify_session_contract",
@@ -799,7 +821,9 @@ def test_frame_modules_keep_one_source_port_core_and_no_production_caller() -> N
         "src/seektalent/source_port/sidecar_transport.py",
         "src/seektalent/source_port/verify_session_continuity_admission.py",
         "src/seektalent/source_port/verify_session_journal_effect.py",
-        "src/seektalent/source_port/verify_session_journal_effect_durable.py",
-        "src/seektalent/verify_session_closed_loop.py",
-        "src/seektalent/wtscli_verify_session_composition.py",
-    }
+            "src/seektalent/source_port/verify_session_journal_effect_durable.py",
+            "src/seektalent/verify_session_closed_loop.py",
+            "src/seektalent/wtscli_verify_session_composition.py",
+            "src/seektalent_runtime_control/needs_attention_admission.py",
+            "src/seektalent_runtime_control/needs_attention_store.py",
+        }

@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 import json
 import sqlite3
-from typing import Never
-import weakref
 
 from seektalent.diagnostics_event_models import FailureEnvelopeV1
 from seektalent.diagnostics_schema import (
@@ -21,8 +18,6 @@ from seektalent.diagnostics_storage import (
     load_failure_envelope_revision,
     store_failure_envelope_revision,
 )
-from seektalent.user_action import UserActionV1
-from seektalent.source_port.verify_session_contract import VerifySessionResultV1
 from seektalent_runtime_control.checkpoint_participant import (
     write_checkpoint_participant,
 )
@@ -33,443 +28,30 @@ from seektalent_runtime_control.errors import (
 )
 from seektalent_runtime_control.failed_outcome import validate_failed_outcome_row
 from seektalent_runtime_control.models import RuntimeCheckpoint
-from seektalent_runtime_control.user_action_mapping import (
-    map_verify_session_user_action,
+from seektalent_runtime_control.needs_attention_admission import (
+    ActionSatisfactionAdmission,
+    ActionSatisfactionData as _ActionSatisfactionData,
+    NeedsAttentionAdmission,
+    NeedsAttentionAdmissionData as _NeedsAttentionAdmissionData,
+    admit_action_satisfaction,
+    admit_needs_attention,
+    canonical_action_from_row as _canonical_action_from_row,
+    entry_admission_data as _entry_admission,
+    observation_row_by_ref as _observation_row,
+    require_committed_entry_admission as _require_committed_entry_admission,
+    require_committed_satisfaction_admission as _require_committed_satisfaction_admission,
+    satisfaction_admission_data as _satisfaction_admission,
+    satisfaction_binding_digest as _satisfaction_binding_digest,
+)
+from seektalent_runtime_control.needs_attention_schema import (
+    NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS,
+    migrate_needs_attention_v14_to_v15,
+    validate_needs_attention_schema,
 )
 
 
 StatementHook = Callable[[int, str], None]
 _MAX_SAFE_INTEGER = 9007199254740991
-
-
-def _normalized_sql(sql: str) -> str:
-    return " ".join(sql.lower().split())
-
-NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS = (
-    """
-    ALTER TABLE runtime_control_runs
-    ADD COLUMN current_action_id TEXT
-      CHECK (
-        current_action_id IS NULL
-        OR (
-          status = 'needs_attention'
-          AND product_outcome = 'needs_attention'
-          AND current_failure_id IS NOT NULL
-          AND current_failure_revision IS NOT NULL
-        )
-      )
-    """,
-    """
-    CREATE TABLE runtime_control_user_actions (
-      action_id TEXT PRIMARY KEY,
-      runtime_run_id TEXT NOT NULL,
-      action_code TEXT NOT NULL,
-      instruction_key TEXT NOT NULL,
-      action_scope TEXT NOT NULL,
-      affected_scope_ref TEXT NOT NULL,
-      operation_id TEXT NOT NULL,
-      checkpoint_id TEXT NOT NULL,
-      checkpoint_hash TEXT NOT NULL,
-      candidate_truth_hash TEXT NOT NULL,
-      failure_id TEXT NOT NULL,
-      failure_revision INTEGER NOT NULL,
-      status TEXT NOT NULL,
-      resolution_evidence_ref TEXT,
-      resolution_at TEXT,
-      authority_mode TEXT NOT NULL,
-      owner_lease_id TEXT,
-      created_at TEXT NOT NULL,
-      CHECK (status IN ('pending', 'resolved', 'cancelled', 'failed')),
-      CHECK (
-        (status = 'pending' AND resolution_evidence_ref IS NULL AND resolution_at IS NULL)
-        OR
-        (status <> 'pending' AND resolution_evidence_ref IS NOT NULL AND resolution_at IS NOT NULL)
-      ),
-      CHECK (
-        (authority_mode = 'no_owner' AND owner_lease_id IS NULL)
-        OR
-        (authority_mode = 'active_owner' AND owner_lease_id IS NOT NULL)
-      ),
-      CHECK (failure_revision >= 1 AND failure_revision <= 9007199254740991)
-    )
-    """,
-    """
-    CREATE UNIQUE INDEX idx_runtime_user_actions_one_pending
-      ON runtime_control_user_actions(runtime_run_id)
-      WHERE status = 'pending'
-    """,
-    """
-    CREATE INDEX idx_runtime_user_actions_run_created
-      ON runtime_control_user_actions(runtime_run_id, created_at, action_id)
-    """,
-    """
-    CREATE TRIGGER runtime_user_actions_immutable_binding
-    BEFORE UPDATE ON runtime_control_user_actions
-    WHEN
-      NEW.action_id <> OLD.action_id
-      OR NEW.runtime_run_id <> OLD.runtime_run_id
-      OR NEW.action_code <> OLD.action_code
-      OR NEW.instruction_key <> OLD.instruction_key
-      OR NEW.action_scope <> OLD.action_scope
-      OR NEW.affected_scope_ref <> OLD.affected_scope_ref
-      OR NEW.operation_id <> OLD.operation_id
-      OR NEW.checkpoint_id <> OLD.checkpoint_id
-      OR NEW.checkpoint_hash <> OLD.checkpoint_hash
-      OR NEW.candidate_truth_hash <> OLD.candidate_truth_hash
-      OR NEW.failure_id <> OLD.failure_id
-      OR NEW.failure_revision <> OLD.failure_revision
-      OR NEW.authority_mode <> OLD.authority_mode
-      OR COALESCE(NEW.owner_lease_id, '') <> COALESCE(OLD.owner_lease_id, '')
-      OR NEW.created_at <> OLD.created_at
-    BEGIN
-      SELECT RAISE(ABORT, 'runtime_user_action_binding_immutable');
-    END
-    """,
-    """
-    CREATE TRIGGER runtime_user_actions_one_way_resolution
-    BEFORE UPDATE ON runtime_control_user_actions
-    WHEN
-      OLD.status <> 'pending'
-      OR NEW.status = 'pending'
-      OR NEW.status NOT IN ('resolved', 'cancelled', 'failed')
-    BEGIN
-      SELECT RAISE(ABORT, 'runtime_user_action_resolution_immutable');
-    END
-    """,
-    """
-    CREATE TRIGGER runtime_user_actions_delete_forbidden
-    BEFORE DELETE ON runtime_control_user_actions
-    BEGIN
-      SELECT RAISE(ABORT, 'runtime_user_action_delete_forbidden');
-    END
-    """,
-)
-
-_V15_OBJECTS = {
-    "table": {"runtime_control_user_actions"},
-    "index": {
-        "idx_runtime_user_actions_one_pending",
-        "idx_runtime_user_actions_run_created",
-    },
-    "trigger": {
-        "runtime_user_actions_immutable_binding",
-        "runtime_user_actions_one_way_resolution",
-        "runtime_user_actions_delete_forbidden",
-    },
-}
-_ACTION_COLUMNS = {
-    "action_id": ("TEXT", 0, None, 1, 0),
-    "runtime_run_id": ("TEXT", 1, None, 0, 0),
-    "action_code": ("TEXT", 1, None, 0, 0),
-    "instruction_key": ("TEXT", 1, None, 0, 0),
-    "action_scope": ("TEXT", 1, None, 0, 0),
-    "affected_scope_ref": ("TEXT", 1, None, 0, 0),
-    "operation_id": ("TEXT", 1, None, 0, 0),
-    "checkpoint_id": ("TEXT", 1, None, 0, 0),
-    "checkpoint_hash": ("TEXT", 1, None, 0, 0),
-    "candidate_truth_hash": ("TEXT", 1, None, 0, 0),
-    "failure_id": ("TEXT", 1, None, 0, 0),
-    "failure_revision": ("INTEGER", 1, None, 0, 0),
-    "status": ("TEXT", 1, None, 0, 0),
-    "resolution_evidence_ref": ("TEXT", 0, None, 0, 0),
-    "resolution_at": ("TEXT", 0, None, 0, 0),
-    "authority_mode": ("TEXT", 1, None, 0, 0),
-    "owner_lease_id": ("TEXT", 0, None, 0, 0),
-    "created_at": ("TEXT", 1, None, 0, 0),
-}
-_ACTION_COLUMN_ORDER = tuple(_ACTION_COLUMNS)
-_EXPECTED_OBJECT_SQL = {
-    "runtime_control_user_actions": _normalized_sql(
-        NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS[1]
-    ),
-    "idx_runtime_user_actions_one_pending": _normalized_sql(
-        NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS[2]
-    ),
-    "idx_runtime_user_actions_run_created": _normalized_sql(
-        NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS[3]
-    ),
-    "runtime_user_actions_immutable_binding": _normalized_sql(
-        NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS[4]
-    ),
-    "runtime_user_actions_one_way_resolution": _normalized_sql(
-        NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS[5]
-    ),
-    "runtime_user_actions_delete_forbidden": _normalized_sql(
-        NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS[6]
-    ),
-}
-_CURRENT_ACTION_DEFINITION = _normalized_sql(
-    NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS[0]
-).split(" add column ", 1)[1]
-
-
-@dataclass(frozen=True, slots=True)
-class _NeedsAttentionAdmissionData:
-    action: UserActionV1
-    runtime_run_id: str
-    operation_id: str
-    checkpoint_id: str
-    frozen_required_source_ids: tuple[str, ...]
-    reconciliation_evidence_ref: str
-
-
-@dataclass(frozen=True, slots=True)
-class _ActionSatisfactionData:
-    action: UserActionV1
-    runtime_run_id: str
-    operation_id: str
-    checkpoint_id: str
-    authenticated_evidence_ref: str
-    current_profile_binding_ref: str
-    current_profile_binding_generation: int
-    current_browser_control_scope_id: str
-
-
-class NeedsAttentionAdmission:
-    __slots__ = ("__weakref__",)
-
-    def __init__(self, *_: object, **__: object) -> None:
-        raise TypeError("NeedsAttentionAdmission is factory-only")
-
-    def __copy__(self) -> Never:
-        raise TypeError("NeedsAttentionAdmission cannot be copied")
-
-    def __deepcopy__(self, _: dict[int, object]) -> Never:
-        raise TypeError("NeedsAttentionAdmission cannot be copied")
-
-    def __reduce_ex__(self, _: object) -> Never:
-        raise TypeError("NeedsAttentionAdmission cannot be serialized")
-
-
-class ActionSatisfactionAdmission:
-    __slots__ = ("__weakref__",)
-
-    def __init__(self, *_: object, **__: object) -> None:
-        raise TypeError("ActionSatisfactionAdmission is factory-only")
-
-    def __copy__(self) -> Never:
-        raise TypeError("ActionSatisfactionAdmission cannot be copied")
-
-    def __deepcopy__(self, _: dict[int, object]) -> Never:
-        raise TypeError("ActionSatisfactionAdmission cannot be copied")
-
-    def __reduce_ex__(self, _: object) -> Never:
-        raise TypeError("ActionSatisfactionAdmission cannot be serialized")
-
-
-_ENTRY_ADMISSIONS: weakref.WeakKeyDictionary[
-    NeedsAttentionAdmission,
-    _NeedsAttentionAdmissionData,
-] = weakref.WeakKeyDictionary()
-_SATISFACTION_ADMISSIONS: weakref.WeakKeyDictionary[
-    ActionSatisfactionAdmission,
-    _ActionSatisfactionData,
-] = weakref.WeakKeyDictionary()
-
-
-def admit_needs_attention(
-    *,
-    result: VerifySessionResultV1,
-    checkpoint_id: str,
-    frozen_required_source_ids: tuple[str, ...],
-    reconciliation_evidence_ref: str,
-) -> NeedsAttentionAdmission:
-    if (
-        type(result) is not VerifySessionResultV1
-        or result.session_readiness != "not_ready"
-        or result.user_action is None
-    ):
-        raise RuntimeControlError(
-            "runtime_needs_attention_admission_rejected"
-        )
-    action = map_verify_session_user_action(
-        result.user_action,
-        affected_scope_ref=result.identity.browser_control_scope_id,
-    )
-    if (
-        type(checkpoint_id) is not str
-        or frozen_required_source_ids != ("liepin",)
-        or not _sha256_hex(reconciliation_evidence_ref)
-    ):
-        raise RuntimeControlError("runtime_needs_attention_admission_rejected")
-    admission = object.__new__(NeedsAttentionAdmission)
-    _ENTRY_ADMISSIONS[admission] = _NeedsAttentionAdmissionData(
-        action=action,
-        runtime_run_id=result.identity.run_id,
-        operation_id=result.identity.operation_id,
-        checkpoint_id=checkpoint_id,
-        frozen_required_source_ids=frozen_required_source_ids,
-        reconciliation_evidence_ref=reconciliation_evidence_ref,
-    )
-    return admission
-
-
-def admit_action_satisfaction(
-    *,
-    action: UserActionV1,
-    result: VerifySessionResultV1,
-    checkpoint_id: str,
-    authenticated_evidence_ref: str,
-) -> ActionSatisfactionAdmission:
-    action = UserActionV1.model_validate(
-        action.model_dump(mode="python"),
-        strict=True,
-    )
-    if (
-        type(result) is not VerifySessionResultV1
-        or result.session_readiness != "ready"
-        or result.user_action is not None
-        or type(checkpoint_id) is not str
-        or not _sha256_hex(authenticated_evidence_ref)
-        or result.identity.browser_control_scope_id
-        != action.affected_scope_ref
-        or result.actual_profile_binding_ref is None
-    ):
-        raise RuntimeControlError(
-            "runtime_needs_attention_satisfaction_rejected"
-        )
-    admission = object.__new__(ActionSatisfactionAdmission)
-    _SATISFACTION_ADMISSIONS[admission] = _ActionSatisfactionData(
-        action=action,
-        runtime_run_id=result.identity.run_id,
-        operation_id=result.identity.operation_id,
-        checkpoint_id=checkpoint_id,
-        authenticated_evidence_ref=authenticated_evidence_ref,
-        current_profile_binding_ref=result.actual_profile_binding_ref,
-        current_profile_binding_generation=(
-            result.actual_profile_binding_generation
-        ),
-        current_browser_control_scope_id=(
-            result.identity.browser_control_scope_id
-        ),
-    )
-    return admission
-
-
-def migrate_needs_attention_v14_to_v15(conn: sqlite3.Connection) -> None:
-    try:
-        incomplete = conn.execute(
-            """
-            SELECT 1
-            FROM runtime_control_runs
-            WHERE status = 'needs_attention'
-               OR product_outcome = 'needs_attention'
-            LIMIT 1
-            """
-        ).fetchone()
-        columns = {
-            row[1]
-            for row in conn.execute("PRAGMA table_info(runtime_control_runs)")
-        }
-        objects = {
-            (row[0], row[1])
-            for row in conn.execute(
-                """
-                SELECT type, name
-                FROM sqlite_master
-                WHERE name LIKE 'runtime_user_actions_%'
-                   OR name LIKE 'idx_runtime_user_actions_%'
-                   OR name = 'runtime_control_user_actions'
-                """
-            )
-        }
-    except sqlite3.Error:
-        raise RuntimeControlError(
-            "runtime_needs_attention_schema_collision"
-        ) from None
-    if incomplete is not None:
-        raise RuntimeControlError(
-            "runtime_needs_attention_incomplete_migration"
-        )
-    expected_objects = {
-        (kind, name)
-        for kind, names in _V15_OBJECTS.items()
-        for name in names
-    }
-    current_present = "current_action_id" in columns
-    if current_present or objects:
-        if not current_present or objects != expected_objects:
-            raise RuntimeControlError(
-                "runtime_needs_attention_schema_collision"
-            )
-        validate_needs_attention_schema(conn)
-        return
-    for statement in NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS:
-        conn.execute(statement)
-    validate_needs_attention_schema(conn)
-
-
-def validate_needs_attention_schema(conn: sqlite3.Connection) -> None:
-    try:
-        run_columns = {
-            row[1]: (row[2].upper(), row[3], row[4], row[5], row[6])
-            for row in conn.execute("PRAGMA table_xinfo(runtime_control_runs)")
-        }
-        action_column_rows = list(
-            conn.execute(
-                "PRAGMA table_xinfo(runtime_control_user_actions)"
-            )
-        )
-        action_columns = {
-            row[1]: (row[2].upper(), row[3], row[4], row[5], row[6])
-            for row in action_column_rows
-        }
-        object_rows = list(
-            conn.execute(
-                """
-                SELECT type, name, sql
-                FROM sqlite_master
-                WHERE name LIKE 'runtime_user_actions_%'
-                   OR name LIKE 'idx_runtime_user_actions_%'
-                   OR name = 'runtime_control_user_actions'
-                """
-            )
-        )
-        objects = {(row[0], row[1]) for row in object_rows}
-        object_sql = {
-            row[1]: _normalized_sql(row[2])
-            for row in object_rows
-            if row[2] is not None
-        }
-        run_sql_row = conn.execute(
-            """
-            SELECT sql FROM sqlite_master
-            WHERE type = 'table' AND name = 'runtime_control_runs'
-            """
-        ).fetchone()
-        if run_sql_row is None or run_sql_row[0] is None:
-            raise sqlite3.DatabaseError
-        from seektalent_runtime_control.failed_outcome import (
-            _top_level_definitions,
-        )
-
-        run_definitions = {
-            definition.split(" ", 1)[0]: definition
-            for definition in _top_level_definitions(run_sql_row[0])
-        }
-    except sqlite3.Error:
-        raise RuntimeControlError(
-            "runtime_needs_attention_schema_collision"
-        ) from None
-    expected_objects = {
-        (kind, name)
-        for kind, names in _V15_OBJECTS.items()
-        for name in names
-    }
-    if (
-        run_columns.get("current_action_id")
-        != ("TEXT", 0, None, 0, 0)
-        or run_definitions.get("current_action_id")
-        != _CURRENT_ACTION_DEFINITION
-        or action_columns != _ACTION_COLUMNS
-        or tuple(row[1] for row in action_column_rows)
-        != _ACTION_COLUMN_ORDER
-        or objects != expected_objects
-        or object_sql != _EXPECTED_OBJECT_SQL
-    ):
-        raise RuntimeControlError(
-            "runtime_needs_attention_schema_collision"
-        )
 
 
 def commit_needs_attention(
@@ -588,6 +170,12 @@ def commit_needs_attention(
             if owner_supplied and active_lease is not None
             else None
         )
+        _require_committed_entry_admission(
+            conn,
+            data=data,
+            authority_mode="active_owner" if owner_supplied else "no_owner",
+            owner_lease_id=owner_lease_id,
+        )
 
         hook(0, "before_checkpoint")
         write_checkpoint_participant(conn, checkpoint)
@@ -605,11 +193,21 @@ def commit_needs_attention(
             INSERT INTO runtime_control_user_actions (
                 action_id, runtime_run_id, action_code, instruction_key,
                 action_scope, affected_scope_ref, operation_id, checkpoint_id,
-                checkpoint_hash, candidate_truth_hash, failure_id,
+                checkpoint_hash, candidate_truth_hash, entry_observation_ref,
+                entry_observation_digest, accepted_requirement_revision_id,
+                runtime_attempt_no, runtime_attempt_fence_ref, request_hash,
+                profile_binding_generation, browser_control_scope_id,
+                source_ledger_revision, source_reconciliation_revision,
+                dispatch_intent_id, dispatch_intent_digest,
+                source_operation_acceptance_ref,
+                reconciliation_id, reconciliation_digest, failure_id,
                 failure_revision, status, resolution_evidence_ref,
-                resolution_at, authority_mode, owner_lease_id, created_at
+                resolution_binding_digest, resolution_at, authority_mode,
+                owner_lease_id, created_at
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?,
+                    'pending', NULL, NULL, NULL, ?, ?, ?)
             """,
             (
                 action_id,
@@ -622,6 +220,21 @@ def commit_needs_attention(
                 checkpoint.checkpoint_id,
                 checkpoint_hash,
                 candidate_truth_hash,
+                data.entry_observation_ref,
+                data.entry_observation_digest,
+                data.accepted_requirement_revision_id,
+                data.runtime_attempt_no,
+                data.runtime_attempt_fence_ref,
+                data.request_hash,
+                data.profile_binding_generation,
+                data.browser_control_scope_id,
+                data.source_ledger_revision,
+                data.source_reconciliation_revision,
+                data.dispatch_intent_id,
+                data.dispatch_intent_digest,
+                data.source_operation_acceptance_ref,
+                data.reconciliation_id,
+                data.reconciliation_digest,
                 stored.ref.failure_id,
                 stored.ref.revision,
                 "active_owner" if owner_supplied else "no_owner",
@@ -858,6 +471,21 @@ def _exit_needs_attention(
             "runtime_needs_attention_resolution_rejected"
         )
     hook = statement_hook or (lambda _index, _phase: None)
+    resolution_binding_digest = (
+        satisfaction.resolution_binding_digest
+        if satisfaction is not None
+        else sha256(
+            _canonical_json(
+                {
+                    "actionId": action_id,
+                    "runtimeRunId": runtime_run_id,
+                    "targetStatus": target_status,
+                    "resolutionEvidenceRef": resolution_evidence_ref,
+                    "resolvedAt": resolved_at,
+                }
+            )
+        ).hexdigest()
+    )
     try:
         conn.execute("BEGIN IMMEDIATE")
         row = _run_row(conn, runtime_run_id)
@@ -881,6 +509,7 @@ def _exit_needs_attention(
                 expected_state_revision=expected_state_revision,
                 target_status=target_status,
                 resolution_evidence_ref=resolution_evidence_ref,
+                resolution_binding_digest=resolution_binding_digest,
                 resolved_at=resolved_at,
                 failed_envelope=failed_envelope,
             )
@@ -914,6 +543,11 @@ def _exit_needs_attention(
                     "runtime_needs_attention_satisfaction_mismatch"
                 )
             _require_no_reconcile_first(conn, runtime_run_id)
+            _require_committed_satisfaction_admission(
+                conn,
+                action_row=action_row,
+                data=satisfaction,
+            )
         _require_checkpoint_binding(conn, action_row, checkpoint)
 
         new_failure_id: str | None = None
@@ -934,12 +568,14 @@ def _exit_needs_attention(
         resolved = conn.execute(
             """
             UPDATE runtime_control_user_actions
-            SET status = ?, resolution_evidence_ref = ?, resolution_at = ?
+            SET status = ?, resolution_evidence_ref = ?,
+                resolution_binding_digest = ?, resolution_at = ?
             WHERE action_id = ? AND runtime_run_id = ? AND status = 'pending'
             """,
             (
                 action_status,
                 resolution_evidence_ref,
+                resolution_binding_digest,
                 resolved_at,
                 action_id,
                 runtime_run_id,
@@ -1026,6 +662,7 @@ def validate_needs_attention_row(
     conn: sqlite3.Connection,
     row: sqlite3.Row,
 ) -> None:
+    _validate_action_history(conn, row)
     if row["status"] != "needs_attention":
         if (
             row["product_outcome"] == "needs_attention"
@@ -1117,6 +754,353 @@ def validate_needs_attention_row(
         return
 
 
+def _validate_action_history(
+    conn: sqlite3.Connection,
+    run_row: sqlite3.Row,
+) -> None:
+    try:
+        actions = conn.execute(
+            """
+            SELECT * FROM runtime_control_user_actions
+            WHERE runtime_run_id = ?
+            ORDER BY created_at, action_id
+            """,
+            (run_row["runtime_run_id"],),
+        ).fetchall()
+        if not actions:
+            return
+        source_ids = json.loads(run_row["source_ids_json"])
+        if source_ids != ["liepin"]:
+            raise RuntimeControlError(
+                "runtime_needs_attention_integrity_failed"
+            )
+        for action_row in actions:
+            status = action_row["status"]
+            resolution_values = (
+                action_row["resolution_evidence_ref"],
+                action_row["resolution_binding_digest"],
+                action_row["resolution_at"],
+            )
+            if (
+                status not in {"pending", "resolved", "cancelled", "failed"}
+                or (
+                    status == "pending"
+                    and any(value is not None for value in resolution_values)
+                )
+                or (
+                    status != "pending"
+                    and any(value is None for value in resolution_values)
+                )
+                or action_row["authority_mode"]
+                not in {"no_owner", "active_owner"}
+            ):
+                raise RuntimeControlError(
+                    "runtime_needs_attention_integrity_failed"
+                )
+            action = _canonical_action_from_row(action_row)
+            operation = conn.execute(
+                """
+                SELECT * FROM runtime_control_source_operations
+                WHERE runtime_run_id = ? AND operation_id = ?
+                """,
+                (
+                    action_row["runtime_run_id"],
+                    action_row["operation_id"],
+                ),
+            ).fetchone()
+            expectation = conn.execute(
+                """
+                SELECT *
+                FROM runtime_control_source_operation_admission_expectations
+                WHERE runtime_run_id = ? AND operation_id = ?
+                  AND dispatch_authorization_ordinal = 1
+                """,
+                (
+                    action_row["runtime_run_id"],
+                    action_row["operation_id"],
+                ),
+            ).fetchone()
+            dispatch = conn.execute(
+                """
+                SELECT * FROM runtime_control_source_dispatch_outbox
+                WHERE runtime_run_id = ? AND operation_id = ?
+                  AND dispatch_authorization_ordinal = 1
+                """,
+                (
+                    action_row["runtime_run_id"],
+                    action_row["operation_id"],
+                ),
+            ).fetchone()
+            if (
+                action.affected_scope_ref
+                != action_row["browser_control_scope_id"]
+                or run_row["approved_requirement_revision_id"]
+                != action_row["accepted_requirement_revision_id"]
+                or operation is None
+                or expectation is None
+                or dispatch is None
+                or operation["source_id"] != "liepin"
+                or operation["operation_kind"] != "verify_session"
+                or operation["canonical_request_hash"]
+                != action_row["request_hash"]
+                or operation["accepted_requirement_revision_id"]
+                != action_row["accepted_requirement_revision_id"]
+                or operation["runtime_attempt_no"]
+                != action_row["runtime_attempt_no"]
+                or operation["ledger_revision"]
+                != action_row["source_ledger_revision"]
+                or operation["reconciliation_revision"]
+                != action_row["source_reconciliation_revision"]
+                or expectation["runtime_attempt_no"]
+                != action_row["runtime_attempt_no"]
+                or expectation["runtime_attempt_authority_ref"]
+                != operation["runtime_attempt_authority_ref"]
+                or expectation["runtime_attempt_fence_ref"]
+                != action_row["runtime_attempt_fence_ref"]
+                or expectation["profile_binding_generation"]
+                != action_row["profile_binding_generation"]
+                or expectation["browser_control_scope_id"]
+                != action_row["browser_control_scope_id"]
+                or dispatch["canonical_request_hash"]
+                != action_row["request_hash"]
+                or dispatch["dispatch_intent_id"]
+                != action_row["dispatch_intent_id"]
+                or dispatch["dispatch_intent_digest"]
+                != action_row["dispatch_intent_digest"]
+                or dispatch["source_operation_acceptance_ref"]
+                != action_row["source_operation_acceptance_ref"]
+            ):
+                raise RuntimeControlError(
+                    "runtime_needs_attention_integrity_failed"
+                )
+            checkpoint = _checkpoint_from_action(conn, action_row)
+            _require_checkpoint_binding(conn, action_row, checkpoint)
+            observation = _observation_row(
+                conn,
+                action_row["entry_observation_ref"],
+            )
+            if (
+                observation is None
+                or observation["result_digest"]
+                != action_row["entry_observation_digest"]
+                or observation["runtime_run_id"]
+                != action_row["runtime_run_id"]
+                or observation["operation_id"] != action_row["operation_id"]
+                or observation["source_id"] != "liepin"
+                or observation["operation_kind"] != "verify_session"
+                or observation["idempotency_key"]
+                != operation["idempotency_key"]
+                or observation["accepted_requirement_revision_id"]
+                != action_row["accepted_requirement_revision_id"]
+                or observation["runtime_attempt_no"]
+                != action_row["runtime_attempt_no"]
+                or observation["runtime_attempt_fence_ref"]
+                != action_row["runtime_attempt_fence_ref"]
+                or observation["request_hash"] != action_row["request_hash"]
+                or observation["profile_binding_generation"]
+                != action_row["profile_binding_generation"]
+                or observation["browser_control_scope_id"]
+                != action_row["browser_control_scope_id"]
+                or observation["action_digest"]
+                != sha256(
+                    _canonical_json(action.model_dump(mode="json"))
+                ).hexdigest()
+                or observation["session_readiness"] != "not_ready"
+                or dispatch["expected_ledger_revision"]
+                != observation["expected_ledger_revision"]
+                or dispatch["expected_reconciliation_revision"]
+                != observation["expected_reconciliation_revision"]
+            ):
+                raise RuntimeControlError(
+                    "runtime_needs_attention_integrity_failed"
+                )
+            envelope = load_failure_envelope_revision(
+                conn,
+                failure_id=action_row["failure_id"],
+                revision=action_row["failure_revision"],
+            )
+            if (
+                envelope.run_id != action_row["runtime_run_id"]
+                or envelope.operation_id != action_row["operation_id"]
+                or envelope.current_outcome != "needs_attention"
+                or envelope.user_action != action
+                or envelope.reason_code != "user_action_required"
+                or envelope.occurred_at != action_row["created_at"]
+            ):
+                raise RuntimeControlError(
+                    "runtime_needs_attention_integrity_failed"
+                )
+            if action_row["authority_mode"] == "active_owner":
+                lease = conn.execute(
+                    """
+                    SELECT * FROM runtime_control_executor_leases
+                    WHERE lease_id = ?
+                    """,
+                    (action_row["owner_lease_id"],),
+                ).fetchone()
+                if (
+                    lease is None
+                    or lease["runtime_run_id"]
+                    != action_row["runtime_run_id"]
+                    or lease["attempt_no"]
+                    != action_row["runtime_attempt_no"]
+                    or lease["status"] != "revoked"
+                    or lease["reason_code"] != "runtime_needs_attention"
+                ):
+                    raise RuntimeControlError(
+                        "runtime_needs_attention_integrity_failed"
+                    )
+            else:
+                reconciliation = conn.execute(
+                    """
+                    SELECT * FROM runtime_control_source_reconciliations
+                    WHERE reconciliation_id = ?
+                    """,
+                    (action_row["reconciliation_id"],),
+                ).fetchone()
+                if (
+                    reconciliation is None
+                    or action_row["reconciliation_digest"]
+                    != sha256(
+                        _canonical_json(dict(reconciliation))
+                    ).hexdigest()
+                    or reconciliation["history_result_digest"]
+                    != action_row["entry_observation_digest"]
+                    or reconciliation["conclusive_observation_ref"]
+                    != action_row["entry_observation_ref"]
+                    or reconciliation["runtime_run_id"]
+                    != action_row["runtime_run_id"]
+                    or reconciliation["operation_id"]
+                    != action_row["operation_id"]
+                    or reconciliation["canonical_request_hash"]
+                    != action_row["request_hash"]
+                    or reconciliation["accepted_requirement_revision_id"]
+                    != action_row["accepted_requirement_revision_id"]
+                    or reconciliation["runtime_attempt_no"]
+                    != action_row["runtime_attempt_no"]
+                    or reconciliation["source_operation_disposition"]
+                    != "user_action_required"
+                    or reconciliation["retry_posture"] != "no_retry"
+                    or reconciliation["committed_ledger_revision"]
+                    != action_row["source_ledger_revision"]
+                    or reconciliation["committed_reconciliation_revision"]
+                    != action_row["source_reconciliation_revision"]
+                ):
+                    raise RuntimeControlError(
+                        "runtime_needs_attention_integrity_failed"
+                    )
+            if action_row["status"] == "resolved":
+                resolution_observation = _observation_row(
+                    conn,
+                    action_row["resolution_evidence_ref"],
+                )
+                if (
+                    resolution_observation is None
+                    or resolution_observation["session_readiness"] != "ready"
+                    or resolution_observation["action_digest"] is not None
+                    or resolution_observation["runtime_run_id"]
+                    != action_row["runtime_run_id"]
+                    or resolution_observation["operation_id"]
+                    != action_row["operation_id"]
+                    or resolution_observation["request_hash"]
+                    != action_row["request_hash"]
+                    or resolution_observation[
+                        "accepted_requirement_revision_id"
+                    ]
+                    != action_row["accepted_requirement_revision_id"]
+                    or resolution_observation["runtime_attempt_no"]
+                    != action_row["runtime_attempt_no"]
+                    or resolution_observation["runtime_attempt_fence_ref"]
+                    != action_row["runtime_attempt_fence_ref"]
+                    or resolution_observation[
+                        "profile_binding_generation"
+                    ]
+                    != action_row["profile_binding_generation"]
+                    or resolution_observation["browser_control_scope_id"]
+                    != action_row["browser_control_scope_id"]
+                    or resolution_observation[
+                        "actual_profile_binding_ref"
+                    ]
+                    != observation["actual_profile_binding_ref"]
+                    or resolution_observation[
+                        "actual_profile_binding_generation"
+                    ]
+                    < observation["actual_profile_binding_generation"]
+                    or _satisfaction_binding_digest(
+                        action_row=action_row,
+                        observation_row=resolution_observation,
+                    )
+                    != action_row["resolution_binding_digest"]
+                ):
+                    raise RuntimeControlError(
+                        "runtime_needs_attention_integrity_failed"
+                    )
+            elif action_row["status"] in {"cancelled", "failed"}:
+                target = action_row["status"]
+                expected_digest = sha256(
+                    _canonical_json(
+                        {
+                            "actionId": action_row["action_id"],
+                            "runtimeRunId": action_row["runtime_run_id"],
+                            "targetStatus": target,
+                            "resolutionEvidenceRef": (
+                                action_row["resolution_evidence_ref"]
+                            ),
+                            "resolvedAt": action_row["resolution_at"],
+                        }
+                    )
+                ).hexdigest()
+                if (
+                    action_row["resolution_binding_digest"]
+                    != expected_digest
+                ):
+                    raise RuntimeControlError(
+                        "runtime_needs_attention_integrity_failed"
+                    )
+                if target == "failed":
+                    failed_envelope = load_failure_envelope_revision(
+                        conn,
+                        failure_id=run_row["current_failure_id"],
+                        revision=run_row["current_failure_revision"],
+                    )
+                    failed_ref = (
+                        "sha256:"
+                        + sha256(
+                            canonical_diagnostics_bytes(failed_envelope)
+                        ).hexdigest()
+                    )
+                    if (
+                        run_row["status"] != "failed"
+                        or failed_envelope.run_id
+                        != action_row["runtime_run_id"]
+                        or failed_envelope.operation_id
+                        != action_row["operation_id"]
+                        or failed_envelope.current_outcome != "failed"
+                        or failed_envelope.user_action is not None
+                        or failed_envelope.occurred_at
+                        != action_row["resolution_at"]
+                        or action_row["resolution_evidence_ref"]
+                        != failed_ref
+                    ):
+                        raise RuntimeControlError(
+                            "runtime_needs_attention_integrity_failed"
+                        )
+    except RuntimeControlError as exc:
+        if exc.reason_code == "runtime_needs_attention_integrity_failed":
+            raise
+        raise RuntimeControlError(
+            "runtime_needs_attention_integrity_failed"
+        ) from None
+    except FailureEnvelopeStorageError:
+        raise RuntimeControlError(
+            "runtime_needs_attention_integrity_failed"
+        ) from None
+    except sqlite3.Error:
+        raise RuntimeControlError(
+            "runtime_needs_attention_integrity_failed"
+        ) from None
+
+
 def _require_needs_attention_envelope(
     envelope: FailureEnvelopeV1,
     *,
@@ -1152,6 +1136,16 @@ def _require_entry_replay(
     attempt_no: int | None,
 ) -> sqlite3.Row:
     action_row = _action_row(conn, action_id)
+    try:
+        stored_envelope = load_failure_envelope_revision(
+            conn,
+            failure_id=envelope.failure_id,
+            revision=envelope.revision,
+        )
+    except FailureEnvelopeStorageError:
+        raise RuntimeControlError(
+            "runtime_needs_attention_replay_conflict"
+        ) from None
     owner_supplied = type(executor_id) is str and type(attempt_no) is int
     if not owner_supplied and (
         executor_id is not None or attempt_no is not None
@@ -1170,6 +1164,34 @@ def _require_entry_replay(
         or action_row["checkpoint_hash"] != _checkpoint_hash(checkpoint)
         or action_row["failure_id"] != envelope.failure_id
         or action_row["failure_revision"] != envelope.revision
+        or canonical_diagnostics_bytes(stored_envelope)
+        != canonical_diagnostics_bytes(envelope)
+        or action_row["entry_observation_ref"]
+        != data.entry_observation_ref
+        or action_row["entry_observation_digest"]
+        != data.entry_observation_digest
+        or action_row["accepted_requirement_revision_id"]
+        != data.accepted_requirement_revision_id
+        or action_row["runtime_attempt_no"] != data.runtime_attempt_no
+        or action_row["runtime_attempt_fence_ref"]
+        != data.runtime_attempt_fence_ref
+        or action_row["request_hash"] != data.request_hash
+        or action_row["profile_binding_generation"]
+        != data.profile_binding_generation
+        or action_row["browser_control_scope_id"]
+        != data.browser_control_scope_id
+        or action_row["source_ledger_revision"]
+        != data.source_ledger_revision
+        or action_row["source_reconciliation_revision"]
+        != data.source_reconciliation_revision
+        or action_row["dispatch_intent_id"] != data.dispatch_intent_id
+        or action_row["dispatch_intent_digest"]
+        != data.dispatch_intent_digest
+        or action_row["source_operation_acceptance_ref"]
+        != data.source_operation_acceptance_ref
+        or action_row["reconciliation_id"] != data.reconciliation_id
+        or action_row["reconciliation_digest"]
+        != data.reconciliation_digest
         or (action_row["authority_mode"] == "active_owner")
         != owner_supplied
         or _active_lease_row(conn, row["runtime_run_id"]) is not None
@@ -1208,6 +1230,7 @@ def _require_exit_replay(
     expected_state_revision: int,
     target_status: str,
     resolution_evidence_ref: str,
+    resolution_binding_digest: str,
     resolved_at: str,
     failed_envelope: FailureEnvelopeV1 | None,
 ) -> sqlite3.Row:
@@ -1218,6 +1241,8 @@ def _require_exit_replay(
         or row["current_action_id"] is not None
         or action_row["resolution_evidence_ref"]
         != resolution_evidence_ref
+        or action_row["resolution_binding_digest"]
+        != resolution_binding_digest
         or action_row["resolution_at"] != resolved_at
         or _active_lease_row(conn, row["runtime_run_id"]) is not None
     ):
@@ -1298,50 +1323,6 @@ def _checkpoint_from_action(
         raise RuntimeControlError(
             "runtime_needs_attention_checkpoint_mismatch"
         ) from None
-
-
-def _canonical_action_from_row(row: sqlite3.Row) -> UserActionV1:
-    try:
-        return UserActionV1(
-            code=row["action_code"],
-            instruction_key=row["instruction_key"],
-            scope=row["action_scope"],
-            affected_scope_ref=row["affected_scope_ref"],
-        )
-    except ValueError:
-        raise RuntimeControlError(
-            "runtime_needs_attention_integrity_failed"
-        ) from None
-
-
-def _entry_admission(
-    admission: NeedsAttentionAdmission,
-) -> _NeedsAttentionAdmissionData:
-    if type(admission) is not NeedsAttentionAdmission:
-        raise RuntimeControlError(
-            "runtime_needs_attention_admission_rejected"
-        )
-    data = _ENTRY_ADMISSIONS.get(admission)
-    if data is None:
-        raise RuntimeControlError(
-            "runtime_needs_attention_admission_rejected"
-        )
-    return data
-
-
-def _satisfaction_admission(
-    admission: ActionSatisfactionAdmission,
-) -> _ActionSatisfactionData:
-    if type(admission) is not ActionSatisfactionAdmission:
-        raise RuntimeControlError(
-            "runtime_needs_attention_satisfaction_rejected"
-        )
-    data = _SATISFACTION_ADMISSIONS.get(admission)
-    if data is None:
-        raise RuntimeControlError(
-            "runtime_needs_attention_satisfaction_rejected"
-        )
-    return data
 
 
 def _admit_envelope(

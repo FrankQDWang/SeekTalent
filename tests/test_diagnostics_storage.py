@@ -37,12 +37,25 @@ def _initialized_path(tmp_path: Path) -> Path:
 
 def _downgrade_v14_run_columns_to_v13(path: Path) -> None:
     with sqlite3.connect(path) as conn:
+        conn.execute(
+            "DROP TRIGGER runtime_action_checkpoints_delete_forbidden"
+        )
+        conn.execute(
+            "DROP TRIGGER runtime_action_checkpoints_update_forbidden"
+        )
+        conn.execute(
+            "DROP TRIGGER runtime_authenticated_observations_delete_forbidden"
+        )
+        conn.execute(
+            "DROP TRIGGER runtime_authenticated_observations_immutable"
+        )
         conn.execute("DROP TRIGGER runtime_user_actions_delete_forbidden")
         conn.execute("DROP TRIGGER runtime_user_actions_one_way_resolution")
         conn.execute("DROP TRIGGER runtime_user_actions_immutable_binding")
         conn.execute("DROP INDEX idx_runtime_user_actions_run_created")
         conn.execute("DROP INDEX idx_runtime_user_actions_one_pending")
         conn.execute("DROP TABLE runtime_control_user_actions")
+        conn.execute("DROP TABLE runtime_control_authenticated_observations")
         conn.execute(
             "ALTER TABLE runtime_control_runs DROP COLUMN current_action_id"
         )

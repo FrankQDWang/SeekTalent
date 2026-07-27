@@ -6,11 +6,17 @@ from collections.abc import Callable
 import sqlite3
 
 from seektalent.diagnostics_event_models import FailureEnvelopeV1
+from seektalent.source_port.authenticated_verify_session_frames import (
+    ReceivedVerifySessionResult,
+)
 from seektalent_runtime_control.checkpoint_participant import (
     write_checkpoint_participant,
 )
 from seektalent_runtime_control.errors import RuntimeControlError
-from seektalent_runtime_control.failed_outcome import require_run_truth_mutable
+from seektalent_runtime_control.failed_outcome import (
+    require_run_truth_mutable,
+    validate_failed_outcome_row,
+)
 from seektalent_runtime_control.models import (
     RuntimeCheckpoint,
     RuntimeRunRecord,
@@ -19,10 +25,13 @@ from seektalent_runtime_control.models import (
 from seektalent_runtime_control.needs_attention import (
     ActionSatisfactionAdmission,
     NeedsAttentionAdmission,
+    admit_action_satisfaction as _admit_action_satisfaction,
+    admit_needs_attention as _admit_needs_attention,
     cancel_needs_attention,
     commit_needs_attention,
     fail_needs_attention,
     resolve_needs_attention,
+    validate_needs_attention_row,
 )
 
 
@@ -34,6 +43,46 @@ class NeedsAttentionStoreMixin:
 
     def get_run(self, runtime_run_id: str) -> RuntimeRunRecord:
         raise NotImplementedError
+
+    def admit_needs_attention(
+        self,
+        *,
+        received: ReceivedVerifySessionResult,
+        checkpoint: RuntimeCheckpoint,
+    ) -> NeedsAttentionAdmission:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                admission = _admit_needs_attention(
+                    conn,
+                    received=received,
+                    checkpoint=checkpoint,
+                )
+                conn.commit()
+            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise
+        return admission
+
+    def admit_action_satisfaction(
+        self,
+        *,
+        action_id: str,
+        received: ReceivedVerifySessionResult,
+    ) -> ActionSatisfactionAdmission:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                admission = _admit_action_satisfaction(
+                    conn,
+                    action_id=action_id,
+                    received=received,
+                )
+                conn.commit()
+            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise
+        return admission
 
     def commit_needs_attention(
         self,
@@ -138,8 +187,15 @@ class NeedsAttentionStoreMixin:
         *,
         runtime_run_id: str,
     ) -> list[RuntimeUserAction]:
-        self.get_run(runtime_run_id)
         with self._connect() as conn:
+            run = conn.execute(
+                "SELECT * FROM runtime_control_runs WHERE runtime_run_id = ?",
+                (runtime_run_id,),
+            ).fetchone()
+            if run is None:
+                raise RuntimeControlError("runtime_run_not_found")
+            validate_needs_attention_row(conn, run)
+            validate_failed_outcome_row(conn, run)
             rows = conn.execute(
                 """
                 SELECT *
@@ -149,7 +205,12 @@ class NeedsAttentionStoreMixin:
                 """,
                 (runtime_run_id,),
             ).fetchall()
-        return [_user_action_from_row(row) for row in rows]
+        try:
+            return [_user_action_from_row(row) for row in rows]
+        except (TypeError, ValueError):
+            raise RuntimeControlError(
+                "runtime_needs_attention_integrity_failed"
+            ) from None
 
     def write_checkpoint_for_recovery(
         self,
@@ -226,10 +287,30 @@ def _user_action_from_row(row: sqlite3.Row) -> RuntimeUserAction:
         checkpoint_id=row["checkpoint_id"],
         checkpoint_hash=row["checkpoint_hash"],
         candidate_truth_hash=row["candidate_truth_hash"],
+        entry_observation_ref=row["entry_observation_ref"],
+        entry_observation_digest=row["entry_observation_digest"],
+        accepted_requirement_revision_id=row["accepted_requirement_revision_id"],
+        runtime_attempt_no=int(row["runtime_attempt_no"]),
+        runtime_attempt_fence_ref=row["runtime_attempt_fence_ref"],
+        request_hash=row["request_hash"],
+        profile_binding_generation=int(row["profile_binding_generation"]),
+        browser_control_scope_id=row["browser_control_scope_id"],
+        source_ledger_revision=int(row["source_ledger_revision"]),
+        source_reconciliation_revision=int(
+            row["source_reconciliation_revision"]
+        ),
+        dispatch_intent_id=row["dispatch_intent_id"],
+        dispatch_intent_digest=row["dispatch_intent_digest"],
+        source_operation_acceptance_ref=(
+            row["source_operation_acceptance_ref"]
+        ),
+        reconciliation_id=row["reconciliation_id"],
+        reconciliation_digest=row["reconciliation_digest"],
         failure_id=row["failure_id"],
         failure_revision=int(row["failure_revision"]),
         status=row["status"],
         resolution_evidence_ref=row["resolution_evidence_ref"],
+        resolution_binding_digest=row["resolution_binding_digest"],
         resolution_at=row["resolution_at"],
         authority_mode=row["authority_mode"],
         owner_lease_id=row["owner_lease_id"],
