@@ -196,7 +196,6 @@ jobs:
           from pathlib import Path
           import shutil
           from subprocess import check_call
-          import sys
 
           uv = shutil.which("uv")
           node = shutil.which("node")
@@ -207,7 +206,11 @@ jobs:
           assert len(wheels) == 1, wheels
           check_call(
               [
-                  sys.executable,
+                  uv,
+                  "run",
+                  "--group",
+                  "dev",
+                  "python",
                   "scripts/build_domi_delivery_bundle.py",
                   "--output-dir",
                   "dist/delivery",
