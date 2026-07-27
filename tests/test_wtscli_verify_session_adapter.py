@@ -23,6 +23,7 @@ from seektalent.source_port.verify_session_contract import VerifySessionRequestV
 from seektalent.wtscli_verify_session_adapter import (
     WtsCliCurrentProfileSnapshot,
     create_wtscli_verify_session_effect,
+    probe_wtscli_liepin_session,
 )
 from tests.browser_bridge_bundle_fixtures import exact_browser_bridge_requirement
 
@@ -307,6 +308,56 @@ def _run_ready(
     return result, daemon, clock, snapshots
 
 
+def test_direct_production_probe_executes_ready_browser_observation_without_contract_authority() -> None:
+    clock = _Clock()
+    daemon = _FakeDaemon(clock)
+
+    reason = probe_wtscli_liepin_session(
+        daemon=daemon,
+        bridge_requirement=BRIDGE_REQUIREMENT,
+        control_key=CONTROL_KEY,
+        deadline_at=clock() + 10,
+        monotonic_clock=clock,
+        poll_wait=clock.advance,
+    )
+
+    assert reason is None
+    assert [call[0] for call in daemon.calls] == [
+        "status",
+        "status.validate",
+        "control.activate",
+        "tabs.find",
+        "tabs.new",
+        "browser.get-url",
+        "browser.state",
+    ]
+    tabs_new = next(params for label, params, *_ in daemon.calls if label == "tabs.new")
+    assert tabs_new["hostPage"] == "user-host-page"
+    assert tabs_new["active"] is False
+    assert tabs_new["idleTimeout"] == 60
+    assert daemon.user_tabs == {"user-host-page", "user-other-page"}
+    assert all(call[0] != "tabs.close" for call in daemon.calls)
+
+
+def test_direct_production_probe_returns_browser_readiness_failure() -> None:
+    clock = _Clock()
+    daemon = _FakeDaemon(clock)
+    daemon.state_text = "请登录后继续"
+
+    reason = probe_wtscli_liepin_session(
+        daemon=daemon,
+        bridge_requirement=BRIDGE_REQUIREMENT,
+        control_key=CONTROL_KEY,
+        deadline_at=clock() + 10,
+        monotonic_clock=clock,
+        poll_wait=clock.advance,
+    )
+
+    assert reason == "liepin_opencli_login_required"
+    assert daemon.user_tabs == {"user-host-page", "user-other-page"}
+    assert all(call[0] != "tabs.close" for call in daemon.calls)
+
+
 def test_effect_consumes_the_supplied_absolute_deadline_without_reanchoring_from_request() -> None:
     request = _request(deadline_value=60_000)
     clock = _Clock(500.0)
@@ -416,14 +467,18 @@ def test_expiry_before_return_stops_close_and_uses_the_owned_tab_idle_deadline()
     clock = _Clock()
     daemon = _FakeDaemon(clock)
     daemon.advance_after["browser.state"] = 0.100
-    snapshots = _SnapshotSource(_snapshot(), clock=clock)
     before_user_tabs = set(daemon.user_tabs)
 
-    result = _effect(daemon, snapshots, clock)(_request(), clock() + 0.050)
+    reason = probe_wtscli_liepin_session(
+        daemon=daemon,
+        bridge_requirement=BRIDGE_REQUIREMENT,
+        control_key=CONTROL_KEY,
+        deadline_at=clock() + 0.050,
+        monotonic_clock=clock,
+        poll_wait=clock.advance,
+    )
 
-    assert isinstance(result, VerifySessionResultV1)
-    assert result.session_readiness == "not_ready"
-    assert result.safe_reason_code == "liepin_opencli_timeout"
+    assert reason == "liepin_opencli_timeout"
     assert "tabs.close" not in [call[0] for call in daemon.calls]
     daemon.expire_owned_tabs()
     assert daemon.owned_tabs == set()
@@ -868,13 +923,18 @@ def test_any_exact_https_recruiter_host_subpage_only_selects_the_borrowed_window
     clock = _Clock()
     daemon = _FakeDaemon(clock)
     daemon.host_tabs[0]["url"] = host_url
-    snapshots = _SnapshotSource(_snapshot(), clock=clock)
     before_user_tabs = set(daemon.user_tabs)
 
-    result = _effect(daemon, snapshots, clock)(_request(), clock() + 10)
+    reason = probe_wtscli_liepin_session(
+        daemon=daemon,
+        bridge_requirement=BRIDGE_REQUIREMENT,
+        control_key=CONTROL_KEY,
+        deadline_at=clock() + 10,
+        monotonic_clock=clock,
+        poll_wait=clock.advance,
+    )
 
-    assert isinstance(result, VerifySessionResultV1)
-    assert result.session_readiness == "ready"
+    assert reason is None
     new_tab_call = next(call for call in daemon.calls if call[0] == "tabs.new")
     assert new_tab_call[1]["hostPage"] == "user-host-page"
     assert new_tab_call[1]["url"] == SEARCH_URL
@@ -904,13 +964,18 @@ def test_non_exact_or_credential_bearing_host_tab_is_rejected_without_mutation(
     clock = _Clock()
     daemon = _FakeDaemon(clock)
     daemon.host_tabs[0]["url"] = host_url
-    snapshots = _SnapshotSource(_snapshot(), clock=clock)
     before_user_tabs = set(daemon.user_tabs)
 
-    result = _effect(daemon, snapshots, clock)(_request(), clock() + 10)
+    reason = probe_wtscli_liepin_session(
+        daemon=daemon,
+        bridge_requirement=BRIDGE_REQUIREMENT,
+        control_key=CONTROL_KEY,
+        deadline_at=clock() + 10,
+        monotonic_clock=clock,
+        poll_wait=clock.advance,
+    )
 
-    assert isinstance(result, VerifySessionResultV1)
-    assert result.safe_reason_code == "liepin_host_tab_missing"
+    assert reason == "liepin_host_tab_missing"
     assert [call[0] for call in daemon.calls] == [
         "status",
         "status.validate",
@@ -1077,7 +1142,7 @@ def test_control_bearers_url_dom_and_stderr_never_escape_results_errors_repr_or_
         assert secret not in surfaces
 
 
-def test_adapter_module_has_one_production_composition_caller_without_old_readiness_seam() -> None:
+def test_adapter_module_has_one_direct_production_gate_without_old_readiness_seam() -> None:
     project_root = Path(__file__).parents[1]
     adapter_path = project_root / "src" / "seektalent" / "wtscli_verify_session_adapter.py"
     source = adapter_path.read_text(encoding="utf-8")
@@ -1101,7 +1166,10 @@ def test_adapter_module_has_one_production_composition_caller_without_old_readin
         1,
     )[1].split("        else:", 1)[0]
 
-    assert callers == ["src/seektalent/wtscli_verify_session_composition.py"]
+    assert callers == [
+        "src/seektalent/liepin_verify_session_gate.py",
+        "src/seektalent/wtscli_verify_session_composition.py",
+    ]
     assert factory_callers == ["src/seektalent/wtscli_verify_session_composition.py"]
     composition_callers = [
         path.relative_to(project_root).as_posix()
@@ -1109,9 +1177,14 @@ def test_adapter_module_has_one_production_composition_caller_without_old_readin
         if path.name != "wtscli_verify_session_composition.py"
         and "create_wtscli_verify_session_composition(" in path.read_text(encoding="utf-8")
     ]
-    assert composition_callers == [
-        "src/seektalent/liepin_verify_session_gate.py",
+    direct_probe_callers = [
+        path.relative_to(project_root).as_posix()
+        for path in (project_root / "src").rglob("*.py")
+        if path != adapter_path
+        and "probe_wtscli_liepin_session(" in path.read_text(encoding="utf-8")
     ]
+    assert composition_callers == []
+    assert direct_probe_callers == ["src/seektalent/liepin_verify_session_gate.py"]
     assert "ensure_ready" not in live_search_branch
     assert "session_status" not in provider_adapter
     assert "_require_ready_session" not in provider_adapter

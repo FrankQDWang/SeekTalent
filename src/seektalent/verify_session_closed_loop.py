@@ -1,4 +1,4 @@
-"""Main composition for one durable production verify-session dispatch."""
+"""Production-unreachable main composition for one durable verify-session dispatch."""
 
 from __future__ import annotations
 
@@ -90,74 +90,6 @@ class VerifySessionMainLoopError(RuntimeError):
     def __init__(self, reason_code: str) -> None:
         self.reason_code = reason_code
         super().__init__(reason_code)
-
-
-def accept_verify_session_operation(
-    *,
-    store: RuntimeControlStore,
-    runtime_run_id: str,
-    operation_id: str,
-    idempotency_key: str,
-    correlation_id: str,
-    runtime_attempt_fence_token: str,
-    profile_binding_generation: int,
-    browser_control_scope_id: str,
-    deadline_milliseconds: int,
-    dispatch_intent_id: str,
-    source_operation_acceptance_ref: str,
-    live_authority: VerifySessionLiveAuthority,
-) -> VerifySessionRequestV1:
-    """Atomically accept the first durable dispatch using the canonical V1 request."""
-    run = store.get_run(runtime_run_id)
-    request = VerifySessionRequestV1.create(
-        run_id=runtime_run_id,
-        operation_id=operation_id,
-        attempt_no=1,
-        idempotency_key=idempotency_key,
-        correlation_id=correlation_id,
-        accepted_requirement_revision_id=run.approved_requirement_revision_id,
-        runtime_attempt_fence_token=runtime_attempt_fence_token,
-        profile_binding_generation=profile_binding_generation,
-        browser_control_scope_id=browser_control_scope_id,
-        deadline_value=deadline_milliseconds,
-        expected_source_operation_ledger_revision=1,
-        expected_reconciliation_revision=0,
-        delivery_mode="initial",
-        dispatch_intent_id=dispatch_intent_id,
-        dispatch_intent_revision=1,
-        source_operation_acceptance_ref=source_operation_acceptance_ref,
-        profile_binding_ref=live_authority.profile_binding_ref,
-        provider_account_ref=live_authority.provider_account_ref,
-        required_capabilities=live_authority.required_capabilities,
-        user_interaction_policy=live_authority.user_interaction_policy,
-        verify_search_surface=live_authority.verify_search_surface,
-        component_receipt_refs=live_authority.component_receipt_refs,
-    )
-    authorization = request.delivery.authorization
-    store.accept_source_operation(
-        runtime_run_id=runtime_run_id,
-        operation_id=operation_id,
-        source_id="liepin",
-        operation_kind="verify_session",
-        canonical_request_hash=request.identity.request_hash,
-        idempotency_key=idempotency_key,
-        accepted_requirement_revision_id=run.approved_requirement_revision_id,
-        runtime_attempt_no=1,
-        runtime_attempt_authority_ref=f"runtime:{operation_id}",
-        runtime_attempt_fence_ref=request.identity.runtime_attempt_fence_ref,
-        profile_binding_generation=profile_binding_generation,
-        browser_control_scope_id=browser_control_scope_id,
-        controller_fence_ref=None,
-        outbox_id=f"outbox:{operation_id}",
-        dispatch_intent_id=dispatch_intent_id,
-        dispatch_intent_revision=1,
-        dispatch_intent_digest=authorization.dispatch_intent_digest,
-        dispatch_authorization_ordinal=1,
-        source_operation_acceptance_ref=source_operation_acceptance_ref,
-        expected_ledger_revision=1,
-        expected_reconciliation_revision=0,
-    )
-    return request
 
 
 def deliver_verify_session_outbox(
@@ -404,7 +336,6 @@ def _history_query(
 
 
 __all__ = [
-    "accept_verify_session_operation",
     "VerifySessionLiveAuthority",
     "VerifySessionConnectionSupervisor",
     "VerifySessionMainLoopError",

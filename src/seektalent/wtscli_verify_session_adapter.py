@@ -29,6 +29,8 @@ from seektalent.wtscli_verify_session_classification import (
     failure_reply,
     is_concrete_navigation_url,
     result_reply,
+    safe_liepin_reason,
+    wtscli_probe_is_ready,
 )
 
 
@@ -69,6 +71,194 @@ class _DeadlineExpired(RuntimeError):
 
 class _BindingChanged(RuntimeError):
     pass
+
+
+class _BrowserReadinessProbe:
+    def __init__(
+        self,
+        *,
+        daemon: _WtsCliDaemon,
+        bridge_requirement: BrowserBridgeRequirement,
+        control_key: str,
+        require_current: Callable[[float], float],
+        poll_wait: Callable[[float], None],
+    ) -> None:
+        self._daemon = daemon
+        self._bridge_requirement = bridge_requirement
+        self._control_key = control_key
+        self._require_current = require_current
+        self._poll_wait = poll_wait
+
+    def run(self, deadline_at: float, probe: WtsCliReadinessProbe) -> None:
+        status = self._verify_bridge(deadline_at, probe)
+        if not apply_bridge_status(probe, status, self._bridge_requirement):
+            return
+        validated_status = self._validate_bridge(deadline_at, probe)
+        if not apply_bridge_status(probe, validated_status, self._bridge_requirement):
+            return
+
+        control = self._command(
+            deadline_at,
+            probe,
+            "control",
+            {"op": "activate", "controlKey": self._control_key},
+        )
+        control_payload = _mapping(control.data)
+        fence = None if control_payload is None else control_payload.get("fenceToken")
+        if (
+            control_payload is None
+            or control_payload.get("controlKey") != self._control_key
+            or type(fence) is not int
+            or fence < 1
+        ):
+            probe.profile_lock = "not_ready"
+            probe.safe_reason = "liepin_opencli_stale_control_fence"
+            return
+        probe.control_fence = fence
+        probe.profile_lock = "ready"
+
+        host_result = self._command(
+            deadline_at,
+            probe,
+            "tabs",
+            {
+                **self._controlled_params(probe, "verify-host"),
+                "op": "find",
+                "urlPrefix": "https://h.liepin.com/",
+            },
+        )
+        host, host_reason = _select_host_tab(host_result.data)
+        if host is None:
+            probe.safe_reason = host_reason
+            return
+
+        owned_session = f"st_verify_{uuid.uuid4().hex}"
+        remaining = self._require_current(deadline_at)
+        command_timeout = _command_timeout_within(remaining)
+        if command_timeout is None:
+            raise _DeadlineExpired
+        probe.wtscli_called = True
+        opened = self._daemon.command(
+            "tabs",
+            {
+                **self._controlled_params(probe, owned_session),
+                "op": "new",
+                "hostPage": host.page_id,
+                "url": LIEPIN_RECRUITER_SEARCH_URL,
+                "active": False,
+                "idleTimeout": OPENCLI_OWNED_TAB_IDLE_SECONDS,
+            },
+            timeout_seconds=command_timeout,
+        )
+        opened_payload = _mapping(opened.data)
+        if isinstance(opened.page, str) and _SAFE_PAGE_ID.fullmatch(opened.page):
+            probe.owned_page = opened.page
+            probe.owned_session = owned_session
+        if (
+            probe.owned_page is None
+            or opened_payload is None
+            or opened_payload.get("active") is not False
+            or opened_payload.get("placement") != "borrowed-host-window"
+            or type(opened.idle_deadline_at) is not int
+        ):
+            probe.safe_reason = "liepin_opencli_tab_response_malformed"
+            return
+
+        page_params = self._controlled_params(probe, owned_session)
+        page_params["page"] = probe.owned_page
+        self._observe_owned_page(deadline_at, probe, page_params)
+
+    def _observe_owned_page(
+        self,
+        deadline_at: float,
+        probe: WtsCliReadinessProbe,
+        page_params: Mapping[str, object],
+    ) -> None:
+        while True:
+            url_result = self._command(
+                deadline_at,
+                probe,
+                "browser-operation",
+                {**page_params, "operation": "get-url"},
+            )
+            if (
+                not isinstance(url_result.data, str)
+                or (url_result.page is not None and url_result.page != probe.owned_page)
+            ):
+                probe.safe_reason = "liepin_opencli_malformed_state"
+                return
+            if not is_concrete_navigation_url(url_result.data):
+                self._wait_for_navigation_poll(deadline_at)
+                continue
+
+            state_result = self._command(
+                deadline_at,
+                probe,
+                "browser-operation",
+                {**page_params, "operation": "state"},
+            )
+            if (
+                not isinstance(state_result.data, str)
+                or (state_result.page is not None and state_result.page != probe.owned_page)
+            ):
+                probe.safe_reason = "liepin_opencli_malformed_state"
+                return
+            disposition = apply_site_state(probe, url=url_result.data, text=state_result.data)
+            if disposition != "retry":
+                return
+            self._wait_for_navigation_poll(deadline_at)
+
+    def _wait_for_navigation_poll(self, deadline_at: float) -> None:
+        remaining = self._require_current(deadline_at)
+        self._poll_wait(min(_PAGE_NAVIGATION_POLL_SECONDS, remaining))
+        self._require_current(deadline_at)
+
+    def _verify_bridge(
+        self,
+        deadline_at: float,
+        probe: WtsCliReadinessProbe,
+    ) -> Mapping[str, object]:
+        remaining = self._require_current(deadline_at)
+        probe.wtscli_called = True
+        return self._daemon.verify_bridge(timeout_seconds=remaining, validate=False)
+
+    def _validate_bridge(
+        self,
+        deadline_at: float,
+        probe: WtsCliReadinessProbe,
+    ) -> Mapping[str, object]:
+        remaining = self._require_current(deadline_at)
+        probe.wtscli_called = True
+        return self._daemon.verify_bridge(timeout_seconds=remaining)
+
+    def _command(
+        self,
+        deadline_at: float,
+        probe: WtsCliReadinessProbe,
+        action: OpenCliDaemonAction,
+        params: Mapping[str, object],
+    ) -> OpenCliDaemonResult:
+        remaining = self._require_current(deadline_at)
+        timeout = _command_timeout_within(remaining)
+        if timeout is None:
+            raise _DeadlineExpired
+        probe.wtscli_called = True
+        return self._daemon.command(action, params, timeout_seconds=timeout)
+
+    def _controlled_params(
+        self,
+        probe: WtsCliReadinessProbe,
+        session: str,
+    ) -> dict[str, object]:
+        if probe.control_fence is None:
+            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+        return {
+            "session": session,
+            "surface": "browser",
+            "windowMode": "background",
+            "controlKey": self._control_key,
+            "fenceToken": probe.control_fence,
+        }
 
 
 class _WtsCliVerifySessionEffect:
@@ -118,7 +308,17 @@ class _WtsCliVerifySessionEffect:
         probe = WtsCliReadinessProbe(binding=binding)
         binding_changed = False
         try:
-            self._probe(request_facts, deadline_at, probe)
+            _BrowserReadinessProbe(
+                daemon=self._daemon,
+                bridge_requirement=self._bridge_requirement,
+                control_key=self._control_key,
+                require_current=lambda deadline: self._require_current(
+                    request_facts,
+                    deadline,
+                    binding,
+                ),
+                poll_wait=self._poll_wait,
+            ).run(deadline_at, probe)
         except _DeadlineExpired:
             probe.safe_reason = "liepin_opencli_timeout"
         except _BindingChanged:
@@ -138,176 +338,6 @@ class _WtsCliVerifySessionEffect:
 
     def __repr__(self) -> str:
         return "WtsCliVerifySessionEffect()"
-
-    def _probe(
-        self,
-        request: _RequestFacts,
-        deadline_at: float,
-        probe: WtsCliReadinessProbe,
-    ) -> None:
-        status = self._verify_bridge(request, deadline_at, probe)
-        if not apply_bridge_status(probe, status, self._bridge_requirement):
-            return
-        validated_status = self._validate_bridge(request, deadline_at, probe)
-        if not apply_bridge_status(probe, validated_status, self._bridge_requirement):
-            return
-
-        control = self._command(
-            request,
-            deadline_at,
-            probe,
-            "control",
-            {"op": "activate", "controlKey": self._control_key},
-        )
-        control_payload = _mapping(control.data)
-        fence = None if control_payload is None else control_payload.get("fenceToken")
-        if (
-            control_payload is None
-            or control_payload.get("controlKey") != self._control_key
-            or type(fence) is not int
-            or fence < 1
-        ):
-            probe.profile_lock = "not_ready"
-            probe.safe_reason = "liepin_opencli_stale_control_fence"
-            return
-        probe.control_fence = fence
-        probe.profile_lock = "ready"
-
-        host_result = self._command(
-            request,
-            deadline_at,
-            probe,
-            "tabs",
-            {**self._controlled_params(probe, "verify-host"), "op": "find", "urlPrefix": "https://h.liepin.com/"},
-        )
-        host, host_reason = _select_host_tab(host_result.data)
-        if host is None:
-            probe.safe_reason = host_reason
-            return
-
-        owned_session = f"st_verify_{uuid.uuid4().hex}"
-        remaining = self._require_current(request, deadline_at, probe.binding)
-        command_timeout = _command_timeout_within(remaining)
-        if command_timeout is None:
-            raise _DeadlineExpired
-        probe.wtscli_called = True
-        opened = self._daemon.command(
-            "tabs",
-            {
-                **self._controlled_params(probe, owned_session),
-                "op": "new",
-                "hostPage": host.page_id,
-                "url": LIEPIN_RECRUITER_SEARCH_URL,
-                "active": False,
-                "idleTimeout": OPENCLI_OWNED_TAB_IDLE_SECONDS,
-            },
-            timeout_seconds=command_timeout,
-        )
-        opened_payload = _mapping(opened.data)
-        if isinstance(opened.page, str) and _SAFE_PAGE_ID.fullmatch(opened.page):
-            probe.owned_page = opened.page
-            probe.owned_session = owned_session
-        if (
-            probe.owned_page is None
-            or opened_payload is None
-            or opened_payload.get("active") is not False
-            or opened_payload.get("placement") != "borrowed-host-window"
-            or type(opened.idle_deadline_at) is not int
-        ):
-            probe.safe_reason = "liepin_opencli_tab_response_malformed"
-            return
-
-        page_params = self._controlled_params(probe, owned_session)
-        page_params["page"] = probe.owned_page
-        self._observe_owned_page(request, deadline_at, probe, page_params)
-
-    def _observe_owned_page(
-        self,
-        request: _RequestFacts,
-        deadline_at: float,
-        probe: WtsCliReadinessProbe,
-        page_params: Mapping[str, object],
-    ) -> None:
-        while True:
-            url_result = self._command(
-                request,
-                deadline_at,
-                probe,
-                "browser-operation",
-                {**page_params, "operation": "get-url"},
-            )
-            if (
-                not isinstance(url_result.data, str)
-                or (url_result.page is not None and url_result.page != probe.owned_page)
-            ):
-                probe.safe_reason = "liepin_opencli_malformed_state"
-                return
-            if not is_concrete_navigation_url(url_result.data):
-                self._wait_for_navigation_poll(request, deadline_at, probe.binding)
-                continue
-
-            state_result = self._command(
-                request,
-                deadline_at,
-                probe,
-                "browser-operation",
-                {**page_params, "operation": "state"},
-            )
-            if (
-                not isinstance(state_result.data, str)
-                or (state_result.page is not None and state_result.page != probe.owned_page)
-            ):
-                probe.safe_reason = "liepin_opencli_malformed_state"
-                return
-            disposition = apply_site_state(probe, url=url_result.data, text=state_result.data)
-            if disposition != "retry":
-                return
-            self._wait_for_navigation_poll(request, deadline_at, probe.binding)
-
-    def _wait_for_navigation_poll(
-        self,
-        request: _RequestFacts,
-        deadline_at: float,
-        binding: WtsCliCurrentProfileSnapshot,
-    ) -> None:
-        remaining = self._require_current(request, deadline_at, binding)
-        self._poll_wait(min(_PAGE_NAVIGATION_POLL_SECONDS, remaining))
-        self._require_current(request, deadline_at, binding)
-
-    def _verify_bridge(
-        self,
-        request: _RequestFacts,
-        deadline_at: float,
-        probe: WtsCliReadinessProbe,
-    ) -> Mapping[str, object]:
-        remaining = self._require_current(request, deadline_at, probe.binding)
-        probe.wtscli_called = True
-        return self._daemon.verify_bridge(timeout_seconds=remaining, validate=False)
-
-    def _validate_bridge(
-        self,
-        request: _RequestFacts,
-        deadline_at: float,
-        probe: WtsCliReadinessProbe,
-    ) -> Mapping[str, object]:
-        remaining = self._require_current(request, deadline_at, probe.binding)
-        probe.wtscli_called = True
-        return self._daemon.verify_bridge(timeout_seconds=remaining)
-
-    def _command(
-        self,
-        request: _RequestFacts,
-        deadline_at: float,
-        probe: WtsCliReadinessProbe,
-        action: OpenCliDaemonAction,
-        params: Mapping[str, object],
-    ) -> OpenCliDaemonResult:
-        remaining = self._require_current(request, deadline_at, probe.binding)
-        timeout = _command_timeout_within(remaining)
-        if timeout is None:
-            raise _DeadlineExpired
-        probe.wtscli_called = True
-        return self._daemon.command(action, params, timeout_seconds=timeout)
 
     def _require_current(
         self,
@@ -344,17 +374,6 @@ class _WtsCliVerifySessionEffect:
             return -1.0
         return deadline_at - float(now)
 
-    def _controlled_params(self, probe: WtsCliReadinessProbe, session: str) -> dict[str, object]:
-        if probe.control_fence is None:
-            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
-        return {
-            "session": session,
-            "surface": "browser",
-            "windowMode": "background",
-            "controlKey": self._control_key,
-            "fenceToken": probe.control_fence,
-        }
-
 def create_wtscli_verify_session_effect(
     *,
     daemon: _WtsCliDaemon,
@@ -385,6 +404,80 @@ def create_wtscli_verify_session_effect(
         monotonic_clock=monotonic_clock,
         poll_wait=poll_wait,
     )
+
+
+def probe_wtscli_liepin_session(
+    *,
+    daemon: _WtsCliDaemon,
+    bridge_requirement: BrowserBridgeRequirement,
+    control_key: str,
+    deadline_at: float,
+    monotonic_clock: Callable[[], float] = time.monotonic,
+    poll_wait: Callable[[float], None] = time.sleep,
+) -> str | None:
+    """Observe current Liepin browser readiness through the installed WTSCLI bridge."""
+    _validate_adapter_dependencies(
+        daemon=daemon,
+        bridge_requirement=bridge_requirement,
+        control_key=control_key,
+        monotonic_clock=monotonic_clock,
+        poll_wait=poll_wait,
+    )
+    probe = WtsCliReadinessProbe(binding=None)
+
+    def require_current(deadline: float) -> float:
+        remaining = _remaining(deadline, monotonic_clock)
+        if remaining <= 0:
+            raise _DeadlineExpired
+        return remaining
+
+    try:
+        _BrowserReadinessProbe(
+            daemon=daemon,
+            bridge_requirement=bridge_requirement,
+            control_key=control_key,
+            require_current=require_current,
+            poll_wait=poll_wait,
+        ).run(deadline_at, probe)
+    except _DeadlineExpired:
+        probe.safe_reason = "liepin_opencli_timeout"
+    except OpenCliBrowserError as error:
+        apply_command_error(probe, error.safe_reason_code)
+    except (ArithmeticError, EOFError, OSError, RuntimeError, TypeError, ValueError):
+        probe.safe_reason = "liepin_opencli_status_unavailable"
+    if _remaining(deadline_at, monotonic_clock) <= 0:
+        probe.safe_reason = "liepin_opencli_timeout"
+    return None if wtscli_probe_is_ready(probe) else safe_liepin_reason(probe.safe_reason)
+
+
+def _validate_adapter_dependencies(
+    *,
+    daemon: _WtsCliDaemon,
+    bridge_requirement: BrowserBridgeRequirement,
+    control_key: str,
+    monotonic_clock: Callable[[], float],
+    poll_wait: Callable[[float], None],
+) -> None:
+    if type(bridge_requirement) is not BrowserBridgeRequirement:
+        raise TypeError("bridge_requirement must be a BrowserBridgeRequirement")
+    if (
+        not callable(getattr(daemon, "verify_bridge", None))
+        or not callable(getattr(daemon, "command", None))
+        or not callable(monotonic_clock)
+        or not callable(poll_wait)
+    ):
+        raise TypeError("WTSCLI adapter dependencies must be callable")
+    if type(control_key) is not str or not control_key.strip() or len(control_key) > 256:
+        raise ValueError("control_key is invalid")
+
+
+def _remaining(deadline_at: float, monotonic_clock: Callable[[], float]) -> float:
+    now: object | None = None
+    with suppress(Exception):
+        now = monotonic_clock()
+    if isinstance(now, bool) or not isinstance(now, (int, float)) or not math.isfinite(now):
+        return -1.0
+    return deadline_at - float(now)
 
 
 def _binding_matches_request(
@@ -516,4 +609,5 @@ def _valid_deadline(value: object) -> bool:
 __all__ = [
     "WtsCliCurrentProfileSnapshot",
     "create_wtscli_verify_session_effect",
+    "probe_wtscli_liepin_session",
 ]

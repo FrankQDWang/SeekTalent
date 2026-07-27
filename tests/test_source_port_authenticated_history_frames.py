@@ -718,7 +718,6 @@ def test_source_port_frame_kernel_has_no_project_side_effect_dependency_or_busin
     # Reconciliation imports only canonical semantics; the mixed session owns framing.
     assert production_callers == [
         "src/seektalent/source_history_reconciliation.py",
-        "src/seektalent/liepin_verify_session_gate.py",
         "src/seektalent/source_port/authenticated_source_port_session.py",
         "src/seektalent/source_port/sidecar_transport.py",
     ]

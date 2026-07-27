@@ -289,6 +289,13 @@ class LiepinProviderAdapter:
         if is_live_liepin_worker_mode(self.settings.liepin_worker_mode):
             scope = _live_scope_from_request(request)
             connection = self._enforce_live_compliance(scope)
+            self._enforce_connection_safety(
+                scope=scope,
+                provider_account_hash=_required_provider_account_hash(
+                    connection.provider_account_hash
+                ),
+                requested_transport=_requested_transport_from_request(request),
+            )
             if self.verify_session_gate is None:
                 raise LiepinWorkerModeError(
                     "猎聘会话校验未接通，请重新启动 SeekTalent 后重试。",
@@ -297,11 +304,6 @@ class LiepinProviderAdapter:
             await self.verify_session_gate.verify(
                 runtime_run_id=_required_string_context(request, "runtime_run_id"),
                 source_lane_run_id=_required_string_context(request, "source_lane_run_id"),
-            )
-            self._enforce_connection_safety(
-                scope=scope,
-                provider_account_hash=_required_provider_account_hash(connection.provider_account_hash),
-                requested_transport=_requested_transport_from_request(request),
             )
         else:
             await self.worker_client.ensure_ready(on_event=self.worker_event_callback)

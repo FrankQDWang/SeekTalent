@@ -776,7 +776,7 @@ def test_late_outbox_ack_cannot_commit_safe_retry(
     _close_exchange(session, child_thread, errors, ready_lease_factory)
 
 
-def test_new_composition_has_one_liepin_production_caller() -> None:
+def test_new_composition_has_no_production_caller() -> None:
     callers = []
     for path in Path("src").rglob("*.py"):
         if path.name == "source_history_reconciliation.py":
@@ -790,9 +790,7 @@ def test_new_composition_has_one_liepin_production_caller() -> None:
             continue
         if "deliver_verify_session_outbox(" in path.read_text(encoding="utf-8"):
             closed_loop_callers.append(path)
-    assert closed_loop_callers == [
-        Path("src/seektalent/liepin_verify_session_gate.py"),
-    ]
+    assert closed_loop_callers == []
 
 
 def _history_case(

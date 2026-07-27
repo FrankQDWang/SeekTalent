@@ -1,4 +1,4 @@
-"""Verify-session composition over durable journal receipts."""
+"""Production-unreachable verify-session composition over durable journal receipts."""
 
 from __future__ import annotations
 
@@ -97,7 +97,7 @@ _COMPOSITION_LOCK = threading.Lock()
 
 
 class VerifySessionJournalEffectComposition:
-    """Factory-only sidecar composition used by the production composition root."""
+    """Factory-only sidecar composition with no production route or real adapter."""
 
     __slots__ = ("__weakref__",)
 

@@ -1,4 +1,4 @@
-"""Strict production wire contract for ``verify_session``."""
+"""Production-unreachable strict wire contract for ``verify_session``."""
 
 from __future__ import annotations
 

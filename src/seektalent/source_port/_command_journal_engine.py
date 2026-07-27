@@ -1,4 +1,4 @@
-"""Private SQLite storage engine for the verify-session command journal."""
+"""Private SQLite storage engine for the production-unreachable command journal."""
 
 from __future__ import annotations
 

@@ -349,7 +349,13 @@ def test_compliance_gate_blocks_before_worker_calls(
     settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path, gate=gate)
     worker = RecordingWorkerClient()
-    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store, verify_session_gate=RecordingVerifySessionGate())
+    verify_gate = RecordingVerifySessionGate()
+    adapter = LiepinProviderAdapter(
+        settings,
+        worker_client=worker,
+        store=store,
+        verify_session_gate=verify_gate,
+    )
 
     with pytest.raises(LiepinWorkerModeError, match=match):
         asyncio.run(
@@ -360,6 +366,7 @@ def test_compliance_gate_blocks_before_worker_calls(
             )
         )
 
+    assert verify_gate.calls == []
     assert worker.calls == []
 
 
@@ -399,7 +406,13 @@ def test_connection_safety_missing_session_metadata_blocks_before_search(tmp_pat
     settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path, record_session=False)
     worker = RecordingWorkerClient()
-    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store, verify_session_gate=RecordingVerifySessionGate())
+    gate = RecordingVerifySessionGate()
+    adapter = LiepinProviderAdapter(
+        settings,
+        worker_client=worker,
+        store=store,
+        verify_session_gate=gate,
+    )
 
     with pytest.raises(LiepinWorkerModeError) as error:
         asyncio.run(
@@ -411,6 +424,7 @@ def test_connection_safety_missing_session_metadata_blocks_before_search(tmp_pat
         )
 
     assert error.value.code == "connection_safety_missing"
+    assert gate.calls == []
     assert worker.calls == []
 
 
@@ -421,7 +435,13 @@ def test_connection_safety_expired_session_blocks_before_search(tmp_path: Path) 
         session_updated_at=datetime.now(UTC) - timedelta(hours=13),
     )
     worker = RecordingWorkerClient()
-    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store, verify_session_gate=RecordingVerifySessionGate())
+    gate = RecordingVerifySessionGate()
+    adapter = LiepinProviderAdapter(
+        settings,
+        worker_client=worker,
+        store=store,
+        verify_session_gate=gate,
+    )
 
     with pytest.raises(LiepinWorkerModeError) as error:
         asyncio.run(
@@ -433,6 +453,7 @@ def test_connection_safety_expired_session_blocks_before_search(tmp_path: Path) 
         )
 
     assert error.value.code == "connection_safety_expired"
+    assert gate.calls == []
     assert worker.calls == []
 
 
@@ -440,7 +461,13 @@ def test_connection_safety_blocks_remote_transport_before_search(tmp_path: Path)
     settings = make_settings(provider_name="liepin", liepin_worker_mode="opencli")
     store, gate_ref, connection_id = _live_store(tmp_path)
     worker = RecordingWorkerClient()
-    adapter = LiepinProviderAdapter(settings, worker_client=worker, store=store, verify_session_gate=RecordingVerifySessionGate())
+    gate = RecordingVerifySessionGate()
+    adapter = LiepinProviderAdapter(
+        settings,
+        worker_client=worker,
+        store=store,
+        verify_session_gate=gate,
+    )
 
     with pytest.raises(LiepinWorkerModeError) as error:
         asyncio.run(
@@ -458,6 +485,7 @@ def test_connection_safety_blocks_remote_transport_before_search(tmp_path: Path)
         )
 
     assert error.value.code == "connection_safety_transport_denied"
+    assert gate.calls == []
     assert worker.calls == []
 
 
