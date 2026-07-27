@@ -173,6 +173,7 @@ def _transport_profile_snapshot() -> WtsCliCurrentProfileSnapshot:
         profile_binding_ref="profile-binding-shared-1",
         profile_binding_generation=1,
         provider_account_ref="provider-account-shared-1",
+        provider_account_subject="transport-profile-subject",
         browser_control_scope_id="browser-scope-shared-1",
     )
 

@@ -76,17 +76,12 @@ async def run_liepin_first_page_expansion(*, settings: AppSettings,
         detail_open_claim_ledger: DetailOpenClaimLedger) -> SourceFirstPageExpansionResult:
     client = build_liepin_worker_client(settings)
     provider = _build_provider(settings=settings, worker_client=client)
-    expansion_lane_run_id = (
-        f"{request.runtime_run_id}:expansion:{request.continuation_id}"
-    )
     try:
         result = await provider.handle_first_page_continuation_with_detail_open_claim_ledger(
             action=request.action,
             continuation=cast(ProviderSearchContinuation, request.continuation),
             detail_open_claim_ledger=detail_open_claim_ledger, logical_round_no=request.round_no,
-            query_instance_id=request.query_instance_id,
-            runtime_run_id=request.runtime_run_id,
-            source_lane_run_id=expansion_lane_run_id)
+            query_instance_id=request.query_instance_id)
     except ProviderFirstPageExpansionError as exc:
         raise SourceFirstPageExpansionError(str(exc), status=exc.status,
             safe_reason_code=exc.safe_reason_code,
@@ -103,7 +98,7 @@ async def run_liepin_first_page_expansion(*, settings: AppSettings,
         dedup_key=item.dedup_key) for item in candidates)
     lane = RuntimeSourceLaneResult(runtime_run_id=request.runtime_run_id,
         source_plan_id=f"{request.runtime_run_id}:source:{request.round_no}:liepin",
-        source_lane_run_id=expansion_lane_run_id,
+        source_lane_run_id=f"{request.runtime_run_id}:expansion:{request.continuation_id}",
         source="liepin", lane_mode="card", attempt=request.round_no, status=result.status,
         candidate_store_updates={item.resume_id: item for item in candidates},
         raw_candidate_count=result.search_result.raw_candidate_count,
@@ -177,7 +172,6 @@ async def run_liepin_source_lane(
     search_request = _card_search_request(
         request=request,
         context=context,
-        runtime_run_id=runtime_run_id,
         source_lane_run_id=source_lane_run_id,
         compiled_search_request=compiled_search_request,
     )
@@ -704,7 +698,6 @@ async def _run_detail_lane(
             provider_context=_detail_provider_context(
                 request=request,
                 context=context,
-                runtime_run_id=runtime_run_id,
                 source_lane_run_id=source_lane_run_id,
                 query_terms=query_terms,
             ),
@@ -1215,7 +1208,6 @@ def _card_search_request(
     *,
     request: RuntimeSourceLaneRequest,
     context: RuntimeLiepinContext,
-    runtime_run_id: str,
     source_lane_run_id: str,
     compiled_search_request: SearchRequest | None,
 ) -> SearchRequest:
@@ -1241,8 +1233,6 @@ def _card_search_request(
             "liepin_max_cards": str(provider_scan_limit),
             "query_instance_id": request.logical_query_instance_id or source_lane_run_id,
             "query_fingerprint": default_query_fingerprint,
-            "runtime_run_id": runtime_run_id,
-            "source_lane_run_id": source_lane_run_id,
         }.items()
         if value is not None
     }
@@ -1300,7 +1290,6 @@ def _detail_provider_context(
     *,
     request: RuntimeSourceLaneRequest,
     context: RuntimeLiepinContext,
-    runtime_run_id: str,
     source_lane_run_id: str,
     query_terms: list[str],
 ) -> dict[str, str]:
@@ -1315,8 +1304,6 @@ def _detail_provider_context(
         "liepin_provider_account_hash": lease.provider_account_hash,
         "query_instance_id": source_lane_run_id,
         "query_fingerprint": hashlib.sha256(" ".join(query_terms).encode("utf-8")).hexdigest(),
-        "runtime_run_id": runtime_run_id,
-        "source_lane_run_id": source_lane_run_id,
         "liepin_detail_open_plan_ref": lease.lease_ref,
         "liepin_detail_candidates_json": lease.detail_candidates_json,
         "liepin_detail_daily_budget": str(lease.daily_budget),

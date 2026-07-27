@@ -109,6 +109,7 @@ class WtsCliCurrentProfileSnapshot:
     profile_binding_ref: str
     profile_binding_generation: int
     provider_account_ref: str | None
+    provider_account_subject: str
     browser_control_scope_id: str
 
 
@@ -252,7 +253,16 @@ def result_reply(
     if binding is None:
         raise TypeError("contract result requires a profile binding")
     reason = _safe_result_reason(probe.safe_reason)
-    ready = wtscli_probe_is_ready(probe)
+    ready = (
+        probe.process == "ready"
+        and probe.bridge == "ready"
+        and probe.extension == "ready"
+        and probe.profile_lock == "ready"
+        and probe.account == "ready"
+        and probe.search_surface == "ready"
+        and probe.risk_state == "clear"
+        and reason is None
+    )
     user_action = None
     if reason in _USER_ACTIONS:
         user_action = {"code": reason, "instruction_key": _USER_ACTIONS[reason]}
@@ -269,7 +279,7 @@ def result_reply(
             "risk_state": probe.risk_state,
             "session_readiness": "ready" if ready else "not_ready",
             "actual_profile_binding_ref": binding.profile_binding_ref,
-            "actual_provider_account_ref": None,
+            "actual_provider_account_ref": binding.provider_account_ref,
             "actual_profile_binding_generation": binding.profile_binding_generation,
             "safe_reason_code": None if ready else reason,
             "user_action": user_action,

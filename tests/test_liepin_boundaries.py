@@ -59,8 +59,7 @@ def test_live_first_page_expansion_passes_verify_session_before_browser_effect()
     )
 
     class Gate:
-        async def verify(self, *, runtime_run_id: str, source_lane_run_id: str) -> None:
-            assert (runtime_run_id, source_lane_run_id) == ("runtime-live", "lane-expansion")
+        async def verify(self) -> None:
             events.append("verify_session")
 
     class Worker:
@@ -96,8 +95,6 @@ def test_live_first_page_expansion_passes_verify_session_before_browser_effect()
             detail_open_claim_ledger=DetailOpenClaimLedger({}),
             logical_round_no=1,
             query_instance_id="query",
-            runtime_run_id="runtime-live",
-            source_lane_run_id="lane-expansion",
         )
     )
 
@@ -122,7 +119,7 @@ def test_provider_preserves_terminal_result_when_cleanup_fails() -> None:
                 safe_reason_code="original_partial")
     result = asyncio.run(LiepinProviderAdapter(make_settings(), worker_client=Worker()).handle_first_page_continuation_with_detail_open_claim_ledger(
         action="expand", continuation=continuation, detail_open_claim_ledger=DetailOpenClaimLedger({}),
-        logical_round_no=1, query_instance_id="q", runtime_run_id="runtime-test", source_lane_run_id="lane-test"))
+        logical_round_no=1, query_instance_id="q"))
     assert result.status == "partial"
     assert result.continuation_deleted is False
     assert result.safe_reason_code == "liepin_first_page_continuation_cleanup_failed"
@@ -145,7 +142,7 @@ def test_provider_does_not_swallow_programmer_runtime_error_from_cleanup() -> No
     with pytest.raises(RuntimeError, match="cleanup invariant violated"):
         asyncio.run(LiepinProviderAdapter(make_settings(), worker_client=Worker()).handle_first_page_continuation_with_detail_open_claim_ledger(
             action="expand", continuation=continuation, detail_open_claim_ledger=DetailOpenClaimLedger({}),
-            logical_round_no=1, query_instance_id="q", runtime_run_id="runtime-test", source_lane_run_id="lane-test"))
+            logical_round_no=1, query_instance_id="q"))
 
 
 def test_provider_preserves_expected_error_and_attaches_cleanup_ack() -> None:
@@ -165,7 +162,7 @@ def test_provider_preserves_expected_error_and_attaches_cleanup_ack() -> None:
     with pytest.raises(ProviderFirstPageExpansionError) as captured:
         asyncio.run(LiepinProviderAdapter(make_settings(), worker_client=Worker()).handle_first_page_continuation_with_detail_open_claim_ledger(
             action="expand", continuation=continuation, detail_open_claim_ledger=DetailOpenClaimLedger({}),
-            logical_round_no=1, query_instance_id="q", runtime_run_id="runtime-test", source_lane_run_id="lane-test"))
+            logical_round_no=1, query_instance_id="q"))
     assert captured.value.safe_reason_code == "original_blocked"
     assert captured.value.continuation_deleted is True
 
@@ -187,7 +184,7 @@ def test_provider_preserves_primary_error_when_expected_cleanup_boundary_fails()
     with pytest.raises(ProviderFirstPageExpansionError) as captured:
         asyncio.run(LiepinProviderAdapter(make_settings(), worker_client=Worker()).handle_first_page_continuation_with_detail_open_claim_ledger(
             action="expand", continuation=continuation, detail_open_claim_ledger=DetailOpenClaimLedger({}),
-            logical_round_no=1, query_instance_id="q", runtime_run_id="runtime-test", source_lane_run_id="lane-test"))
+            logical_round_no=1, query_instance_id="q"))
 
     assert captured.value.safe_reason_code == "primary_failed"
     assert captured.value.continuation_deleted is False
@@ -212,7 +209,7 @@ def test_provider_deletes_every_terminal_expansion_result(status: str) -> None:
     worker = Worker()
     result = asyncio.run(LiepinProviderAdapter(make_settings(), worker_client=worker).handle_first_page_continuation_with_detail_open_claim_ledger(
         action="expand", continuation=continuation, detail_open_claim_ledger=DetailOpenClaimLedger({}),
-        logical_round_no=1, query_instance_id="q", runtime_run_id="runtime-test", source_lane_run_id="lane-test"))
+        logical_round_no=1, query_instance_id="q"))
     assert worker.actions == ["expand", "discard"]
     assert result.status == status
     assert result.continuation_deleted is True

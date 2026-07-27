@@ -12,31 +12,8 @@ from seektalent.liepin_verify_session_gate import (
     _raise_reason,
 )
 from seektalent.providers.liepin.client import LiepinWorkerModeError
-from seektalent.wtscli_connection_supervisor import WtsCliConnectionReceipt
 from tests.browser_bridge_bundle_fixtures import exact_browser_bridge_requirement
 from tests.settings_factory import make_settings
-
-
-class _Supervisor:
-    calls: list[tuple[object, float]] = []
-
-    def __init__(self, runtime: object) -> None:
-        self.runtime = runtime
-
-    def await_ready(self, *, timeout_seconds: float) -> WtsCliConnectionReceipt:
-        self.calls.append((self.runtime, timeout_seconds))
-        requirement = exact_browser_bridge_requirement()
-        return WtsCliConnectionReceipt(
-            daemon_build_id=requirement.bridge_build_id,
-            extension_build_id=requirement.bridge_build_id,
-            endpoint=(
-                f"{requirement.runtime_identity.endpoint.host}:"
-                f"{requirement.runtime_identity.endpoint.port}"
-            ),
-            ownership_ref=f"sha256:{'1' * 64}",
-            last_connected_at=1,
-            elapsed_milliseconds=1,
-        )
 
 
 class _Daemon:
@@ -51,48 +28,53 @@ def _install_bounded_runtime(
     monkeypatch: pytest.MonkeyPatch,
     *,
     reason: str | None,
-) -> tuple[object, _Daemon, list[dict[str, object]]]:
+) -> tuple[
+    object,
+    _Daemon,
+    list[dict[str, object]],
+    list[tuple[object, float]],
+]:
     runtime = object()
     daemon = _Daemon()
     probe_calls: list[dict[str, object]] = []
-    _Supervisor.calls = []
+    connect_calls: list[tuple[object, float]] = []
     monkeypatch.setattr(gate_module, "ensure_opencli_runtime", lambda: runtime)
     monkeypatch.setattr(
         gate_module,
         "runtime_requirement",
         lambda actual: exact_browser_bridge_requirement() if actual is runtime else None,
     )
-    monkeypatch.setattr(gate_module, "InstalledWtsCliConnectionSupervisor", _Supervisor)
-    monkeypatch.setattr(
-        gate_module,
-        "connect_installed_opencli_daemon",
-        lambda actual, **_kwargs: daemon if actual is runtime else None,
-    )
+    def connect(actual: object, *, verify_timeout_seconds: float) -> _Daemon:
+        connect_calls.append((actual, verify_timeout_seconds))
+        assert actual is runtime
+        return daemon
+
+    monkeypatch.setattr(gate_module, "connect_installed_opencli_daemon", connect)
 
     def probe(**kwargs: object) -> str | None:
         probe_calls.append(kwargs)
         return reason
 
     monkeypatch.setattr(gate_module, "probe_wtscli_liepin_session", probe)
-    return runtime, daemon, probe_calls
+    return runtime, daemon, probe_calls, connect_calls
 
 
 def test_production_gate_executes_direct_wtscli_success_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    runtime, daemon, probe_calls = _install_bounded_runtime(monkeypatch, reason=None)
+    runtime, daemon, probe_calls, connect_calls = _install_bounded_runtime(
+        monkeypatch,
+        reason=None,
+    )
     gate = ProductionLiepinVerifySessionGate(
         make_settings(liepin_opencli_timeout_seconds=11)
     )
 
-    asyncio.run(
-        gate.verify(
-            runtime_run_id="runtime-run-1",
-            source_lane_run_id="lane-run-1",
-        )
-    )
+    asyncio.run(gate.verify())
 
-    assert _Supervisor.calls == [(runtime, 11)]
+    assert len(connect_calls) == 1
+    assert connect_calls[0][0] is runtime
+    assert 10 < connect_calls[0][1] <= 11
     assert len(probe_calls) == 1
     assert probe_calls[0]["daemon"] is daemon
     assert probe_calls[0]["bridge_requirement"] == exact_browser_bridge_requirement()
@@ -103,21 +85,17 @@ def test_production_gate_executes_direct_wtscli_success_path(
 def test_production_gate_maps_direct_wtscli_failure_and_closes_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _runtime, daemon, probe_calls = _install_bounded_runtime(
+    _runtime, daemon, probe_calls, connect_calls = _install_bounded_runtime(
         monkeypatch,
         reason="liepin_opencli_login_required",
     )
     gate = ProductionLiepinVerifySessionGate(make_settings())
 
     with pytest.raises(LiepinWorkerModeError, match="登录猎聘") as raised:
-        asyncio.run(
-            gate.verify(
-                runtime_run_id="runtime-run-1",
-                source_lane_run_id="lane-run-1",
-            )
-        )
+        asyncio.run(gate.verify())
 
     assert raised.value.code == "liepin_opencli_login_required"
+    assert len(connect_calls) == 1
     assert len(probe_calls) == 1
     assert daemon.closed is True
 

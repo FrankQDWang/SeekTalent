@@ -383,7 +383,7 @@ def create_wtscli_verify_session_effect(
     monotonic_clock: Callable[[], float] = time.monotonic,
     poll_wait: Callable[[float], None] = time.sleep,
 ) -> Callable[[VerifySessionRequestV1, float], VerifySessionEffectReply]:
-    """Create the WTSCLI verification effect used by the durable composition."""
+    """Create an explicit test/manual-only effect; no production route calls this factory."""
     if type(bridge_requirement) is not BrowserBridgeRequirement:
         raise TypeError("bridge_requirement must be a BrowserBridgeRequirement")
     if (
@@ -491,7 +491,10 @@ def _binding_matches_request(
         and snapshot.profile_binding_ref == request.profile_binding_ref
         and type(snapshot.profile_binding_generation) is int
         and snapshot.profile_binding_generation == request.profile_binding_generation
+        and type(snapshot.provider_account_ref) is str
         and snapshot.provider_account_ref == request.provider_account_ref
+        and type(snapshot.provider_account_subject) is str
+        and bool(snapshot.provider_account_subject.strip())
         and type(snapshot.browser_control_scope_id) is str
         and snapshot.browser_control_scope_id == request.browser_control_scope_id
     )

@@ -82,8 +82,8 @@ def test_liepin_runtime_replay_set_is_deterministic_and_public_safe(
     monkeypatch,
 ) -> None:
     class ReadyGate:
-        async def verify(self, *, runtime_run_id: str, source_lane_run_id: str) -> None:
-            del runtime_run_id, source_lane_run_id
+        async def verify(self) -> None:
+            return None
 
     monkeypatch.setattr(
         "seektalent.liepin_verify_session_gate.create_production_liepin_verify_session_gate",

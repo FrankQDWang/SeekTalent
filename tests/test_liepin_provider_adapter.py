@@ -78,15 +78,10 @@ class RecordingWorkerClient:
 class RecordingVerifySessionGate:
     def __init__(self, *, error: LiepinWorkerModeError | None = None) -> None:
         self.error = error
-        self.calls: list[tuple[str, str]] = []
+        self.calls: list[str] = []
 
-    async def verify(
-        self,
-        *,
-        runtime_run_id: str,
-        source_lane_run_id: str,
-    ) -> None:
-        self.calls.append((runtime_run_id, source_lane_run_id))
+    async def verify(self) -> None:
+        self.calls.append("verify_session")
         if self.error is not None:
             raise self.error
 
@@ -205,8 +200,6 @@ def _live_filters(gate_ref: str, connection_id: str, **overrides: str) -> dict[s
         "liepin_actor_id": "actor-a",
         "liepin_connection_id": connection_id,
         "liepin_compliance_gate_ref": gate_ref,
-        "runtime_run_id": "runtime-run-a",
-        "source_lane_run_id": "source-lane-a",
     }
     context.update(overrides)
     return context
@@ -276,12 +269,7 @@ def test_summary_search_requires_compliance_gate_and_ready_session(tmp_path: Pat
         adapter.search(
             _request(
                 provider_filters={"city": "上海"},
-                provider_context=_live_filters(
-                    gate_ref,
-                    connection_id,
-                    runtime_run_id="runtime-run-1",
-                    source_lane_run_id="lane-run-1",
-                ),
+                provider_context=_live_filters(gate_ref, connection_id),
             ),
             round_no=1,
             trace_id="trace-1",
@@ -289,7 +277,7 @@ def test_summary_search_requires_compliance_gate_and_ready_session(tmp_path: Pat
     )
 
     assert actual is result
-    assert gate.calls == [("runtime-run-1", "lane-run-1")]
+    assert gate.calls == ["verify_session"]
     assert worker.calls == ["search"]
     assert worker.search_requests[0][3] == "account-hash-a"
 
@@ -317,19 +305,14 @@ def test_verify_session_failure_blocks_before_search_without_old_readiness_calls
         asyncio.run(
             adapter.search(
                 _request(
-                    provider_context=_live_filters(
-                        gate_ref,
-                        connection_id,
-                        runtime_run_id="runtime-run-1",
-                        source_lane_run_id="lane-run-1",
-                    )
+                    provider_context=_live_filters(gate_ref, connection_id)
                 ),
                 round_no=1,
                 trace_id="trace-1",
             )
         )
 
-    assert gate.calls == [("runtime-run-1", "lane-run-1")]
+    assert gate.calls == ["verify_session"]
     assert worker.calls == []
 
 

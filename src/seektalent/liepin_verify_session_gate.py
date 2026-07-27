@@ -12,11 +12,6 @@ from seektalent.opencli_browser.daemon_process import connect_installed_opencli_
 from seektalent.opencli_browser.lifecycle import browser_control_key
 from seektalent.opencli_launcher import BootstrapError, ensure_opencli_runtime, runtime_requirement
 from seektalent.providers.liepin.client import LiepinWorkerModeError
-from seektalent.wtscli_connection_supervisor import (
-    InstalledWtsCliConnectionSupervisor,
-    WTSCLI_CONNECTION_READINESS_TIMEOUT_SECONDS,
-    WtsCliConnectionError,
-)
 from seektalent.wtscli_verify_session_adapter import (
     probe_wtscli_liepin_session,
 )
@@ -50,24 +45,15 @@ class ProductionLiepinVerifySessionGate:
     def __init__(self, settings: AppSettings) -> None:
         self._settings = settings
 
-    async def verify(
-        self,
-        *,
-        runtime_run_id: str,
-        source_lane_run_id: str,
-    ) -> None:
+    async def verify(self) -> None:
         try:
             await asyncio.to_thread(
                 _verify_session,
                 self._settings,
-                runtime_run_id,
-                source_lane_run_id,
             )
         except LiepinWorkerModeError:
             raise
         except OpenCliBrowserError as exc:
-            _raise_reason(_normalized_boundary_reason(exc.safe_reason_code))
-        except WtsCliConnectionError as exc:
             _raise_reason(_normalized_boundary_reason(exc.safe_reason_code))
         except BootstrapError as exc:
             _raise_reason(_bootstrap_reason(exc))
@@ -79,26 +65,15 @@ def create_production_liepin_verify_session_gate(
     return ProductionLiepinVerifySessionGate(settings)
 
 
-def _verify_session(
-    settings: AppSettings,
-    _runtime_run_id: str,
-    _source_lane_run_id: str,
-) -> None:
+def _verify_session(settings: AppSettings) -> None:
     started_at = time.monotonic()
     runtime = ensure_opencli_runtime()
     requirement = runtime_requirement(runtime)
     timeout_seconds = min(900.0, max(0.001, settings.liepin_opencli_timeout_seconds))
     deadline_at = started_at + timeout_seconds
-    supervisor = InstalledWtsCliConnectionSupervisor(runtime)
-    supervisor.await_ready(
-        timeout_seconds=min(
-            WTSCLI_CONNECTION_READINESS_TIMEOUT_SECONDS,
-            timeout_seconds,
-        ),
-    )
     remaining = deadline_at - time.monotonic()
     if remaining <= 0:
-        raise WtsCliConnectionError("wtscli_readiness_deadline_exceeded")
+        _raise_reason("liepin_opencli_timeout")
     profile_digest = sha256(
         (
             f"{requirement.bridge_build_id}\0"
@@ -112,10 +87,7 @@ def _verify_session(
     )
     daemon = connect_installed_opencli_daemon(
         runtime,
-        verify_timeout_seconds=min(
-            WTSCLI_CONNECTION_READINESS_TIMEOUT_SECONDS,
-            remaining,
-        ),
+        verify_timeout_seconds=remaining,
     )
     try:
         reason = probe_wtscli_liepin_session(
@@ -156,7 +128,6 @@ def _normalized_boundary_reason(reason: str) -> str:
         "opencli_extension_disconnected": "liepin_opencli_extension_disconnected",
         "opencli_status_unavailable": "liepin_opencli_status_unavailable",
         "opencli_timeout": "liepin_opencli_timeout",
-        "wtscli_readiness_deadline_exceeded": "liepin_opencli_timeout",
     }
     return aliases.get(code, "liepin_opencli_status_unavailable")
 

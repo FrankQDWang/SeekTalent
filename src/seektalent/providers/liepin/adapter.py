@@ -64,12 +64,7 @@ class ProviderConnectionSafetyResolver(Protocol):
 
 
 class LiepinVerifySessionGate(Protocol):
-    async def verify(
-        self,
-        *,
-        runtime_run_id: str,
-        source_lane_run_id: str,
-    ) -> None: ...
+    async def verify(self) -> None: ...
 
 
 class LiepinStoreConnectionSafetyResolver:
@@ -220,8 +215,7 @@ class LiepinProviderAdapter:
 
     async def handle_first_page_continuation_with_detail_open_claim_ledger(self, *, action: str,
             continuation: ProviderSearchContinuation, detail_open_claim_ledger: DetailOpenClaimLedger,
-            logical_round_no: int, query_instance_id: str, runtime_run_id: str,
-            source_lane_run_id: str) -> ProviderFirstPageExpansionResult:
+            logical_round_no: int, query_instance_id: str) -> ProviderFirstPageExpansionResult:
         worker = self.worker_client
         handler = getattr(worker, "handle_first_page_continuation_with_detail_open_claim_ledger", None)
         if not callable(handler):
@@ -236,10 +230,7 @@ class LiepinProviderAdapter:
                     "猎聘会话校验未接通，请重新启动 SeekTalent 后重试。",
                     code="liepin_verify_session_gate_missing",
                 )
-            await self.verify_session_gate.verify(
-                runtime_run_id=runtime_run_id,
-                source_lane_run_id=source_lane_run_id,
-            )
+            await self.verify_session_gate.verify()
         result: ProviderFirstPageExpansionResult | None = None
         primary_error: ProviderSearchError | LiepinWorkerModeError | None = None
         deleted: ProviderFirstPageExpansionResult | None = None
@@ -301,10 +292,7 @@ class LiepinProviderAdapter:
                     "猎聘会话校验未接通，请重新启动 SeekTalent 后重试。",
                     code="liepin_verify_session_gate_missing",
                 )
-            await self.verify_session_gate.verify(
-                runtime_run_id=_required_string_context(request, "runtime_run_id"),
-                source_lane_run_id=_required_string_context(request, "source_lane_run_id"),
-            )
+            await self.verify_session_gate.verify()
         else:
             await self.worker_client.ensure_ready(on_event=self.worker_event_callback)
         if (

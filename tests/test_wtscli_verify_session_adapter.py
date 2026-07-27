@@ -66,7 +66,7 @@ def _request(**updates: object) -> VerifySessionRequestV1:
         "dispatch_intent_revision": 1,
         "source_operation_acceptance_ref": "source-acceptance-wtscli-1",
         "profile_binding_ref": "profile-binding-wtscli-1",
-        "provider_account_ref": None,
+        "provider_account_ref": "provider-account-wtscli-1",
         "required_capabilities": (
             "account",
             "bridge",
@@ -91,6 +91,7 @@ def _snapshot(request: VerifySessionRequestV1 | None = None, **updates: object) 
         "profile_binding_ref": request.profile_binding_ref,
         "profile_binding_generation": request.identity.profile_binding_generation,
         "provider_account_ref": request.provider_account_ref,
+        "provider_account_subject": "liepin-opencli-local-browser-profile",
         "browser_control_scope_id": request.identity.browser_control_scope_id,
     }
     values.update(updates)
@@ -571,6 +572,9 @@ def test_search_url_without_positive_account_and_search_surface_evidence_never_b
         ({"profile_binding_generation": 8}, {}),
         ({"provider_account_ref": "different-provider-account"}, {}),
         ({"browser_control_scope_id": "different-browser-scope"}, {}),
+        ({"provider_account_subject": ""}, {}),
+        ({"provider_account_ref": None}, {}),
+        ({}, {"provider_account_ref": None}),
     ],
 )
 def test_stale_binding_or_scope_mismatch_is_closed_before_wtscli(
@@ -588,6 +592,36 @@ def test_stale_binding_or_scope_mismatch_is_closed_before_wtscli(
     assert result.failure_fact == "no_effect_performed"
     assert result.failure_reason == "sidecar_not_ready"
     assert daemon.calls == []
+
+
+def test_provider_account_subject_is_revalidated_before_every_subsequent_command() -> None:
+    request = _request()
+    clock = _Clock()
+    daemon = _FakeDaemon(clock)
+    snapshots = _SnapshotSource(_snapshot(request), clock=clock)
+
+    def change_subject_after_status(
+        *,
+        timeout_seconds: float,
+        validate: bool = True,
+    ) -> dict[str, object]:
+        result = _FakeDaemon.verify_bridge(
+            daemon,
+            timeout_seconds=timeout_seconds,
+            validate=validate,
+        )
+        snapshots.value = replace(
+            snapshots.value,
+            provider_account_subject="different-current-subject",
+        )
+        return result
+
+    daemon.verify_bridge = change_subject_after_status  # type: ignore[method-assign]
+    result = _effect(daemon, snapshots, clock)(request, clock() + 10)
+
+    assert isinstance(result, VerifySessionFailureV1)
+    assert result.failure_reason == "sidecar_not_ready"
+    assert [call[0] for call in daemon.calls] == ["status"]
 
 
 @pytest.mark.parametrize(
@@ -883,7 +917,7 @@ def test_closed_component_mapping(
     ) == (safe_reason, process, bridge, extension, profile_lock, account, search_surface, risk_state, session)
     assert result.actual_profile_binding_ref == "profile-binding-wtscli-1"
     assert result.actual_profile_binding_generation == 7
-    assert result.actual_provider_account_ref is None
+    assert result.actual_provider_account_ref == "provider-account-wtscli-1"
     assert result.component_receipt_refs == ("component-receipt-wtscli-1",)
     assert daemon.user_tabs == before_user_tabs
     assert "tabs.close" not in [call[0] for call in daemon.calls]

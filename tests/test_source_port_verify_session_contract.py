@@ -116,16 +116,6 @@ def _result(request: VerifySessionRequestV1, **updates: object) -> VerifySession
     return VerifySessionResultV1.model_validate(values)
 
 
-def test_ready_result_does_not_invent_browser_observed_account_identity() -> None:
-    request = _request()
-    result = _result(request, actual_provider_account_ref=None)
-
-    assert result.session_readiness == "ready"
-    assert result.account_readiness == "ready"
-    assert result.actual_provider_account_ref is None
-    validate_verify_session_result_echo(request, result)
-
-
 class _CustomMapping(Mapping[str, object]):
     def __init__(self, values: dict[str, object]) -> None:
         self.values = values

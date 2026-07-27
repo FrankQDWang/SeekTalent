@@ -1068,9 +1068,7 @@ def test_command_journal_internal_modules_form_a_one_way_dag() -> None:
     }
 
 
-def test_journal_stays_production_unreachable_and_excludes_sensitive_payload_columns(
-    tmp_path: Path,
-) -> None:
+def test_journal_stays_production_unreachable_and_excludes_sensitive_payload_columns(tmp_path: Path) -> None:
     project_root = Path(__file__).parents[1]
     source_port = project_root / "src" / "seektalent" / "source_port"
     journal_modules = {
