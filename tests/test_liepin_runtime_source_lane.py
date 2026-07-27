@@ -2998,8 +2998,17 @@ def test_liepin_runtime_lane_builds_live_store_for_opencli(monkeypatch, tmp_path
     captured_stores: list[object] = []
 
     class FakeProvider:
-        def __init__(self, settings, *, worker_client=None, worker_search_started_callback=None, store=None):
+        def __init__(
+            self,
+            settings,
+            *,
+            worker_client=None,
+            worker_search_started_callback=None,
+            store=None,
+            verify_session_gate=None,
+        ):
             del settings, worker_client, worker_search_started_callback
+            assert verify_session_gate is not None
             captured_stores.append(store)
 
         async def search(self, request: SearchRequest, *, round_no: int, trace_id: str) -> SearchResult:

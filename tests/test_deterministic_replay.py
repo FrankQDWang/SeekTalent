@@ -77,7 +77,18 @@ def test_requirement_replay_fixture_is_deterministic() -> None:
     assert all(token not in serialized.casefold() for token in FORBIDDEN_OUTPUT_TOKENS)
 
 
-def test_liepin_runtime_replay_set_is_deterministic_and_public_safe(tmp_path: Path) -> None:
+def test_liepin_runtime_replay_set_is_deterministic_and_public_safe(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class ReadyGate:
+        async def verify(self) -> None:
+            return None
+
+    monkeypatch.setattr(
+        "seektalent.liepin_verify_session_gate.create_production_liepin_verify_session_gate",
+        lambda settings: ReadyGate(),
+    )
     first = _liepin_runtime_replay_snapshot(tmp_path / "first")
     second = _liepin_runtime_replay_snapshot(tmp_path / "second")
 

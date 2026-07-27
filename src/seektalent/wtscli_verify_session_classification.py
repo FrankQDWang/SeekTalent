@@ -1,4 +1,4 @@
-"""Closed readiness classification for the production-unreachable WTSCLI probe."""
+"""Closed readiness classification for the WTSCLI production probe."""
 
 from __future__ import annotations
 
@@ -115,7 +115,7 @@ class WtsCliCurrentProfileSnapshot:
 
 @dataclass(slots=True)
 class WtsCliReadinessProbe:
-    binding: WtsCliCurrentProfileSnapshot
+    binding: WtsCliCurrentProfileSnapshot | None
     process: ComponentReadiness = "not_observed"
     bridge: ComponentReadiness = "not_observed"
     extension: ComponentReadiness = "not_observed"
@@ -249,6 +249,9 @@ def result_reply(
     request: VerifySessionRequestV1,
     probe: WtsCliReadinessProbe,
 ) -> VerifySessionResultV1:
+    binding = probe.binding
+    if binding is None:
+        raise TypeError("contract result requires a profile binding")
     reason = _safe_result_reason(probe.safe_reason)
     ready = (
         probe.process == "ready"
@@ -275,14 +278,27 @@ def result_reply(
             "search_surface_readiness": probe.search_surface,
             "risk_state": probe.risk_state,
             "session_readiness": "ready" if ready else "not_ready",
-            "actual_profile_binding_ref": probe.binding.profile_binding_ref,
-            "actual_provider_account_ref": probe.binding.provider_account_ref,
-            "actual_profile_binding_generation": probe.binding.profile_binding_generation,
+            "actual_profile_binding_ref": binding.profile_binding_ref,
+            "actual_provider_account_ref": binding.provider_account_ref,
+            "actual_profile_binding_generation": binding.profile_binding_generation,
             "safe_reason_code": None if ready else reason,
             "user_action": user_action,
             "component_receipt_refs": request.component_receipt_refs,
         },
         strict=True,
+    )
+
+
+def wtscli_probe_is_ready(probe: WtsCliReadinessProbe) -> bool:
+    return (
+        probe.process == "ready"
+        and probe.bridge == "ready"
+        and probe.extension == "ready"
+        and probe.profile_lock == "ready"
+        and probe.account == "ready"
+        and probe.search_surface == "ready"
+        and probe.risk_state == "clear"
+        and probe.safe_reason is None
     )
 
 

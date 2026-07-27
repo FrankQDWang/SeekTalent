@@ -68,6 +68,10 @@ def _build_cts_provider_adapter(context: ProviderAdapterBuildContext) -> Provide
 
 
 def _build_liepin_provider_adapter(context: ProviderAdapterBuildContext) -> ProviderAdapter:
+    from seektalent.liepin_verify_session_gate import (
+        create_production_liepin_verify_session_gate,
+    )
+
     settings = context.settings
     if settings.liepin_worker_mode == "disabled":
         raise ValueError("Liepin provider cannot be selected while liepin_worker_mode is disabled.")
@@ -79,4 +83,9 @@ def _build_liepin_provider_adapter(context: ProviderAdapterBuildContext) -> Prov
         worker_client=context.liepin_worker_client or build_liepin_worker_client(settings),
         store=store,
         connection_safety_resolver=context.liepin_connection_safety_resolver,
+        verify_session_gate=(
+            create_production_liepin_verify_session_gate(settings)
+            if is_live_liepin_worker_mode(settings.liepin_worker_mode)
+            else None
+        ),
     )

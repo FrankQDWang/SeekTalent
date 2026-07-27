@@ -1343,6 +1343,10 @@ def _build_provider(
     worker_client: LiepinWorkerClient,
     worker_search_started_callback: Callable[[], None] | None = None,
 ) -> LiepinProviderAdapter:
+    from seektalent.liepin_verify_session_gate import (
+        create_production_liepin_verify_session_gate,
+    )
+
     store = None
     if is_live_liepin_worker_mode(settings.liepin_worker_mode):
         store = LiepinStore(settings.resolve_workspace_path(settings.liepin_connector_db_path))
@@ -1351,6 +1355,11 @@ def _build_provider(
         worker_client=worker_client,
         worker_search_started_callback=worker_search_started_callback,
         store=store,
+        verify_session_gate=(
+            create_production_liepin_verify_session_gate(settings)
+            if is_live_liepin_worker_mode(settings.liepin_worker_mode)
+            else None
+        ),
     )
 
 

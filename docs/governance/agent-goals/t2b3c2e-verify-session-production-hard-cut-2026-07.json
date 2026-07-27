@@ -1,0 +1,47 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Complete issue #434 by making a direct installed-WTSCLI browser readiness probe the sole pre-search gate for production Liepin lanes.",
+  "rationale": "Verify-session is a repeat-safe browser observation with extension-owned idle cleanup. The production gate therefore verifies the installed WTSCLI runtime and daemon ownership, acquires a real browser control fence, and observes readiness on a separate owned tab without manufacturing Source Port, journal, or runtime-control authority. Splitting the wiring from deletion would leave the retired ensure-ready and session-status route available as a production bypass.",
+  "touched_layers": [
+    "governance",
+    "other",
+    "provider",
+    "sources"
+  ],
+  "red_files": [
+    "src/seektalent/providers/liepin/adapter.py",
+    "src/seektalent/providers/plugins.py"
+  ],
+  "deletion_targets": [
+    "production Liepin search readiness through worker ensure_ready or session_status",
+    "ready results that echo an expected provider account reference as browser-observed identity",
+    "live Liepin provider construction without the single verify-session gate",
+    "instant owned-tab close or backend-owned normal tab reclamation"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest",
+    "uv run --group dev pytest -q tests/test_source_port_verify_session_contract.py tests/test_wtscli_verify_session_adapter.py tests/test_liepin_provider_adapter.py tests/test_liepin_runtime_source_lane.py tests/test_runtime_multi_source_round_dispatch.py",
+    "uv run --group dev pytest -q",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev ty check src tests tools",
+    "uv run --group dev python tools/check_arch_imports.py",
+    "uv run --group dev python tools/check_source_boundaries.py",
+    "uv run --group dev python tools/check_privacy_gate.py --base origin/main",
+    "uv run --group dev python tools/check_agent_safety_gate.py --base origin/main",
+    "uv run --group dev python tools/check_ai_bad_smells.py --base origin/main",
+    "uv run --group dev python tools/check_pr_governance.py --base origin/main",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-source-decoupling.sh"
+  ],
+  "risks": [
+    "Any Liepin search effect before direct WTSCLI browser verification would recreate the production bypass.",
+    "Connection safety rejection must occur before the browser gate so denied or expired connections cannot open a verification tab.",
+    "The Source Port journal and reconciliation composition remains intact but production-unreachable; this gate must not simulate it in process.",
+    "Borrowed user tabs may select a Chrome window only; all navigation and observation must remain on a separate inactive owned tab.",
+    "No concrete Liepin account identity may be extracted, hashed, persisted, compared, or claimed by this gate."
+  ]
+}
