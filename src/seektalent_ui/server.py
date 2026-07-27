@@ -371,9 +371,13 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc))
         return 2
     try:
+        needs_opencli = (
+            args.liepin_worker_mode == "opencli"
+            or args.liepin_browser_action_backend == "opencli"
+        )
         liepin_opencli_command = (
             _managed_liepin_opencli_command_from_env(os.environ)
-            if prod_frontend
+            if prod_frontend and needs_opencli
             else args.liepin_opencli_command
         )
     except ValueError as exc:

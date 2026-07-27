@@ -261,6 +261,9 @@ fi
 if [[ "${{1:-}} ${{2:-}}" == "-m pip" ]]; then
   exit 0
 fi
+if [[ "${{1:-}} ${{2:-}}" == "-m zipfile" ]]; then
+  exit 0
+fi
 if [[ "${{1:-}} ${{2:-}}" == "-m seektalent.domi_bootstrap" ]]; then
   echo '{{}}'
   exit 0
@@ -279,6 +282,7 @@ set +e +u +o pipefail
 export HOME={_bash_quote(home)}
 export DOMI_PYTHON={_bash_quote(domi_python)}
 export DOMI_NODE={_bash_quote(domi_node)}
+export SEEKTALENT_WTSCLI_PREPARED_RUNTIME={_bash_quote(_write_runtime_marker(tmp_path))}
 export PYTHONPATH="before-pythonpath"
 before_flags="$-"
 before_pipefail="$(set -o | awk '$1 == "pipefail" {{ print $2 }}')"
@@ -326,6 +330,9 @@ fi
 if [[ "${{1:-}} ${{2:-}}" == "-m pip" ]]; then
   exit 0
 fi
+if [[ "${{1:-}} ${{2:-}}" == "-m zipfile" ]]; then
+  exit 0
+fi
 if [[ "${{1:-}} ${{2:-}}" == "-m seektalent.domi_bootstrap" ]]; then
   echo '{{}}'
   exit 0
@@ -350,6 +357,7 @@ set +e +u +o pipefail
 export HOME={_bash_quote(home)}
 unset DOMI_PYTHON
 export DOMI_NODE={_bash_quote(domi_node)}
+export SEEKTALENT_WTSCLI_PREPARED_RUNTIME={_bash_quote(_write_runtime_marker(tmp_path))}
 export SEEKTALENT_BROWSER_BRIDGE_HELPER={_bash_quote(Path("scripts/install_staging_browser_bridge.py").resolve())}
 source {_bash_quote(script)} 0.7.25 {_bash_quote(wtscli_bundle)} >/dev/null
 """
@@ -377,6 +385,9 @@ fi
 if [[ "${{1:-}} ${{2:-}}" == "-m pip" ]]; then
   exit 0
 fi
+if [[ "${{1:-}} ${{2:-}}" == "-m zipfile" ]]; then
+  exit 0
+fi
 if [[ "${{1:-}} ${{2:-}}" == "-m seektalent.domi_bootstrap" ]]; then
   while [[ $# -gt 0 ]]; do
     if [[ "$1" == "--domi-node" ]]; then
@@ -402,6 +413,7 @@ export HOME={_bash_quote(home)}
 export DOMI_PYTHON={_bash_quote(domi_python)}
 unset DOMI_NODE
 export SEEKTALENT_DOMI_NODE={_bash_quote(domi_node)}
+export SEEKTALENT_WTSCLI_PREPARED_RUNTIME={_bash_quote(_write_runtime_marker(tmp_path))}
 source {_bash_quote(script)} 0.7.25 {_bash_quote(wtscli_bundle)} >/dev/null
 """
 
@@ -415,6 +427,12 @@ def _write_bundle_marker(root: Path) -> Path:
     bundle = root / "wtscli-bundle"
     write_browser_bridge_bundle(bundle)
     return bundle
+
+
+def _write_runtime_marker(root: Path) -> Path:
+    runtime = root / "wtscli-runtime.zip"
+    runtime.write_bytes(b"prepared runtime fixture")
+    return runtime
 
 
 def _bash_quote(value: Path | str) -> str:

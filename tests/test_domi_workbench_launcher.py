@@ -8,7 +8,6 @@ from seektalent import domi_workbench
 
 
 JWT_MISSING_MESSAGE = "未获取到 Domi 大模型授权。请在当前终端设置 SEEKTALENT_DOMI_JWT 后重试。"
-NODE_MISSING_MESSAGE = "未找到 Domi Node 运行时。请在当前终端设置 SEEKTALENT_DOMI_NODE 或 DOMI_NODE 后重试。"
 DOMI_LAUNCHER_ENV_KEYS = {
     "SEEKTALENT_DOMI_JWT",
     "SEEKTALENT_DOMI_NODE",
@@ -23,11 +22,11 @@ def test_prepare_domi_env_requires_domi_jwt() -> None:
     assert domi_workbench.prepare_domi_env({}) == ("seektalent_domi_jwt_missing", JWT_MISSING_MESSAGE)
 
 
-def test_prepare_domi_env_requires_domi_node() -> None:
-    assert domi_workbench.prepare_domi_env({"SEEKTALENT_DOMI_JWT": "jwt"}) == (
-        "domi_node_missing",
-        NODE_MISSING_MESSAGE,
-    )
+def test_prepare_domi_env_leaves_missing_node_to_liepin_only_preflight() -> None:
+    env = {"SEEKTALENT_DOMI_JWT": "jwt"}
+
+    assert domi_workbench.prepare_domi_env(env) is None
+    assert "SEEKTALENT_WTSCLI_NODE" not in env
 
 
 def test_prepare_domi_env_normalizes_domi_env_from_domi_node() -> None:

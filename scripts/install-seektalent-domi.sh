@@ -15,7 +15,7 @@ _seektalent_domi_fail() {
 
 _seektalent_domi_install() {
   local version="${1:-0.7.49}"
-  local wtscli_bundle_dir="${2:-${SEEKTALENT_WTSCLI_BUNDLE_DIR:-}}"
+  local requested_bundle_dir="${2:-${SEEKTALENT_WTSCLI_BUNDLE_DIR:-}}"
   local domi_python="${DOMI_PYTHON:-}"
   local domi_node="${DOMI_NODE:-${SEEKTALENT_DOMI_NODE:-}}"
   local script_path="${BASH_SOURCE[0]}"
@@ -23,7 +23,14 @@ _seektalent_domi_install() {
   if [[ "${script_dir}" == "${script_path}" ]]; then
     script_dir="."
   fi
+  local wtscli_bundle_dir="${requested_bundle_dir:-${script_dir}/wtscli-browser-bridge}"
+  local prepared_runtime_archive="${SEEKTALENT_WTSCLI_PREPARED_RUNTIME:-${script_dir}/wtscli-runtime.zip}"
   local admission_helper="${SEEKTALENT_BROWSER_BRIDGE_HELPER:-${script_dir}/install_staging_browser_bridge.py}"
+  local product_wheels=("${script_dir}"/seektalent-*.whl)
+  local product_wheel=""
+  if [[ "${#product_wheels[@]}" -eq 1 && -f "${product_wheels[0]}" ]]; then
+    product_wheel="${product_wheels[0]}"
+  fi
 
   if [[ -z "${domi_python}" ]]; then
     local python_candidate
@@ -65,18 +72,22 @@ _seektalent_domi_install() {
     _seektalent_domi_fail "domi_node_missing" "Domi Node was not found. Set DOMI_NODE or SEEKTALENT_DOMI_NODE to the Domi node executable path."
     return 1
   fi
-  if [[ -z "${wtscli_bundle_dir}" || ! -f "${wtscli_bundle_dir}/bridge-manifest.json" ]]; then
-    _seektalent_domi_fail "wtscli_bundle_missing" "Set SEEKTALENT_WTSCLI_BUNDLE_DIR to the exact SeekTalent WTSCLI bundle directory."
+  if [[ ! -f "${wtscli_bundle_dir}/bridge-manifest.json" ]]; then
+    _seektalent_domi_fail "wtscli_bundle_missing" "The exact WTSCLI bundle was not found in the SeekTalent product package: ${wtscli_bundle_dir}"
     return 1
   fi
   if [[ ! -f "${admission_helper}" ]]; then
     _seektalent_domi_fail "wtscli_bundle_admission_unavailable" "The shared SeekTalent browser bridge admission helper was not found: ${admission_helper}"
     return 1
   fi
-  if ! "${domi_python}" "${admission_helper}" \
+  if ! PYTHONPATH="${product_wheel}${PYTHONPATH:+:${PYTHONPATH}}" "${domi_python}" "${admission_helper}" \
     --bundle-dir "${wtscli_bundle_dir}" \
     --verify-only >/dev/null; then
     _seektalent_domi_fail "wtscli_bundle_invalid" "The exact SeekTalent WTSCLI bundle failed strict admission."
+    return 1
+  fi
+  if [[ ! -f "${prepared_runtime_archive}" ]]; then
+    _seektalent_domi_fail "wtscli_runtime_missing" "The prepared WTSCLI runtime was not found in the SeekTalent product package: ${prepared_runtime_archive}"
     return 1
   fi
 
@@ -90,17 +101,27 @@ _seektalent_domi_install() {
   }
   local candidate_prefix="${candidate_root}/python-prefix"
   local candidate_site_packages="${candidate_prefix}/site-packages"
-  mkdir -p "${candidate_site_packages}" || {
+  local prepared_runtime_dir="${candidate_root}/wtscli-runtime"
+  mkdir -p "${candidate_site_packages}" "${prepared_runtime_dir}" || {
     rm -rf -- "${candidate_root}"
     _seektalent_domi_fail "seektalent_bootstrap_directory_failed" "Failed to create the temporary SeekTalent candidate."
     return 1
   }
 
-  "${domi_python}" -m pip install --upgrade --ignore-installed --no-cache-dir --target "${candidate_site_packages}" "seektalent==${version}" || {
+  local seektalent_install_source="seektalent==${version}"
+  if [[ -n "${product_wheel}" ]]; then
+    seektalent_install_source="${product_wheel}"
+  fi
+  "${domi_python}" -m pip install --upgrade --ignore-installed --no-cache-dir --target "${candidate_site_packages}" "${seektalent_install_source}" || {
     rm -rf -- "${candidate_root}"
     _seektalent_domi_fail "seektalent_pypi_install_failed" "Failed to install seektalent==${version} with Domi Python."
     return 1
   }
+  if ! "${domi_python}" -m zipfile -e "${prepared_runtime_archive}" "${prepared_runtime_dir}"; then
+    rm -rf -- "${candidate_root}"
+    _seektalent_domi_fail "wtscli_runtime_invalid" "The prepared WTSCLI runtime could not be extracted."
+    return 1
+  fi
 
   PYTHONPATH="${candidate_site_packages}${PYTHONPATH:+:${PYTHONPATH}}" \
     "${domi_python}" -m seektalent.domi_bootstrap \
@@ -111,6 +132,7 @@ _seektalent_domi_install() {
       --domi-python "${domi_python}" \
       --domi-node "${domi_node}" \
       --browser-bridge-bundle-dir "${wtscli_bundle_dir}" \
+      --browser-bridge-prepared-runtime-dir "${prepared_runtime_dir}" \
       --bin-dir "${bin_dir}" \
       --print-json || {
         rm -rf -- "${candidate_root}"
@@ -125,6 +147,10 @@ _seektalent_domi_install() {
   esac
 
   echo "SeekTalent Domi install ready. Run: seektalent workbench"
+  echo "Chrome 扩展目录：${HOME}/.seektalent/chrome-extension/wtscli"
+  echo "打开 chrome://extensions，启用“开发者模式”，选择“加载已解压的扩展程序”，并选择上面的唯一目录。"
+  echo "升级后请在该页面点击 WTSCLI 的“重新加载”；若仍显示旧版本，请完全退出并重启 Chrome。"
+  echo "检查：seektalent browser-check"
   return 0
 }
 

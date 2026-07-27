@@ -7,12 +7,14 @@ on:
       - ".github/workflows/native-launch-binding-probe.yml"
       - ".github/workflows/build-macos-intel-offline.yml"
       - "scripts/build_offline_macos_intel.py"
+      - "scripts/build_domi_delivery_bundle.py"
       - "scripts/install-seektalent-domi.ps1"
       - "scripts/install-seektalent-domi.sh"
       - "scripts/install-seektalent-staging.sh"
       - "scripts/install_staging_browser_bridge.py"
       - "scripts/offline/install-offline-macos-intel.sh"
       - "src/seektalent/browser_bridge_install.py"
+      - "src/seektalent/providers/liepin/browser_environment.py"
       - "src/seektalent/browser_bridge_manifest.py"
       - "src/seektalent/browser_bridge_runtime_receipt.py"
       - "src/seektalent/domi_bootstrap.py"
@@ -20,6 +22,8 @@ on:
       - "src/seektalent/opencli_launcher.py"
       - "tests/browser_bridge_bundle_fixtures.py"
       - "tests/test_domi_delivery_admission.py"
+      - "tests/test_browser_bridge_environment.py"
+      - "tests/test_build_domi_delivery_bundle.py"
       - "tests/test_wtscli_bundle_binding.py"
       - "tools/native_probes/**"
       - "tests/test_native_launch_binding_probe.py"
@@ -98,14 +102,17 @@ jobs:
             runner: windows-2025
             expected_os: Windows
             expected_arch: x86_64
+            delivery_platform: windows-x64
           - name: macos-15 arm64
             runner: macos-15
             expected_os: Darwin
             expected_arch: arm64
+            delivery_platform: macos-arm64
           - name: macos-15-intel x86_64
             runner: macos-15-intel
             expected_os: Darwin
             expected_arch: x86_64
+            delivery_platform: macos-x86_64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
 
@@ -173,6 +180,51 @@ jobs:
           tests/test_domi_delivery_admission.py
           -q
 
+      - name: Assert paired install, upgrade rollback, and environment classifications
+        run: >-
+          uv run --group dev python -m pytest
+          tests/test_browser_bridge_environment.py
+          tests/test_wtscli_bundle_binding.py
+          -q
+
+      - name: Build the native SeekTalent product package with its exact WTSCLI pair
+        shell: python
+        env:
+          DELIVERY_PLATFORM: ${{ matrix.delivery_platform }}
+        run: |
+          import os
+          from pathlib import Path
+          import shutil
+          from subprocess import check_call
+          import sys
+
+          uv = shutil.which("uv")
+          node = shutil.which("node")
+          assert uv is not None
+          assert node is not None
+          check_call([uv, "build", "--wheel", "--out-dir", "dist/wheel"])
+          wheels = list(Path("dist/wheel").glob("seektalent-*.whl"))
+          assert len(wheels) == 1, wheels
+          check_call(
+              [
+                  sys.executable,
+                  "scripts/build_domi_delivery_bundle.py",
+                  "--output-dir",
+                  "dist/delivery",
+                  "--wtscli-bundle-dir",
+                  "wtscli-browser-bridge",
+                  "--seektalent-wheel",
+                  str(wheels[0]),
+                  "--node",
+                  node,
+                  "--platform",
+                  os.environ["DELIVERY_PLATFORM"],
+              ]
+          )
+
+      - name: Verify native product package contents
+        run: uv run --group dev python -m pytest tests/test_build_domi_delivery_bundle.py -q
+
       - name: Assert Windows command-journal directory publication durability
         if: runner.os == 'Windows'
         run: >-
@@ -219,5 +271,13 @@ jobs:
         with:
           name: native-launch-binding-${{ matrix.runner }}
           path: native-launch-binding-evidence.json
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload native SeekTalent product package
+        uses: actions/upload-artifact@v4
+        with:
+          name: seektalent-domi-${{ matrix.delivery_platform }}
+          path: dist/delivery/seektalent-domi-${{ matrix.delivery_platform }}.zip
           if-no-files-found: error
           retention-days: 14
