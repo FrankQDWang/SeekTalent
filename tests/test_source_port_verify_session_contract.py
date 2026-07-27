@@ -834,9 +834,11 @@ def test_contract_stays_source_port_only_with_no_production_caller_or_json_parse
         "src/seektalent/source_port/sidecar_transport.py",
         "src/seektalent/source_port/verify_session_journal_effect.py",
         "src/seektalent/source_port/verify_session_journal_effect_durable.py",
-        "src/seektalent/verify_session_closed_loop.py",
-        "src/seektalent_runtime_control/safe_retry_turnover.py",
-    }
+            "src/seektalent/verify_session_closed_loop.py",
+            "src/seektalent_runtime_control/needs_attention_admission.py",
+            "src/seektalent_runtime_control/safe_retry_turnover.py",
+            "src/seektalent_runtime_control/user_action_mapping.py",
+        }
 
 
 def test_sidecar_history_writer_supports_only_main_authorized_ordinals() -> None:

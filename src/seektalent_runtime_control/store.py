@@ -39,6 +39,7 @@ from seektalent_runtime_control.checkpoint_recovery import (
     decide_expired_lease_recovery,
     validate_recoverable_checkpoint,
 )
+from seektalent_runtime_control.checkpoint_participant import write_checkpoint_participant
 from seektalent_runtime_control.clock import max_iso_timestamp, timestamp_lte
 from seektalent_runtime_control.errors import RuntimeControlError, RuntimeControlLookupError
 from seektalent_runtime_control.failed_outcome import (
@@ -49,6 +50,9 @@ from seektalent_runtime_control.failed_outcome import (
     validate_failed_outcome_schema,
 )
 from seektalent_runtime_control.fsm import require_run_transition
+from seektalent_runtime_control import needs_attention as _needs_attention
+from seektalent_runtime_control import needs_attention_admission as _needs_admission
+from seektalent_runtime_control.needs_attention_store import NeedsAttentionStoreMixin
 from seektalent_runtime_control.models import (
     RuntimeCheckpoint,
     RuntimeControlCandidateEvidence,
@@ -130,7 +134,7 @@ from seektalent_runtime_control.source_reconciliation import (
 from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
 
 
-RUNTIME_CONTROL_SCHEMA_VERSION = 14
+RUNTIME_CONTROL_SCHEMA_VERSION = 15
 RUNTIME_CHECKPOINT_SCHEMA_VERSION = "runtime-control-checkpoint/v1"
 RUNTIME_CONTROL_EVENT_SCHEMA_VERSION = "runtime-control-event/v1"
 MAX_RUNTIME_CONTROL_JSON_BYTES = 16 * 1024
@@ -156,7 +160,7 @@ _REQUIRED_STAGE_OUTPUT_KINDS = {
     "shortlist",
 }
 
-class RuntimeControlStore:
+class RuntimeControlStore(NeedsAttentionStoreMixin):
     def __init__(self, path: str | Path, *, busy_timeout_ms: int = 5000) -> None:
         self.path = Path(path)
         self.busy_timeout_ms = busy_timeout_ms
@@ -178,6 +182,7 @@ class RuntimeControlStore:
                 ) from exc
             if version == RUNTIME_CONTROL_SCHEMA_VERSION:
                 validate_failed_outcome_schema(conn)
+                _needs_attention.validate_needs_attention_schema(conn)
                 return
             if version > 0:
                 backup_sqlite_before_migration(
@@ -204,7 +209,7 @@ class RuntimeControlStore:
                 run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                 conn.commit()
                 version = 7
-            if version in {7, 8, 9, 10, 11, 12, 13}:
+            if version in {7, 8, 9, 10, 11, 12, 13, 14}:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
                     if version == 7:
@@ -235,6 +240,11 @@ class RuntimeControlStore:
                         migrate_failure_envelope_schema_v13_to_v14(conn)
                         migrate_failed_outcome_v13_to_v14(conn)
                         conn.execute("PRAGMA user_version = 14")
+                        version = 14
+                    if version == 14:
+                        validate_failed_outcome_schema(conn)
+                        _needs_attention.migrate_needs_attention_v14_to_v15(conn)
+                        conn.execute("PRAGMA user_version = 15")
                     run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                     conn.commit()
                 except Exception:
@@ -249,6 +259,7 @@ class RuntimeControlStore:
                 with conn:
                     create_failure_envelope_schema(conn)
                     migrate_failed_outcome_v13_to_v14(conn)
+                    _needs_attention.migrate_needs_attention_v14_to_v15(conn)
                     conn.execute(f"PRAGMA user_version = {RUNTIME_CONTROL_SCHEMA_VERSION}")
                     run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
 
@@ -472,7 +483,27 @@ class RuntimeControlStore:
                     raise RuntimeControlError("source_operation_acceptance_incomplete")
                 if _source_operation_admission_expectation_row(conn, runtime_run_id, operation_id) is not None:
                     raise RuntimeControlError("source_operation_acceptance_incomplete")
-                if run_row["status"] not in {"starting", "running"}:
+                needs_attention_evidence = (
+                    run_row["status"] == "needs_attention"
+                    and _needs_admission.needs_attention_evidence_acceptance_matches(
+                        conn,
+                        run_row,
+                        operation_id,
+                        source_id,
+                        operation_kind,
+                        accepted_requirement_revision_id,
+                        runtime_attempt_no,
+                        profile_binding_generation,
+                        browser_control_scope_id,
+                        dispatch_authorization_ordinal,
+                        expected_ledger_revision,
+                        expected_reconciliation_revision,
+                    )
+                )
+                if (
+                    run_row["status"] not in {"starting", "running"}
+                    and not needs_attention_evidence
+                ):
                     raise RuntimeControlError("source_operation_run_not_dispatchable")
                 if run_row["approved_requirement_revision_id"] != accepted_requirement_revision_id:
                     raise RuntimeControlError("source_operation_requirement_revision_mismatch")
@@ -635,9 +666,14 @@ class RuntimeControlStore:
                 run_row = _run_row(conn, decision.runtime_run_id)
                 if run_row is None:
                     raise RuntimeControlLookupError("runtime_run_not_found")
-                if run_row["status"] != "resume_requested":
+                if (
+                    run_row["status"] != "resume_requested"
+                    and not _needs_admission.needs_attention_evidence_reconciliation_matches(
+                        conn, run_row=run_row, decision=decision
+                    )
+                ):
                     raise RuntimeControlError("source_reconciliation_run_not_resumable")
-                if _run_has_active_executor_lease(conn, decision.runtime_run_id):
+                if _needs_admission.run_has_active_executor_lease(conn, decision.runtime_run_id):
                     raise RuntimeControlError("source_reconciliation_owner_conflict")
 
                 operation_row = _source_operation_row(conn, decision.runtime_run_id, decision.operation_id)
@@ -2412,29 +2448,7 @@ class RuntimeControlStore:
                 if run_row is None:
                     raise RuntimeControlLookupError("runtime_run_not_found")
                 require_run_truth_mutable(run_row)
-                conn.execute(
-                    """
-                    INSERT INTO runtime_control_checkpoints (
-                        checkpoint_id, runtime_run_id, stage, round_no, safe_boundary,
-                        run_state_json, source_plan_json, pending_commands_json,
-                        artifact_manifest_ref, schema_version, created_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        checkpoint.checkpoint_id,
-                        checkpoint.runtime_run_id,
-                        checkpoint.stage,
-                        checkpoint.round_no,
-                        checkpoint.safe_boundary,
-                        _json(checkpoint.run_state),
-                        _json(checkpoint.source_plan),
-                        _json(checkpoint.pending_commands),
-                        checkpoint.artifact_manifest_ref,
-                        checkpoint.schema_version,
-                        checkpoint.created_at,
-                    ),
-                )
+                write_checkpoint_participant(conn, checkpoint)
                 updated = conn.execute(
                     """
                     UPDATE runtime_control_runs
@@ -2459,7 +2473,6 @@ class RuntimeControlStore:
                     raise RuntimeControlError(
                         "runtime_failed_outcome_terminal_immutable"
                     )
-                _sync_candidate_truth_from_checkpoint(conn, checkpoint)
                 conn.commit()
             except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
                 conn.rollback()
@@ -4501,21 +4514,6 @@ def _source_reconciliation_row(
     ).fetchone()
 
 
-def _run_has_active_executor_lease(conn: sqlite3.Connection, runtime_run_id: str) -> bool:
-    return (
-        conn.execute(
-            """
-            SELECT 1
-            FROM runtime_control_executor_leases
-            WHERE runtime_run_id = ? AND status = 'active'
-            LIMIT 1
-            """,
-            (runtime_run_id,),
-        ).fetchone()
-        is not None
-    )
-
-
 def _source_operation_matches_reconciliation(
     operation: SourceOperationRecord,
     decision: SourceOperationReconciliationDecision,
@@ -5777,6 +5775,7 @@ def _run_from_row(row: sqlite3.Row) -> RuntimeRunRecord:
         current_failure_authority_mode=row[
             "current_failure_authority_mode"
         ],
+        current_action_id=row["current_action_id"],
         state_revision=int(row["state_revision"]),
     )
 
@@ -5785,6 +5784,7 @@ def _validated_run_from_row(
     conn: sqlite3.Connection,
     row: sqlite3.Row,
 ) -> RuntimeRunRecord:
+    _needs_attention.validate_needs_attention_row(conn, row)
     validate_failed_outcome_row(conn, row)
     return _run_from_row(row)
 

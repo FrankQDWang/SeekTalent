@@ -36,6 +36,7 @@ def validate_initial_run_truth(run: RuntimeRunRecord) -> None:
         or run.current_failure_revision is not None
         or run.current_failure_owner_lease_id is not None
         or run.current_failure_authority_mode is not None
+        or run.current_action_id is not None
         or run.state_revision != 0
     ):
         raise RuntimeControlError(

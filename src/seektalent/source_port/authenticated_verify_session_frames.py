@@ -5,8 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from hashlib import sha256
 import threading
 from typing import Annotated, Literal, Never, SupportsIndex, TypeAlias
+import weakref
 
 from pydantic import ConfigDict, Field, TypeAdapter, ValidationError, field_validator, model_validator
 
@@ -36,8 +38,14 @@ from seektalent.source_port.verify_session_contract import (
     validate_verify_session_durable_reply_identity,
     validate_verify_session_result_echo_facts,
     verify_session_request_echo,
+    verify_session_request_semantic_digest,
 )
-from seektalent.source_port.wire_primitives import Opaque96, PositiveJsonInteger, StrictWireModel
+from seektalent.source_port.wire_primitives import (
+    Opaque96,
+    PositiveJsonInteger,
+    StrictWireModel,
+    canonical_json_bytes,
+)
 
 
 MAX_FRAME_BYTES = DEFAULT_MAX_FRAME_BYTES
@@ -299,12 +307,35 @@ class ReceivedVerifySessionRejected:
     payload: VerifySessionRejectedV1
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True, slots=True, weakref_slot=True)
 class ReceivedVerifySessionResult:
     message_id: str
     reply_to: str
     correlation_id: str | None
     payload: VerifySessionResultV1
+
+
+@dataclass(frozen=True, slots=True)
+class AuthenticatedVerifySessionResult:
+    result: VerifySessionResultV1
+    dispatch_authorization: DispatchAuthorizationV1
+    request_semantic_digest: str
+    observation_ref: str
+    result_digest: str
+    session_id: str
+    direction_seq: int
+    message_id: str
+    reply_to: str
+
+
+@dataclass(frozen=True, slots=True)
+class _AuthenticatedResultRegistryEntry:
+    received_ref: weakref.ReferenceType[ReceivedVerifySessionResult]
+    authenticated: AuthenticatedVerifySessionResult
+
+
+_AUTHENTICATED_RESULTS: dict[int, _AuthenticatedResultRegistryEntry] = {}
+_AUTHENTICATED_RESULTS_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True, slots=True)
@@ -345,6 +376,7 @@ class _AuthenticatedVerifySessionArrivalBinding:
 class _VerifySessionPending:
     correlation_id: str | None
     request: VerifySessionRequestEchoV1
+    request_semantic_digest: str
     authenticated_arrival: _AuthenticatedVerifySessionArrivalBinding | None = None
 
 
@@ -353,7 +385,11 @@ class PostHandshakeVerifySessionSession(
 ):
     """One endpoint's strict verify-session submit and reply framing state."""
 
-    __slots__ = ("_verify_arrival_clock", "_verify_arrival_lock", "_verify_arrival_owner")
+    __slots__ = (
+        "_verify_arrival_clock",
+        "_verify_arrival_lock",
+        "_verify_arrival_owner",
+    )
 
     def __init__(
         self,
@@ -394,6 +430,9 @@ class PostHandshakeVerifySessionSession(
             ),
             reply_validator=_validate_verify_session_reply,
             received_message=_received_verify_session_message,
+            received_reply_message=(
+                _received_verify_session_reply_message
+            ),
             pending_from_request=_verify_session_pending,
             reply_mismatch_reason=VerifySessionFrameReason.REPLY_MISMATCH.value,
             pending_request_limit_reason=VerifySessionFrameReason.PENDING_SUBMIT_LIMIT.value,
@@ -717,7 +756,11 @@ def _validate_verify_session_reply(
     raise ReplyValidationError(VerifySessionFrameReason.REPLY_MISMATCH.value)
 
 
-def _received_verify_session_message(envelope: _AuthenticatedEnvelope) -> ReceivedVerifySessionMessage:
+def _received_verify_session_message(
+    envelope: _AuthenticatedEnvelope,
+    *,
+    request: _VerifySessionPending | None = None,
+) -> ReceivedVerifySessionMessage:
     if isinstance(envelope, _VerifySessionSubmitEnvelope):
         return ReceivedVerifySessionSubmit(
             message_id=envelope.message_id,
@@ -739,12 +782,49 @@ def _received_verify_session_message(envelope: _AuthenticatedEnvelope) -> Receiv
             payload=envelope.payload,
         )
     if isinstance(envelope, _VerifySessionResultEnvelope):
-        return ReceivedVerifySessionResult(
+        if request is None:
+            raise VerifySessionFrameError(
+                VerifySessionFrameReason.REPLY_MISMATCH
+            )
+        received = ReceivedVerifySessionResult(
             message_id=envelope.message_id,
             reply_to=envelope.reply_to,
             correlation_id=envelope.correlation_id,
             payload=envelope.payload,
         )
+        authenticated = AuthenticatedVerifySessionResult(
+            result=envelope.payload,
+            dispatch_authorization=request.request.dispatch_authorization,
+            request_semantic_digest=request.request_semantic_digest,
+            observation_ref=sha256(
+                canonical_json_bytes(envelope.model_dump(mode="json"))
+            ).hexdigest(),
+            result_digest=sha256(
+                canonical_json_bytes(
+                    envelope.payload.model_dump(mode="json")
+                )
+            ).hexdigest(),
+            session_id=envelope.session_id,
+            direction_seq=envelope.direction_seq,
+            message_id=envelope.message_id,
+            reply_to=envelope.reply_to,
+        )
+        received_id = id(received)
+        received_ref = weakref.ref(
+            received,
+            lambda ref, identity=received_id: _forget_authenticated_result(
+                identity,
+                ref,
+            ),
+        )
+        with _AUTHENTICATED_RESULTS_LOCK:
+            _AUTHENTICATED_RESULTS[received_id] = (
+                _AuthenticatedResultRegistryEntry(
+                    received_ref=received_ref,
+                    authenticated=authenticated,
+                )
+            )
+        return received
     if isinstance(envelope, _VerifySessionFailureEnvelope):
         return ReceivedVerifySessionFailure(
             message_id=envelope.message_id,
@@ -760,12 +840,55 @@ def _received_verify_session_message(envelope: _AuthenticatedEnvelope) -> Receiv
     )
 
 
+def _received_verify_session_reply_message(
+    envelope: _AuthenticatedEnvelope,
+    pending: _VerifySessionPending | None,
+) -> ReceivedVerifySessionMessage:
+    return _received_verify_session_message(
+        envelope,
+        request=pending,
+    )
+
+
+def require_authenticated_verify_session_result(
+    received: ReceivedVerifySessionResult,
+) -> AuthenticatedVerifySessionResult:
+    if type(received) is not ReceivedVerifySessionResult:
+        raise VerifySessionFrameError(
+            "verify_session_result_not_authenticated"
+        )
+    with _AUTHENTICATED_RESULTS_LOCK:
+        entry = _AUTHENTICATED_RESULTS.get(id(received))
+        if entry is None or entry.received_ref() is not received:
+            authenticated = None
+        else:
+            authenticated = entry.authenticated
+    if authenticated is None:
+        raise VerifySessionFrameError(
+            "verify_session_result_not_authenticated"
+        )
+    return authenticated
+
+
+def _forget_authenticated_result(
+    received_id: int,
+    received_ref: weakref.ReferenceType[ReceivedVerifySessionResult],
+) -> None:
+    with _AUTHENTICATED_RESULTS_LOCK:
+        entry = _AUTHENTICATED_RESULTS.get(received_id)
+        if entry is not None and entry.received_ref is received_ref:
+            del _AUTHENTICATED_RESULTS[received_id]
+
+
 def _verify_session_pending(envelope: _AuthenticatedEnvelope) -> _VerifySessionPending:
     if not isinstance(envelope, _VerifySessionSubmitEnvelope):
         raise ValueError("verify_session_frame_pending_message_invalid")
     return _VerifySessionPending(
         correlation_id=envelope.correlation_id,
         request=verify_session_request_echo(envelope.payload),
+        request_semantic_digest=verify_session_request_semantic_digest(
+            envelope.payload
+        ),
     )
 
 
@@ -889,4 +1012,6 @@ __all__ = [
     "VerifySessionFrameReason",
     "VerifySessionReconcileRequiredV1",
     "VerifySessionRejectedV1",
+    "AuthenticatedVerifySessionResult",
+    "require_authenticated_verify_session_result",
 ]

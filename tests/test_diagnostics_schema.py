@@ -1431,6 +1431,13 @@ def test_failure_envelope_uses_canonical_product_outcome_vocabulary(
 ) -> None:
     payload = _failure()
     payload["current_outcome"] = outcome
+    if outcome == "needs_attention":
+        payload["user_action"] = {
+            "code": "open_liepin_host",
+            "instruction_key": "user_action.open_liepin_host",
+            "scope": "liepin_browser_session",
+            "affected_scope_ref": "6" * 32,
+        }
     parse_failure_envelope(json.dumps(payload).encode())
 
 

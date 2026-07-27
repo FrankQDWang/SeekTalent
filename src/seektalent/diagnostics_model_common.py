@@ -23,12 +23,9 @@ from seektalent.diagnostics_registry import (
     DIAGNOSTIC_GAP_REASONS,
     REDACTION_RULES,
     SUPPORT_ACTION_INSTRUCTIONS,
-    USER_ACTION_INSTRUCTIONS,
     require_reason_code,
     require_token,
 )
-
-
 CANONICAL_EVENT_V1 = "seektalent.canonical-event/v1"
 FAILURE_ENVELOPE_V1 = "seektalent.failure-envelope/v1"
 MACHINE_CAPABILITY_RECEIPT_V1 = "seektalent.machine-capability-receipt/v1"
@@ -395,20 +392,6 @@ class SourceCoverageV1(StrictDiagnosticsModel):
     source_id: Literal["liepin"]
     state: Literal["started", "completed", "partial", "unknown"]
     safe_count: NonNegativeSafeInteger
-
-
-class UserActionV1(StrictDiagnosticsModel):
-    code: Literal["reauthenticate", "restart_component", "retry_later"]
-    instruction_key: Literal[
-        "provider.reauthenticate", "component.restart", "operation.retry_later"
-    ]
-    affected_scope_ref: RandomIdentity | None = None
-
-    @model_validator(mode="after")
-    def validate_instruction(self) -> Self:
-        if USER_ACTION_INSTRUCTIONS[self.code] != self.instruction_key:
-            raise ValueError("diagnostics_user_action_mismatch")
-        return self
 
 
 class SupportActionV1(StrictDiagnosticsModel):

@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import ast
+from concurrent.futures import ThreadPoolExecutor
+import gc
 from hashlib import sha256
 import hmac
 import json
 import logging
 from pathlib import Path
+import weakref
 
 from pydantic import ValidationError
 import pytest
@@ -26,6 +29,7 @@ from seektalent.source_port.authenticated_verify_session_frames import (
     VerifySessionFrameReason,
     VerifySessionReconcileRequiredV1,
     VerifySessionRejectedV1,
+    require_authenticated_verify_session_result,
 )
 from seektalent.source_port.verify_session_contract import (
     VerifySessionRequestEchoV1,
@@ -230,6 +234,37 @@ def _sidecar() -> PostHandshakeVerifySessionSession:
     )
 
 
+def _authenticated_result_arrival(
+    suffix: str,
+) -> ReceivedVerifySessionResult:
+    request = _request()
+    main = _main()
+    sidecar = _sidecar()
+    submit_id = f"submit-{suffix}"
+    submit = main.encode_submit(
+        message_id=submit_id,
+        correlation_id=f"correlation-{suffix}",
+        payload=request,
+    )
+    sidecar.feed(submit)
+    main.feed(
+        sidecar.encode_accepted_ack(
+            message_id=f"ack-{suffix}",
+            reply_to=submit_id,
+            payload=_accepted_ack(request),
+        )
+    )
+    [received] = main.feed(
+        sidecar.encode_result(
+            message_id=f"result-{suffix}",
+            reply_to=submit_id,
+            payload=_result(request),
+        )
+    )
+    assert isinstance(received, ReceivedVerifySessionResult)
+    return received
+
+
 def _frame_body(frame: bytes) -> bytes:
     assert int.from_bytes(frame[:4], "big") == len(frame) - 4
     return frame[4:]
@@ -311,6 +346,125 @@ def test_submit_ack_and_terminal_result_share_one_authenticated_session_core() -
         ),
     )
     assert RAW_FENCE_TOKEN not in repr(received)
+    authenticated = require_authenticated_verify_session_result(received[0])
+    assert authenticated.result == result
+    assert authenticated.observation_ref
+    assert authenticated.result_digest
+
+
+def test_constructed_result_cannot_claim_authenticated_observation() -> None:
+    request = _request()
+    constructed = ReceivedVerifySessionResult(
+        message_id="result-forged",
+        reply_to="submit-1",
+        correlation_id="correlation-1",
+        payload=_result(request),
+    )
+
+    with pytest.raises(VerifySessionFrameError) as exc_info:
+        require_authenticated_verify_session_result(constructed)
+
+    assert exc_info.value.reason_code == "verify_session_result_not_authenticated"
+
+
+def test_equal_clone_cannot_reuse_authenticated_result_capability() -> None:
+    original = _authenticated_result_arrival("identity-clone")
+    clone = ReceivedVerifySessionResult(
+        message_id=original.message_id,
+        reply_to=original.reply_to,
+        correlation_id=original.correlation_id,
+        payload=original.payload,
+    )
+
+    assert clone is not original
+    assert clone == original
+    assert require_authenticated_verify_session_result(original).result == (
+        original.payload
+    )
+    with pytest.raises(VerifySessionFrameError) as exc_info:
+        require_authenticated_verify_session_result(clone)
+    assert exc_info.value.reason_code == "verify_session_result_not_authenticated"
+
+
+def test_authenticated_result_registry_cleans_up_and_rejects_id_collision() -> None:
+    original = _authenticated_result_arrival("identity-cleanup")
+    original_id = id(original)
+    original_ref = weakref.ref(original)
+    with frames._AUTHENTICATED_RESULTS_LOCK:  # type: ignore[attr-defined]
+        original_entry = frames._AUTHENTICATED_RESULTS[original_id]  # type: ignore[attr-defined]
+
+    clone = ReceivedVerifySessionResult(
+        message_id=original.message_id,
+        reply_to=original.reply_to,
+        correlation_id=original.correlation_id,
+        payload=original.payload,
+    )
+    clone_id = id(clone)
+    with frames._AUTHENTICATED_RESULTS_LOCK:  # type: ignore[attr-defined]
+        frames._AUTHENTICATED_RESULTS[clone_id] = original_entry  # type: ignore[attr-defined]
+    try:
+        with pytest.raises(VerifySessionFrameError) as collision:
+            require_authenticated_verify_session_result(clone)
+        assert (
+            collision.value.reason_code
+            == "verify_session_result_not_authenticated"
+        )
+    finally:
+        with frames._AUTHENTICATED_RESULTS_LOCK:  # type: ignore[attr-defined]
+            if frames._AUTHENTICATED_RESULTS.get(clone_id) is original_entry:  # type: ignore[attr-defined]
+                del frames._AUTHENTICATED_RESULTS[clone_id]  # type: ignore[attr-defined]
+
+    del original
+    gc.collect()
+    assert original_ref() is None
+    with frames._AUTHENTICATED_RESULTS_LOCK:  # type: ignore[attr-defined]
+        assert original_id not in frames._AUTHENTICATED_RESULTS  # type: ignore[attr-defined]
+
+
+def test_authenticated_result_registry_is_safe_under_lookup_and_cleanup() -> None:
+    original = _authenticated_result_arrival("identity-concurrent")
+
+    def lookup_original() -> None:
+        for _ in range(500):
+            assert (
+                require_authenticated_verify_session_result(original).result
+                is original.payload
+            )
+
+    def reject_equal_clones() -> None:
+        for _ in range(500):
+            clone = ReceivedVerifySessionResult(
+                message_id=original.message_id,
+                reply_to=original.reply_to,
+                correlation_id=original.correlation_id,
+                payload=original.payload,
+            )
+            with pytest.raises(VerifySessionFrameError):
+                require_authenticated_verify_session_result(clone)
+
+    def churn_authenticated_results() -> None:
+        for index in range(100):
+            received = _authenticated_result_arrival(f"churn-{index}")
+            require_authenticated_verify_session_result(received)
+            del received
+            if index % 10 == 0:
+                gc.collect()
+
+    with ThreadPoolExecutor(max_workers=6) as executor:
+        futures = [
+            executor.submit(lookup_original),
+            executor.submit(lookup_original),
+            executor.submit(reject_equal_clones),
+            executor.submit(reject_equal_clones),
+            executor.submit(churn_authenticated_results),
+            executor.submit(churn_authenticated_results),
+        ]
+        for future in futures:
+            future.result()
+
+    assert require_authenticated_verify_session_result(original).result is (
+        original.payload
+    )
 
 
 def test_accepted_ack_missing_durable_position_is_rejected_by_the_frame() -> None:
@@ -772,10 +926,12 @@ def test_frame_modules_keep_one_source_port_core_and_no_production_caller() -> N
         "__future__",
         "collections.abc",
         "dataclasses",
-        "enum",
-        "pydantic",
-        "threading",
-        "typing",
+            "enum",
+            "hashlib",
+            "pydantic",
+            "threading",
+            "typing",
+            "weakref",
         "seektalent.source_port.authenticated_frame_core",
         "seektalent.source_port.operation_dispatch",
         "seektalent.source_port.verify_session_contract",
@@ -799,7 +955,9 @@ def test_frame_modules_keep_one_source_port_core_and_no_production_caller() -> N
         "src/seektalent/source_port/sidecar_transport.py",
         "src/seektalent/source_port/verify_session_continuity_admission.py",
         "src/seektalent/source_port/verify_session_journal_effect.py",
-        "src/seektalent/source_port/verify_session_journal_effect_durable.py",
-        "src/seektalent/verify_session_closed_loop.py",
-        "src/seektalent/wtscli_verify_session_composition.py",
-    }
+            "src/seektalent/source_port/verify_session_journal_effect_durable.py",
+            "src/seektalent/verify_session_closed_loop.py",
+            "src/seektalent/wtscli_verify_session_composition.py",
+            "src/seektalent_runtime_control/needs_attention_admission.py",
+            "src/seektalent_runtime_control/needs_attention_store.py",
+        }

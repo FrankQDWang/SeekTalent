@@ -25,7 +25,6 @@ from seektalent.diagnostics_model_common import (
     RedactionStateV1,
     SourceCoverageV1,
     SupportActionV1,
-    UserActionV1,
 )
 from seektalent.diagnostics_registry import (
     ARRIVAL_CLASSES,
@@ -46,6 +45,7 @@ from seektalent.diagnostics_registry import (
 )
 from seektalent.diagnostics_scalar import validate_scalar
 from seektalent.product_outcome import ProductOutcome
+from seektalent.user_action import UserActionV1
 
 
 class CanonicalEventV1(ArtifactModel):
@@ -276,6 +276,10 @@ class FailureEnvelopeV1(ArtifactModel):
                 raise ValueError("diagnostics_external_cause_mismatch")
         if self.operation_id is not None and self.attempt_no is None:
             raise ValueError("diagnostics_failure_attempt_required")
+        if (self.current_outcome == "needs_attention") != (
+            self.user_action is not None
+        ):
+            raise ValueError("diagnostics_needs_attention_action_mismatch")
         has_anchor = self.first_failure_event_id is not None
         has_gap = self.diagnostic_gap is not None and self.observed_boundary_ref is not None
         if has_anchor == has_gap:

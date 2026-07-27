@@ -423,6 +423,49 @@ def validate_failed_outcome_row(
     )
     if outcome_truth == (None, None, None, None, None):
         return
+    if row["product_outcome"] == "needs_attention":
+        if (
+            row["status"] != "needs_attention"
+            or row["current_failure_id"] is None
+            or row["current_failure_revision"] is None
+            or row["current_failure_authority_mode"]
+            not in {"no_owner", "active_owner"}
+            or (
+                row["current_failure_authority_mode"] == "no_owner"
+                and row["current_failure_owner_lease_id"] is not None
+            )
+            or (
+                row["current_failure_authority_mode"] == "active_owner"
+                and row["current_failure_owner_lease_id"] is None
+            )
+        ):
+            raise RuntimeControlError(
+                "runtime_failed_outcome_integrity_failed"
+            )
+        return
+    expected_status = (
+        "cancelled"
+        if row["product_outcome"] == "cancelled"
+        else (
+            "completed"
+            if row["product_outcome"]
+            in {
+                "succeeded_with_results",
+                "succeeded_empty",
+                "degraded_with_results",
+            }
+            else None
+        )
+    )
+    if expected_status is not None:
+        if (
+            row["status"] != expected_status
+            or any(value is not None for value in outcome_truth[1:])
+        ):
+            raise RuntimeControlError(
+                "runtime_failed_outcome_integrity_failed"
+            )
+        return
     try:
         active_lease_present = (
             _active_lease_row(conn, row["runtime_run_id"]) is not None
@@ -742,6 +785,7 @@ def require_run_truth_mutable(row: sqlite3.Row) -> None:
         or row["current_failure_revision"] is not None
         or row["current_failure_owner_lease_id"] is not None
         or row["current_failure_authority_mode"] is not None
+        or row["current_action_id"] is not None
     ):
         raise RuntimeControlError("runtime_failed_outcome_terminal_immutable")
 
