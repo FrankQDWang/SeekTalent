@@ -7,11 +7,8 @@ import pytest
 
 from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 from seektalent.opencli_browser.contracts import (
-    BrowserControlScope,
     OpenCliBrowserConfig,
     OpenCliBrowserError,
-    OpenCliOwnedTab,
-    OpenCliTabKind,
 )
 from seektalent.opencli_browser.controlled_tab_lock import (
     CONTROLLED_TAB_HELPER_TIMEOUT_SECONDS,
@@ -110,44 +107,7 @@ class RecordingDaemon:
         raise AssertionError(f"unexpected daemon action: {action}")
 
 
-class RecordingLifecycle:
-    def __init__(self, *, fail: bool = False) -> None:
-        self.fail = fail
-        self.events: list[tuple[str, object]] = []
-
-    def _record(self, event: str, value: object) -> None:
-        self.events.append((event, value))
-        if self.fail:
-            raise RuntimeError("lifecycle failed")
-
-    def record_scope(self, scope: BrowserControlScope) -> None:
-        self._record("scope", scope)
-
-    def record_tab_allocation(
-        self,
-        scope: BrowserControlScope,
-        *,
-        tab_token: str,
-        session: str,
-        tab_kind: OpenCliTabKind,
-    ) -> None:
-        self._record("allocation", (scope, tab_token, session, tab_kind))
-
-    def record_owned_tab(self, scope: BrowserControlScope, tab: OpenCliOwnedTab) -> None:
-        self._record("owned", (scope, tab))
-
-    def record_idle_deadline(self, tab: OpenCliOwnedTab) -> None:
-        self._record("deadline", tab)
-
-    def request_reclaim(self, scope: BrowserControlScope, tabs: tuple[OpenCliOwnedTab, ...]) -> None:
-        self._record("reclaim", (scope, tabs))
-
-
-def automation(
-    daemon: RecordingDaemon,
-    *,
-    lifecycle: RecordingLifecycle | None = None,
-) -> OpenCliBrowserAutomation:
+def automation(daemon: RecordingDaemon) -> OpenCliBrowserAutomation:
     return OpenCliBrowserAutomation(
         config=OpenCliBrowserConfig(
             command=("seektalent-opencli",),
@@ -157,7 +117,6 @@ def automation(
         ),
         commands=NoSubprocessCommands(),
         daemon=daemon,  # type: ignore[arg-type]
-        lifecycle=lifecycle,
     )
 
 
@@ -334,10 +293,9 @@ def test_daemon_automation_reports_explicit_page_not_ready_at_deadline(
     assert delays == [0.1, 0.1]
 
 
-def test_owned_tab_lifecycle_is_recorded_and_finish_only_submits_background_reclaim() -> None:
+def test_finishing_scope_releases_memory_without_requesting_tab_reclaim() -> None:
     daemon = RecordingDaemon()
-    lifecycle = RecordingLifecycle()
-    browser = automation(daemon, lifecycle=lifecycle)
+    browser = automation(daemon)
 
     scope = browser.activate_control_scope("lane-key")
     tab = browser.open_owned_tab(
@@ -350,33 +308,10 @@ def test_owned_tab_lifecycle_is_recorded_and_finish_only_submits_background_recl
     browser.finish_control_scope()
 
     assert daemon.calls == []
-    assert [event for event, _value in lifecycle.events] == [
-        "scope",
-        "allocation",
-        "owned",
-        "deadline",
-        "reclaim",
-    ]
-    assert lifecycle.events[-1][1] == (scope, (tab,))
+    assert scope.scope_id
+    assert tab.page_id == "owned-1"
     assert browser._control_scope is None  # noqa: SLF001
     assert browser._owned_tabs == {}  # noqa: SLF001
-
-
-def test_lifecycle_failures_do_not_change_tab_creation_or_scope_finish() -> None:
-    daemon = RecordingDaemon()
-    lifecycle = RecordingLifecycle(fail=True)
-    browser = automation(daemon, lifecycle=lifecycle)
-
-    browser.activate_control_scope("lane-key")
-    tab = browser.open_owned_tab(
-        host_page="host-1",
-        url="https://example.com/search",
-        tab_kind="search",
-    )
-    browser.finish_control_scope()
-
-    assert tab.page_id == "owned-1"
-    assert [event for event, _value in lifecycle.events][-1] == "reclaim"
 
 
 def test_controlled_tab_lock_uses_dokobot_style_veil_and_double_line_countdown() -> None:

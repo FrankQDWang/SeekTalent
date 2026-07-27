@@ -128,7 +128,6 @@ class WtsCliReadinessProbe:
     owned_page: str | None = None
     owned_session: str | None = None
     wtscli_called: bool = False
-    cleanup_failed: bool = False
 
 
 def apply_bridge_status(

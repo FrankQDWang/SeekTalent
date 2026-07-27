@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import io
+from pathlib import Path
+import sqlite3
 import threading
 import time
 from types import SimpleNamespace
@@ -156,18 +158,16 @@ def test_opencli_runtime_setup_is_deferred_and_source_safe(monkeypatch: pytest.M
     assert setup_threads and setup_threads[0] != threading.get_ident()
 
 
-def test_opencli_runtime_setup_wires_daemon_and_lifecycle_once(
+def test_opencli_runtime_setup_wires_daemon_once_without_retired_registry(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from seektalent import opencli_launcher
-    from seektalent.opencli_browser import daemon_process, lifecycle
+    from seektalent.opencli_browser import daemon_process
 
     runtime = object()
     daemon = SimpleNamespace(verify_bridge=lambda **_kwargs: {"ok": True})
-    lifecycle_marker = object()
     runtime_calls: list[object] = []
     daemon_calls: list[object] = []
-    lifecycle_calls: list[dict[str, object]] = []
 
     def ensure_runtime():
         runtime_calls.append(runtime)
@@ -177,13 +177,8 @@ def test_opencli_runtime_setup_wires_daemon_and_lifecycle_once(
         daemon_calls.append(received_runtime)
         return daemon
 
-    def build_lifecycle(**kwargs: object):
-        lifecycle_calls.append(kwargs)
-        return lifecycle_marker
-
     monkeypatch.setattr(opencli_launcher, "ensure_opencli_runtime", ensure_runtime)
     monkeypatch.setattr(daemon_process, "connect_installed_opencli_daemon", connect_daemon)
-    monkeypatch.setattr(lifecycle.BrowserControlLifecycle, "shared_from_daemon", build_lifecycle)
     settings = make_settings(liepin_worker_mode="opencli")
     client = build_liepin_worker_client(settings)
 
@@ -192,12 +187,119 @@ def test_opencli_runtime_setup_wires_daemon_and_lifecycle_once(
 
     assert runtime_calls == [runtime]
     assert daemon_calls == [runtime]
-    assert lifecycle_calls == [
-        {
-            "registry_path": settings.project_root / ".seektalent" / "browser_control.sqlite3",
-            "daemon": daemon,
-        }
-    ]
+    assert not (settings.project_root / ".seektalent" / "browser_control.sqlite3").exists()
+
+
+def _write_legacy_browser_control_registry(path: Path) -> None:
+    path.parent.mkdir(parents=True)
+    with sqlite3.connect(path) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE browser_control_scopes (
+                scope_id TEXT PRIMARY KEY,
+                lane_key_hash TEXT NOT NULL,
+                fence_token INTEGER NOT NULL,
+                state TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                reclaim_requested_at REAL,
+                reclaimed_at REAL
+            );
+            CREATE TABLE browser_owned_tabs (
+                tab_token TEXT PRIMARY KEY,
+                scope_id TEXT NOT NULL,
+                session TEXT NOT NULL UNIQUE,
+                page_id TEXT,
+                tab_kind TEXT NOT NULL,
+                state TEXT NOT NULL,
+                created_at REAL NOT NULL,
+                last_command_completed_at REAL,
+                idle_deadline_at INTEGER,
+                reclaim_requested_at REAL,
+                reclaimed_at REAL,
+                close_outcome TEXT,
+                last_error_code TEXT
+            );
+            INSERT INTO browser_control_scopes
+                (scope_id, lane_key_hash, fence_token, state, created_at)
+            VALUES ('scope-legacy', 'lane-hash', 7, 'reclaim_requested', 1.0);
+            INSERT INTO browser_owned_tabs
+                (tab_token, scope_id, session, page_id, tab_kind, state, created_at)
+            VALUES
+                (
+                    'tab-owned',
+                    'scope-legacy',
+                    'session-owned',
+                    'page-owned',
+                    'search',
+                    'owned',
+                    1.0
+                ),
+                (
+                    'tab-requested',
+                    'scope-legacy',
+                    'session-requested',
+                    'page-requested',
+                    'search',
+                    'reclaim_requested',
+                    2.0
+                ),
+                (
+                    'tab-failed',
+                    'scope-legacy',
+                    'session-failed',
+                    'page-failed',
+                    'detail',
+                    'reclaim_failed',
+                    3.0
+                ),
+                (
+                    'tab-reclaimed',
+                    'scope-legacy',
+                    'session-reclaimed',
+                    'page-reclaimed',
+                    'detail',
+                    'reclaimed',
+                    4.0
+                );
+            """
+        )
+
+
+@pytest.mark.parametrize("fixture_kind", ["fresh", "legacy", "poisoned"])
+def test_runtime_restart_never_creates_reads_writes_or_replays_retired_registry(
+    fixture_kind: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    from seektalent import opencli_launcher
+    from seektalent.opencli_browser import daemon_process
+
+    registry_path = tmp_path / ".seektalent" / "browser_control.sqlite3"
+    if fixture_kind == "legacy":
+        _write_legacy_browser_control_registry(registry_path)
+    elif fixture_kind == "poisoned":
+        registry_path.parent.mkdir(parents=True)
+        registry_path.write_bytes(b"not-a-sqlite-database\x00historical-support-bytes")
+    before = registry_path.read_bytes() if registry_path.exists() else None
+
+    calls: list[str] = []
+    daemon = SimpleNamespace(
+        verify_bridge=lambda **_kwargs: {"ok": True},
+        command=lambda *_args, **_kwargs: calls.append("command"),
+    )
+    monkeypatch.setattr(opencli_launcher, "ensure_opencli_runtime", lambda: object())
+    monkeypatch.setattr(daemon_process, "connect_installed_opencli_daemon", lambda _runtime: daemon)
+    settings = make_settings(workspace_root=str(tmp_path), liepin_worker_mode="opencli")
+
+    for _restart in range(2):
+        client = build_liepin_worker_client(settings)
+        asyncio.run(client.ensure_ready())
+
+    assert calls == []
+    if before is None:
+        assert not registry_path.exists()
+    else:
+        assert registry_path.read_bytes() == before
 
 
 @pytest.mark.parametrize(

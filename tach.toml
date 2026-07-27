@@ -73,6 +73,7 @@ depends_on = [
 [[modules]]
 path = "seektalent.opencli_browser"
 depends_on = []
+# Browser transport propagates extension-owned idle deadlines; it does not reclaim tabs on completion.
 
 # Runtime owns orchestration and must use source-neutral contracts instead of
 # importing concrete CTS/Liepin providers.

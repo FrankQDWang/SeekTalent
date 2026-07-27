@@ -489,7 +489,6 @@ def test_real_ready_pipe_writes_the_accepted_ack_before_the_deterministic_wtscli
             "tabs.new",
             "browser.get-url",
             "browser.state",
-            "tabs.close",
         ]
 
         after = sidecar_transport.exchange_source_history(
