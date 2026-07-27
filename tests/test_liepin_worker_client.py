@@ -160,6 +160,7 @@ def test_opencli_runtime_setup_is_deferred_and_source_safe(monkeypatch: pytest.M
 
 def test_opencli_runtime_setup_wires_daemon_once_without_retired_registry(
     monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
     from seektalent import opencli_launcher
     from seektalent.opencli_browser import daemon_process
@@ -179,7 +180,10 @@ def test_opencli_runtime_setup_wires_daemon_once_without_retired_registry(
 
     monkeypatch.setattr(opencli_launcher, "ensure_opencli_runtime", ensure_runtime)
     monkeypatch.setattr(daemon_process, "connect_installed_opencli_daemon", connect_daemon)
-    settings = make_settings(liepin_worker_mode="opencli")
+    settings = make_settings(
+        workspace_root=str(tmp_path),
+        liepin_worker_mode="opencli",
+    )
     client = build_liepin_worker_client(settings)
 
     asyncio.run(client.ensure_ready())
