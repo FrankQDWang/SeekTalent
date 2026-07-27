@@ -123,6 +123,7 @@ class PostHandshakeSourcePortSession(verify_frames.PostHandshakeVerifySessionSes
             ),
             reply_validator=_validate_transport_reply,
             received_message=_received_transport_message,
+            received_reply_message=_received_transport_reply_message,
             pending_from_request=_transport_pending,
             reply_mismatch_reason="source_port_wrong_reply",
             pending_request_limit_reason="source_port_pending_request_limit",
@@ -306,6 +307,18 @@ def _received_transport_message(envelope: _TransportEnvelope) -> ReceivedSourceP
     if isinstance(envelope, (_OperationQueryEnvelope, _OperationQueryResultEnvelope)):
         return _received_history_message(envelope)
     return _received_verify_session_message(envelope)
+
+
+def _received_transport_reply_message(
+    envelope: _TransportEnvelope,
+    pending: _TransportPending | None,
+) -> ReceivedSourcePortMessage:
+    if isinstance(envelope, (_OperationQueryEnvelope, _OperationQueryResultEnvelope)):
+        return _received_history_message(envelope)
+    return _received_verify_session_message(
+        envelope,
+        request=pending if isinstance(pending, _VerifySessionPending) else None,
+    )
 
 
 def _transport_pending(envelope: _TransportEnvelope) -> _TransportPending:

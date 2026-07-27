@@ -99,6 +99,10 @@ class _PendingRequest(Generic[PendingT]):
 ErrorFactory: TypeAlias = Callable[[str], AuthenticatedFrameError]
 ReplyValidator: TypeAlias = Callable[[PendingT, EnvelopeT, object | None], PendingReply]
 ReceivedMessageFactory: TypeAlias = Callable[[EnvelopeT], ReceivedT]
+ReceivedReplyMessageFactory: TypeAlias = Callable[
+    [EnvelopeT, PendingT | None],
+    ReceivedT,
+]
 PendingRequestFactory: TypeAlias = Callable[[EnvelopeT], PendingT]
 LimitSupplier: TypeAlias = Callable[[], int]
 
@@ -128,6 +132,7 @@ class AuthenticatedFrameSession(Generic[EnvelopeT, ReceivedT, PendingT]):
         "_receive_direction",
         "_receive_key",
         "_received_message",
+        "_received_reply_message",
         "_reply_mismatch_reason",
         "_reply_validator",
         "_request_message_types",
@@ -161,6 +166,9 @@ class AuthenticatedFrameSession(Generic[EnvelopeT, ReceivedT, PendingT]):
         max_frame_bytes: LimitSupplier,
         max_session_messages: LimitSupplier,
         max_pending_requests: LimitSupplier,
+        received_reply_message: (
+            ReceivedReplyMessageFactory[EnvelopeT, PendingT, ReceivedT] | None
+        ) = None,
     ) -> None:
         self._error_factory = error_factory
         if role not in ("main", "sidecar"):
@@ -187,6 +195,7 @@ class AuthenticatedFrameSession(Generic[EnvelopeT, ReceivedT, PendingT]):
         self._response_message_types = response_message_types
         self._reply_validator = reply_validator
         self._received_message = received_message
+        self._received_reply_message = received_reply_message
         self._pending_from_request = pending_from_request
         self._reply_mismatch_reason = reply_mismatch_reason
         if type(pending_request_limit_reason) is not str or not pending_request_limit_reason:
@@ -266,8 +275,21 @@ class AuthenticatedFrameSession(Generic[EnvelopeT, ReceivedT, PendingT]):
                 self._body.clear()
                 self._expected_body_length = None
                 envelope = self._decode_envelope(body, frame_length=frame_length)
+                reply_request = (
+                    None
+                    if envelope.reply_to is None
+                    else self._pending_request(envelope.reply_to)
+                )
                 self._accept_envelope(envelope)
-                received.append(self._received_message(envelope))
+                if self._received_reply_message is None:
+                    received.append(self._received_message(envelope))
+                else:
+                    received.append(
+                        self._received_reply_message(
+                            envelope,
+                            reply_request,
+                        )
+                    )
         except AuthenticatedFrameError as exc:
             self._close(exc.reason_code)
             raise

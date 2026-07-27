@@ -252,10 +252,12 @@ class RuntimeUserAction(BaseModel):
     runtime_attempt_no: int
     runtime_attempt_fence_ref: str
     request_hash: str
+    entry_request_semantic_digest: str
     profile_binding_generation: int
     browser_control_scope_id: str
     source_ledger_revision: int
     source_reconciliation_revision: int
+    entry_dispatch_authorization_ordinal: int
     dispatch_intent_id: str
     dispatch_intent_digest: str
     source_operation_acceptance_ref: str
@@ -266,6 +268,16 @@ class RuntimeUserAction(BaseModel):
     status: Literal["pending", "resolved", "cancelled", "failed"]
     resolution_evidence_ref: str | None = None
     resolution_binding_digest: str | None = None
+    resolution_operation_id: str | None = None
+    resolution_result_digest: str | None = None
+    resolution_request_hash: str | None = None
+    resolution_request_semantic_digest: str | None = None
+    resolution_runtime_attempt_fence_ref: str | None = None
+    resolution_dispatch_authorization_ordinal: int | None = None
+    resolution_reconciliation_id: str | None = None
+    resolution_reconciliation_digest: str | None = None
+    resolution_source_ledger_revision: int | None = None
+    resolution_source_reconciliation_revision: int | None = None
     resolution_at: str | None = None
     authority_mode: Literal["no_owner", "active_owner"]
     owner_lease_id: str | None = None

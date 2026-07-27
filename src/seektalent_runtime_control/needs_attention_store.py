@@ -293,11 +293,15 @@ def _user_action_from_row(row: sqlite3.Row) -> RuntimeUserAction:
         runtime_attempt_no=int(row["runtime_attempt_no"]),
         runtime_attempt_fence_ref=row["runtime_attempt_fence_ref"],
         request_hash=row["request_hash"],
+        entry_request_semantic_digest=row["entry_request_semantic_digest"],
         profile_binding_generation=int(row["profile_binding_generation"]),
         browser_control_scope_id=row["browser_control_scope_id"],
         source_ledger_revision=int(row["source_ledger_revision"]),
         source_reconciliation_revision=int(
             row["source_reconciliation_revision"]
+        ),
+        entry_dispatch_authorization_ordinal=int(
+            row["entry_dispatch_authorization_ordinal"]
         ),
         dispatch_intent_id=row["dispatch_intent_id"],
         dispatch_intent_digest=row["dispatch_intent_digest"],
@@ -311,6 +315,34 @@ def _user_action_from_row(row: sqlite3.Row) -> RuntimeUserAction:
         status=row["status"],
         resolution_evidence_ref=row["resolution_evidence_ref"],
         resolution_binding_digest=row["resolution_binding_digest"],
+        resolution_operation_id=row["resolution_operation_id"],
+        resolution_result_digest=row["resolution_result_digest"],
+        resolution_request_hash=row["resolution_request_hash"],
+        resolution_request_semantic_digest=(
+            row["resolution_request_semantic_digest"]
+        ),
+        resolution_runtime_attempt_fence_ref=(
+            row["resolution_runtime_attempt_fence_ref"]
+        ),
+        resolution_dispatch_authorization_ordinal=(
+            None
+            if row["resolution_dispatch_authorization_ordinal"] is None
+            else int(row["resolution_dispatch_authorization_ordinal"])
+        ),
+        resolution_reconciliation_id=row["resolution_reconciliation_id"],
+        resolution_reconciliation_digest=(
+            row["resolution_reconciliation_digest"]
+        ),
+        resolution_source_ledger_revision=(
+            None
+            if row["resolution_source_ledger_revision"] is None
+            else int(row["resolution_source_ledger_revision"])
+        ),
+        resolution_source_reconciliation_revision=(
+            None
+            if row["resolution_source_reconciliation_revision"] is None
+            else int(row["resolution_source_reconciliation_revision"])
+        ),
         resolution_at=row["resolution_at"],
         authority_mode=row["authority_mode"],
         owner_lease_id=row["owner_lease_id"],

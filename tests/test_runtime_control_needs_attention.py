@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from hashlib import sha256
 import json
 import os
 from pathlib import Path
@@ -10,7 +11,10 @@ import sys
 
 import pytest
 
-from seektalent.diagnostics_schema import parse_failure_envelope
+from seektalent.diagnostics_schema import (
+    canonical_diagnostics_bytes,
+    parse_failure_envelope,
+)
 from seektalent.source_port.authenticated_verify_session_frames import (
     PostHandshakeVerifySessionSession,
     ReceivedVerifySessionResult,
@@ -24,6 +28,17 @@ from seektalent.source_port.operation_dispatch import (
 from seektalent.source_port.verify_session_contract import (
     VerifySessionResultV1,
     VerifySessionUserActionV1,
+    canonical_verify_session_result_bytes,
+)
+from seektalent.source_port.history_contract import (
+    ExactAuthorizationSelector,
+    SourceHistoryQueryV1,
+)
+from seektalent.source_port.history_sqlite_reader import (
+    SourceHistorySQLiteReader,
+)
+from seektalent.source_history_reconciliation import (
+    commit_admitted_source_history_reconciliation,
 )
 from seektalent.user_action import (
     USER_ACTION_INSTRUCTIONS,
@@ -43,6 +58,15 @@ from seektalent_runtime_control.user_action_mapping import (
     map_verify_session_user_action,
 )
 from tests.test_diagnostics_schema import _failure
+from tests.support.source_history_sqlite_harness import (
+    AcceptedHistoryInput,
+    SourceHistorySQLiteHarness,
+)
+from tests.test_source_history_reconciliation import (
+    _close_exchange as _close_history_exchange,
+    _exchange as _history_exchange,
+    ready_lease_factory as _history_lease_fixture,
+)
 
 
 def test_needs_attention_apis_have_zero_production_callers() -> None:
@@ -81,12 +105,21 @@ def test_needs_attention_apis_have_zero_production_callers() -> None:
 
 RUN_ID = "3" * 32
 OPERATION_ID = "4" * 32
+RESOLUTION_OPERATION_ID = "e" * 32
 CHECKPOINT_ID = "8" * 32
 ACTION_ID = "9" * 32
 ENTERED_AT = "2026-07-27T04:00:00Z"
 RESOLVED_AT = "2026-07-27T04:05:00Z"
 MAIN_TO_SIDECAR_KEY = bytes(range(32))
 SIDECAR_TO_MAIN_KEY = bytes(range(32, 64))
+
+
+@pytest.fixture
+def needs_attention_history_lease_factory(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    return _history_lease_fixture.__wrapped__(tmp_path, monkeypatch)
 
 
 def _downgrade_v15_to_v14(conn: sqlite3.Connection) -> None:
@@ -206,6 +239,15 @@ def _authenticated_result(
     browser_scope_id: str = "6" * 32,
     profile_generation: int = 1,
     session_suffix: str = "entry",
+    operation_id: str = OPERATION_ID,
+    idempotency_key: str = "verify-session-action",
+    dispatch_intent_id: str = "dispatch-intent-action",
+    dispatch_intent_revision: int = 1,
+    source_operation_acceptance_ref: str = "source-acceptance-action",
+    dispatch_authorization_ordinal: int = 1,
+    expected_ledger_revision: int = 1,
+    expected_reconciliation_revision: int = 0,
+    safe_retry_commit_ref: str | None = None,
 ) -> ReceivedVerifySessionResult:
     from seektalent.source_port.verify_session_contract import (
         VerifySessionRequestV1,
@@ -213,9 +255,9 @@ def _authenticated_result(
 
     request = VerifySessionRequestV1.create(
         run_id=RUN_ID,
-        operation_id=OPERATION_ID,
+        operation_id=operation_id,
         attempt_no=attempt_no,
-        idempotency_key="verify-session-action",
+        idempotency_key=idempotency_key,
         correlation_id=f"correlation-{session_suffix}",
         accepted_requirement_revision_id=requirement_revision_id,
         runtime_attempt_fence_token=(
@@ -224,12 +266,14 @@ def _authenticated_result(
         profile_binding_generation=profile_generation,
         browser_control_scope_id=browser_scope_id,
         deadline_value=30_000,
-        expected_source_operation_ledger_revision=1,
-        expected_reconciliation_revision=0,
+        expected_source_operation_ledger_revision=expected_ledger_revision,
+        expected_reconciliation_revision=expected_reconciliation_revision,
         delivery_mode="initial",
-        dispatch_intent_id="dispatch-intent-action",
-        dispatch_intent_revision=1,
-        source_operation_acceptance_ref="source-acceptance-action",
+        dispatch_intent_id=dispatch_intent_id,
+        dispatch_intent_revision=dispatch_intent_revision,
+        dispatch_authorization_ordinal=dispatch_authorization_ordinal,
+        safe_retry_commit_ref=safe_retry_commit_ref,
+        source_operation_acceptance_ref=source_operation_acceptance_ref,
         profile_binding_ref="5" * 32,
         provider_account_ref="4" * 32,
         required_capabilities=(
@@ -302,7 +346,11 @@ def _authenticated_result(
         dispatch_authorization=request.delivery.authorization,
         accepted_generation=1,
         accepted_journal_revision=1,
-        accepted_fact="dispatch_authorized",
+        accepted_fact=(
+            "dispatch_authorized"
+            if dispatch_authorization_ordinal == 1
+            else "accepted_no_dispatch"
+        ),
     )
     main.feed(
         sidecar.encode_accepted_ack(
@@ -330,12 +378,14 @@ def _envelope(
     revision: int = 1,
     occurred_at: str = ENTERED_AT,
     observed_at: str | None = None,
+    attempt_no: int = 1,
 ):
     payload = _failure()
     payload.update(
         {
             "run_id": RUN_ID,
             "operation_id": OPERATION_ID,
+            "attempt_no": attempt_no,
             "failure_id": failure_id,
             "revision": revision,
             "current_outcome": outcome,
@@ -387,10 +437,15 @@ def _store(tmp_path: Path, *, status: str = "resume_requested") -> RuntimeContro
             updated_at="2026-07-27T03:00:00Z",
         )
     )
-    identity = _authenticated_result(
+    accepted_result = _authenticated_result(
         ready=False,
         session_suffix="acceptance",
-    ).payload.identity
+    )
+    authenticated = require_authenticated_verify_session_result(
+        accepted_result
+    )
+    identity = authenticated.result.identity
+    authorization = authenticated.dispatch_authorization
     store.accept_source_operation(
         runtime_run_id=RUN_ID,
         operation_id=OPERATION_ID,
@@ -408,11 +463,15 @@ def _store(tmp_path: Path, *, status: str = "resume_requested") -> RuntimeContro
         browser_control_scope_id=identity.browser_control_scope_id,
         controller_fence_ref=None,
         outbox_id="source-outbox-action",
-        dispatch_intent_id="dispatch-intent-action",
+        dispatch_intent_id=authorization.dispatch_intent_id,
         dispatch_intent_revision=1,
-        dispatch_intent_digest="d" * 64,
-        dispatch_authorization_ordinal=1,
-        source_operation_acceptance_ref="source-acceptance-action",
+        dispatch_intent_digest=authorization.dispatch_intent_digest,
+        dispatch_authorization_ordinal=(
+            authorization.dispatch_authorization_ordinal
+        ),
+        source_operation_acceptance_ref=(
+            authorization.source_operation_acceptance_ref
+        ),
         expected_ledger_revision=1,
         expected_reconciliation_revision=0,
     )
@@ -439,9 +498,10 @@ def _entry_admission(
     if run.status == "resume_requested":
         authenticated = require_authenticated_verify_session_result(received)
         identity = authenticated.result.identity
+        history_digest = "1" * 64
         store.commit_no_owner_source_reconciliation(
             SourceOperationReconciliationDecision(
-                reconciliation_id="reconciliation-action",
+                reconciliation_id=f"source-history-{history_digest}",
                 runtime_run_id=RUN_ID,
                 operation_id=OPERATION_ID,
                 source_id="liepin",
@@ -453,13 +513,13 @@ def _entry_admission(
                 ),
                 runtime_attempt_no=identity.attempt_no,
                 runtime_attempt_authority_ref="runtime-attempt-authority-1",
-                history_result_ref=authenticated.observation_ref,
-                history_result_digest=authenticated.result_digest,
+                history_result_ref=f"sha256:{history_digest}",
+                history_result_digest=history_digest,
                 decision_kind="conclusive_observation",
                 history_outcome="matched",
                 history_conclusion="observed_result",
                 dispatch_intent_ref="dispatch-intent-action",
-                conclusive_observation_ref=authenticated.observation_ref,
+                conclusive_observation_ref=authenticated.result_digest,
                 source_operation_disposition="user_action_required",
                 retry_posture="no_retry",
                 expected_ledger_revision=1,
@@ -473,6 +533,162 @@ def _entry_admission(
     )
 
 
+def _commit_real_history_result(
+    *,
+    root: Path,
+    store: RuntimeControlStore,
+    received: ReceivedVerifySessionResult,
+    monkeypatch: pytest.MonkeyPatch,
+    lease_factory,
+) -> None:
+    authenticated = require_authenticated_verify_session_result(received)
+    result = authenticated.result
+    identity = result.identity
+    authorization = authenticated.dispatch_authorization
+    harness = SourceHistorySQLiteHarness.create(
+        root / f"history-{identity.operation_id}.sqlite3"
+    )
+    harness.register_generation(1)
+    accepted_revision = harness.record_accepted(
+        AcceptedHistoryInput(
+            run_id=identity.run_id,
+            operation_id=identity.operation_id,
+            source="liepin",
+            operation_kind="verify_session",
+            idempotency_key=identity.idempotency_key,
+            request_hash=identity.request_hash,
+            attempt_no=identity.attempt_no,
+            accepted_requirement_revision_id=(
+                identity.accepted_requirement_revision_id
+            ),
+            runtime_attempt_fence_ref=identity.runtime_attempt_fence_ref,
+            authorized_dispatch_intent_id=(
+                authorization.dispatch_intent_id
+            ),
+            authorized_dispatch_intent_revision=(
+                authorization.dispatch_intent_revision
+            ),
+            authorized_dispatch_intent_digest=(
+                authorization.dispatch_intent_digest
+            ),
+            profile_binding_generation=identity.profile_binding_generation,
+            browser_control_scope_id=identity.browser_control_scope_id,
+            controller_fence_ref=None,
+        ),
+        generation=1,
+    )
+    dispatch_revision = harness.record_dispatch_intent(
+        run_id=identity.run_id,
+        operation_id=identity.operation_id,
+        expected_head_journal_revision=accepted_revision,
+        generation=1,
+        durable_dispatch_intent_ref=authorization.dispatch_intent_id,
+    )
+    terminal_digest = sha256(
+        canonical_verify_session_result_bytes(result)
+    ).hexdigest()
+    assert terminal_digest == authenticated.result_digest
+    harness.record_observed_result(
+        run_id=identity.run_id,
+        operation_id=identity.operation_id,
+        expected_head_journal_revision=dispatch_revision,
+        generation=1,
+        result_ref=terminal_digest,
+        result_hash=terminal_digest,
+    )
+    harness.register_generation(2)
+    harness.register_generation(3)
+    query = SourceHistoryQueryV1(
+        contract_version="seektalent.source-port.query.request/v1",
+        run_id=identity.run_id,
+        operation_id=identity.operation_id,
+        source="liepin",
+        operation_kind="verify_session",
+        idempotency_key=identity.idempotency_key,
+        request_hash=identity.request_hash,
+        attempt_no=identity.attempt_no,
+        authorization_selector=ExactAuthorizationSelector(
+            kind="exact",
+            ordinal=authorization.dispatch_authorization_ordinal,
+        ),
+        accepted_generation_hint=1,
+        searched_first_generation=1,
+        searched_last_generation=3,
+        expected_source_operation_ledger_revision=(
+            identity.expected_source_operation_ledger_revision
+        ),
+        expected_reconciliation_revision=(
+            identity.expected_reconciliation_revision
+        ),
+    )
+    admitted, session, child, errors = _history_exchange(
+        SourceHistorySQLiteReader(harness.path),
+        query,
+        lease_factory,
+        monkeypatch,
+    )
+    try:
+        committed = commit_admitted_source_history_reconciliation(
+            admitted,
+            store,
+            terminal_payload=result,
+            committed_at="2026-07-27T03:58:00.000000Z",
+        )
+        assert committed.conclusive_observation_ref == terminal_digest
+        assert committed.history_result_digest != terminal_digest
+    finally:
+        _close_history_exchange(
+            session,
+            child,
+            errors,
+            lease_factory,
+        )
+
+
+def _accept_authenticated_operation(
+    store: RuntimeControlStore,
+    received: ReceivedVerifySessionResult,
+    *,
+    suffix: str,
+) -> None:
+    authenticated = require_authenticated_verify_session_result(received)
+    identity = authenticated.result.identity
+    authorization = authenticated.dispatch_authorization
+    store.accept_source_operation(
+        runtime_run_id=RUN_ID,
+        operation_id=identity.operation_id,
+        source_id="liepin",
+        operation_kind="verify_session",
+        canonical_request_hash=identity.request_hash,
+        idempotency_key=identity.idempotency_key,
+        accepted_requirement_revision_id=(
+            identity.accepted_requirement_revision_id
+        ),
+        runtime_attempt_no=identity.attempt_no,
+        runtime_attempt_authority_ref="runtime-attempt-authority-1",
+        runtime_attempt_fence_ref=identity.runtime_attempt_fence_ref,
+        profile_binding_generation=identity.profile_binding_generation,
+        browser_control_scope_id=identity.browser_control_scope_id,
+        controller_fence_ref=None,
+        outbox_id=f"source-outbox-{suffix}",
+        dispatch_intent_id=authorization.dispatch_intent_id,
+        dispatch_intent_revision=authorization.dispatch_intent_revision,
+        dispatch_intent_digest=authorization.dispatch_intent_digest,
+        dispatch_authorization_ordinal=(
+            authorization.dispatch_authorization_ordinal
+        ),
+        source_operation_acceptance_ref=(
+            authorization.source_operation_acceptance_ref
+        ),
+        expected_ledger_revision=(
+            identity.expected_source_operation_ledger_revision
+        ),
+        expected_reconciliation_revision=(
+            identity.expected_reconciliation_revision
+        ),
+    )
+
+
 def _satisfaction_admission(
     store: RuntimeControlStore,
     *,
@@ -481,13 +697,68 @@ def _satisfaction_admission(
     received: ReceivedVerifySessionResult | None = None,
 ):
     del code
-    return store.admit_action_satisfaction(
-        action_id=ACTION_ID,
-        received=received
-        or _authenticated_result(
+    if received is None:
+        resolution_operation_id = (
+            RESOLUTION_OPERATION_ID
+            if session_suffix == "resolution"
+            else sha256(session_suffix.encode()).hexdigest()[:32]
+        )
+        received = _authenticated_result(
             ready=True,
             session_suffix=session_suffix,
-        ),
+            operation_id=resolution_operation_id,
+            idempotency_key=f"verify-session-{session_suffix}",
+            dispatch_intent_id=f"dispatch-intent-{session_suffix}",
+            source_operation_acceptance_ref=(
+                f"source-acceptance-{session_suffix}"
+            ),
+        )
+    authenticated = require_authenticated_verify_session_result(received)
+    identity = authenticated.result.identity
+    authorization = authenticated.dispatch_authorization
+    _accept_authenticated_operation(
+        store,
+        received,
+        suffix=session_suffix,
+    )
+    history_digest = sha256(
+        f"resolution-history:{session_suffix}".encode()
+    ).hexdigest()
+    store.commit_no_owner_source_reconciliation(
+        SourceOperationReconciliationDecision(
+            reconciliation_id=f"source-history-{history_digest}",
+            runtime_run_id=RUN_ID,
+            operation_id=identity.operation_id,
+            source_id="liepin",
+            operation_kind="verify_session",
+            canonical_request_hash=identity.request_hash,
+            idempotency_key=identity.idempotency_key,
+            accepted_requirement_revision_id=(
+                identity.accepted_requirement_revision_id
+            ),
+            runtime_attempt_no=identity.attempt_no,
+            runtime_attempt_authority_ref="runtime-attempt-authority-1",
+            history_result_ref=f"sha256:{history_digest}",
+            history_result_digest=history_digest,
+            decision_kind="conclusive_observation",
+            history_outcome="matched",
+            history_conclusion="observed_result",
+            dispatch_intent_ref=authorization.dispatch_intent_id,
+            conclusive_observation_ref=authenticated.result_digest,
+            source_operation_disposition="completed",
+            retry_posture="no_retry",
+            expected_ledger_revision=(
+                identity.expected_source_operation_ledger_revision
+            ),
+            expected_reconciliation_revision=(
+                identity.expected_reconciliation_revision
+            ),
+            committed_at="2026-07-27T04:04:00Z",
+        )
+    )
+    return store.admit_action_satisfaction(
+        action_id=ACTION_ID,
+        received=received,
     )
 
 
@@ -669,6 +940,167 @@ def test_no_owner_entry_and_resolution_retain_history(tmp_path: Path) -> None:
     assert historical.resolution_evidence_ref is not None
 
 
+def test_real_history_pipeline_enters_and_resolves_with_new_operation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    needs_attention_history_lease_factory,
+) -> None:
+    store = _store(tmp_path)
+    checkpoint = _checkpoint()
+    store.write_checkpoint_for_recovery(checkpoint)
+    entry_received = _authenticated_result(
+        ready=False,
+        session_suffix="real-entry",
+    )
+    _commit_real_history_result(
+        root=tmp_path / "entry-history",
+        store=store,
+        received=entry_received,
+        monkeypatch=monkeypatch,
+        lease_factory=needs_attention_history_lease_factory,
+    )
+    entry = require_authenticated_verify_session_result(entry_received)
+    admission = store.admit_needs_attention(
+        received=entry_received,
+        checkpoint=checkpoint,
+    )
+    store.commit_needs_attention(
+        runtime_run_id=RUN_ID,
+        action_id=ACTION_ID,
+        admission=admission,
+        checkpoint=checkpoint,
+        envelope=_envelope(action=_action()),
+        expected_state_revision=store.get_run(RUN_ID).state_revision,
+        entered_at=ENTERED_AT,
+    )
+
+    resolution_received = _authenticated_result(
+        ready=True,
+        session_suffix="real-resolution",
+        operation_id=RESOLUTION_OPERATION_ID,
+        idempotency_key="verify-session-real-resolution",
+        dispatch_intent_id="dispatch-intent-real-resolution",
+        source_operation_acceptance_ref="source-acceptance-real-resolution",
+    )
+    resolution = require_authenticated_verify_session_result(
+        resolution_received
+    )
+    assert resolution.result.identity.operation_id != (
+        entry.result.identity.operation_id
+    )
+    assert resolution.result.identity.request_hash != (
+        entry.result.identity.request_hash
+    )
+    assert resolution.result.identity.runtime_attempt_fence_ref != (
+        entry.result.identity.runtime_attempt_fence_ref
+    )
+    assert resolution.request_semantic_digest == entry.request_semantic_digest
+    _accept_authenticated_operation(
+        store,
+        resolution_received,
+        suffix="real-resolution",
+    )
+    _commit_real_history_result(
+        root=tmp_path / "resolution-history",
+        store=store,
+        received=resolution_received,
+        monkeypatch=monkeypatch,
+        lease_factory=needs_attention_history_lease_factory,
+    )
+    satisfaction = store.admit_action_satisfaction(
+        action_id=ACTION_ID,
+        received=resolution_received,
+    )
+    resolved = store.resolve_needs_attention(
+        runtime_run_id=RUN_ID,
+        action_id=ACTION_ID,
+        admission=satisfaction,
+        expected_state_revision=store.get_run(RUN_ID).state_revision,
+        resolved_at=RESOLVED_AT,
+    )
+
+    assert resolved.status == "resume_requested"
+    [action] = store.list_user_actions(runtime_run_id=RUN_ID)
+    assert action.resolution_operation_id == RESOLUTION_OPERATION_ID
+    assert action.resolution_request_hash == (
+        resolution.result.identity.request_hash
+    )
+    assert action.resolution_runtime_attempt_fence_ref == (
+        resolution.result.identity.runtime_attempt_fence_ref
+    )
+    assert action.resolution_reconciliation_id is not None
+
+
+@pytest.mark.parametrize(
+    "poisoning",
+    ("swapped_history_ref", "swapped_terminal_ref"),
+)
+def test_real_history_entry_rejects_swapped_history_and_terminal_digests(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    needs_attention_history_lease_factory,
+    poisoning: str,
+) -> None:
+    store = _store(tmp_path)
+    checkpoint = _checkpoint()
+    received = _authenticated_result(
+        ready=False,
+        session_suffix=f"real-swapped-{poisoning}",
+    )
+    authenticated = require_authenticated_verify_session_result(received)
+    _commit_real_history_result(
+        root=tmp_path / poisoning,
+        store=store,
+        received=received,
+        monkeypatch=monkeypatch,
+        lease_factory=needs_attention_history_lease_factory,
+    )
+    with sqlite3.connect(store.path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            """
+            SELECT * FROM runtime_control_source_reconciliations
+            WHERE runtime_run_id = ? AND operation_id = ?
+            """,
+            (RUN_ID, OPERATION_ID),
+        ).fetchone()
+        assert row is not None
+        conn.execute(
+            "DROP TRIGGER runtime_control_source_reconciliations_no_update"
+        )
+        if poisoning == "swapped_history_ref":
+            conn.execute(
+                """
+                UPDATE runtime_control_source_reconciliations
+                SET history_result_ref = ?
+                WHERE reconciliation_id = ?
+                """,
+                (
+                    f"sha256:{authenticated.result_digest}",
+                    row["reconciliation_id"],
+                ),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE runtime_control_source_reconciliations
+                SET conclusive_observation_ref = history_result_digest
+                WHERE reconciliation_id = ?
+                """,
+                (row["reconciliation_id"],),
+            )
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        store.admit_needs_attention(
+            received=received,
+            checkpoint=checkpoint,
+        )
+    assert (
+        exc_info.value.reason_code
+        == "runtime_needs_attention_admission_rejected"
+    )
+
+
 def test_cancellation_and_failure_terminal_exits_retain_action_history(
     tmp_path: Path,
 ) -> None:
@@ -813,6 +1245,218 @@ def test_admission_rejects_unmarked_result_and_stale_attempt_authority(
         stale_exc.value.reason_code
         == "runtime_needs_attention_admission_rejected"
     )
+
+
+def test_no_owner_entry_rejects_envelope_for_another_attempt_without_writes(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    checkpoint = _checkpoint()
+    store.write_checkpoint_for_recovery(checkpoint)
+    before = store.get_run(RUN_ID)
+    forged = _envelope(action=_action(), attempt_no=999)
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        store.commit_needs_attention(
+            runtime_run_id=RUN_ID,
+            action_id=ACTION_ID,
+            admission=_entry_admission(store, checkpoint),
+            checkpoint=checkpoint,
+            envelope=forged,
+            expected_state_revision=before.state_revision,
+            entered_at=ENTERED_AT,
+        )
+
+    assert (
+        exc_info.value.reason_code
+        == "runtime_needs_attention_envelope_mismatch"
+    )
+    assert store.get_run(RUN_ID) == before
+    assert store.list_user_actions(runtime_run_id=RUN_ID) == []
+
+
+def test_safe_retry_ordinal_two_result_enters_needs_attention_with_exact_epoch(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    retry_digest = sha256(b"safe-retry-history").hexdigest()
+    retry_reconciliation_id = "a" * 32
+    store.commit_no_owner_source_reconciliation(
+        SourceOperationReconciliationDecision(
+            reconciliation_id=retry_reconciliation_id,
+            runtime_run_id=RUN_ID,
+            operation_id=OPERATION_ID,
+            source_id="liepin",
+            operation_kind="verify_session",
+            canonical_request_hash=store.get_accepted_source_operation_context(
+                RUN_ID,
+                OPERATION_ID,
+            ).operation.canonical_request_hash,
+            idempotency_key="verify-session-action",
+            accepted_requirement_revision_id="reqapproved_test",
+            runtime_attempt_no=1,
+            runtime_attempt_authority_ref="runtime-attempt-authority-1",
+            history_result_ref=f"sha256:{retry_digest}",
+            history_result_digest=retry_digest,
+            decision_kind="no_dispatch_proved",
+            history_outcome="not_found",
+            history_conclusion=None,
+            dispatch_intent_ref=None,
+            conclusive_observation_ref=None,
+            source_operation_disposition=None,
+            retry_posture="safe_retry",
+            expected_ledger_revision=1,
+            expected_reconciliation_revision=0,
+            committed_at="2026-07-27T03:10:00Z",
+        )
+    )
+    first = store.acquire_executor_lease(
+        runtime_run_id=RUN_ID,
+        executor_id="executor-a",
+        acquired_at="2026-07-27T03:20:00Z",
+        lease_expires_at="2026-07-27T03:25:00Z",
+    )
+    store.release_executor_lease(
+        runtime_run_id=RUN_ID,
+        executor_id=first.executor_id,
+        attempt_no=first.attempt_no,
+        released_at="2026-07-27T03:25:00Z",
+    )
+    second = store.acquire_executor_lease(
+        runtime_run_id=RUN_ID,
+        executor_id="executor-b",
+        acquired_at="2026-07-27T03:30:00Z",
+        lease_expires_at="2099-01-01T00:00:00Z",
+    )
+    received = _authenticated_result(
+        ready=False,
+        attempt_no=second.attempt_no,
+        profile_generation=2,
+        session_suffix="ordinal-two-entry",
+        dispatch_intent_id="dispatch-intent-action-retry",
+        dispatch_intent_revision=2,
+        dispatch_authorization_ordinal=2,
+        expected_ledger_revision=3,
+        expected_reconciliation_revision=1,
+        safe_retry_commit_ref=retry_reconciliation_id,
+    )
+    authenticated = require_authenticated_verify_session_result(received)
+    authority = store._mint_safe_retry_turnover_authority_for_test(
+        runtime_run_id=RUN_ID,
+        executor_id=second.executor_id,
+        attempt_no=second.attempt_no,
+        observed_at="2026-07-27T03:31:00Z",
+        runtime_attempt_authority_ref="runtime-attempt-authority-2",
+        runtime_attempt_fence_ref=(
+            authenticated.result.identity.runtime_attempt_fence_ref
+        ),
+        profile_binding_generation=2,
+        browser_control_scope_id="6" * 32,
+        controller_fence_ref=None,
+    )
+    epoch = store.mint_safe_retry_dispatch_epoch(
+        runtime_run_id=RUN_ID,
+        operation_id=OPERATION_ID,
+        reconciliation_id=retry_reconciliation_id,
+        expected_reconciliation_ledger_revision=2,
+        expected_reconciliation_revision=1,
+        outbox_id="source-outbox-action-retry",
+        dispatch_intent_id="dispatch-intent-action-retry",
+        authority=authority,
+    )
+    assert epoch.dispatch.dispatch_authorization_ordinal == 2
+    assert epoch.dispatch.dispatch_intent_digest == (
+        authenticated.dispatch_authorization.dispatch_intent_digest
+    )
+    store.update_run_status(
+        runtime_run_id=RUN_ID,
+        status="running",
+        updated_at="2026-07-27T03:32:00Z",
+    )
+    checkpoint = _checkpoint()
+    admission = store.admit_needs_attention(
+        received=received,
+        checkpoint=checkpoint,
+    )
+    entered = store.commit_needs_attention(
+        runtime_run_id=RUN_ID,
+        action_id=ACTION_ID,
+        admission=admission,
+        checkpoint=checkpoint,
+        envelope=_envelope(action=_action(), attempt_no=2),
+        expected_state_revision=store.get_run(RUN_ID).state_revision,
+        entered_at=ENTERED_AT,
+        executor_id=second.executor_id,
+        attempt_no=second.attempt_no,
+    )
+
+    assert entered.status == "needs_attention"
+    [action] = store.list_user_actions(runtime_run_id=RUN_ID)
+    assert action.entry_dispatch_authorization_ordinal == 2
+    assert action.dispatch_intent_id == "dispatch-intent-action-retry"
+    with sqlite3.connect(store.path) as conn:
+        conn.execute("DROP TRIGGER runtime_user_actions_immutable_binding")
+        conn.execute("DROP TRIGGER runtime_user_actions_one_way_resolution")
+        conn.execute(
+            """
+            UPDATE runtime_control_user_actions
+            SET entry_dispatch_authorization_ordinal = 1
+            WHERE action_id = ?
+            """,
+            (ACTION_ID,),
+        )
+    with pytest.raises(RuntimeControlError) as swapped:
+        store.list_user_actions(runtime_run_id=RUN_ID)
+    assert (
+        swapped.value.reason_code
+        == "runtime_needs_attention_integrity_failed"
+    )
+
+
+def test_action_history_rejects_poisoned_envelope_attempt(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    checkpoint = _checkpoint()
+    store.write_checkpoint_for_recovery(checkpoint)
+    store.commit_needs_attention(
+        runtime_run_id=RUN_ID,
+        action_id=ACTION_ID,
+        admission=_entry_admission(store, checkpoint),
+        checkpoint=checkpoint,
+        envelope=_envelope(action=_action()),
+        expected_state_revision=store.get_run(RUN_ID).state_revision,
+        entered_at=ENTERED_AT,
+    )
+    poisoned = _envelope(action=_action(), attempt_no=999)
+    poisoned_bytes = canonical_diagnostics_bytes(poisoned)
+    with sqlite3.connect(store.path) as conn:
+        conn.execute(
+            "DROP TRIGGER runtime_control_failure_envelopes_no_update"
+        )
+        conn.execute(
+            """
+            UPDATE runtime_control_failure_envelope_revisions
+            SET canonical_bytes = ?, canonical_sha256 = ?, attempt_no = 999
+            WHERE failure_id = ? AND revision = 1
+            """,
+            (
+                poisoned_bytes,
+                sha256(poisoned_bytes).hexdigest(),
+                "7" * 32,
+            ),
+        )
+
+    for read in (
+        lambda: store.get_run(RUN_ID),
+        lambda: store.list_user_actions(runtime_run_id=RUN_ID),
+    ):
+        with pytest.raises(RuntimeControlError) as exc_info:
+            read()
+        assert (
+            exc_info.value.reason_code
+            == "runtime_needs_attention_integrity_failed"
+        )
 
 
 @pytest.mark.parametrize(
@@ -1302,6 +1946,67 @@ def test_claimed_v15_poisoned_action_schema_fails_closed(
     )
 
 
+@pytest.mark.parametrize(
+    "ddl",
+    (
+        "CREATE INDEX poisoned_extra_index "
+        "ON runtime_control_user_actions(action_id)",
+        "CREATE TRIGGER poisoned_before_trigger "
+        "BEFORE UPDATE ON runtime_control_user_actions "
+        "BEGIN SELECT 1; END",
+        "CREATE TRIGGER poisoned_after_trigger "
+        "AFTER INSERT ON runtime_control_user_actions "
+        "BEGIN SELECT 1; END",
+    ),
+)
+def test_v15_reopen_rejects_arbitrarily_named_owned_table_objects(
+    tmp_path: Path,
+    ddl: str,
+) -> None:
+    path = tmp_path / "runtime_control.sqlite3"
+    RuntimeControlStore(path).initialize()
+    with sqlite3.connect(path) as conn:
+        conn.execute(ddl)
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        RuntimeControlStore(path).initialize()
+
+    assert (
+        exc_info.value.reason_code
+        == "runtime_needs_attention_schema_collision"
+    )
+
+
+def test_v14_migration_rejects_extra_checkpoint_trigger_without_partial_ddl(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "runtime_control.sqlite3"
+    RuntimeControlStore(path).initialize()
+    with sqlite3.connect(path) as conn:
+        _downgrade_v15_to_v14(conn)
+        conn.execute(
+            "CREATE TRIGGER poisoned_checkpoint_trigger "
+            "AFTER UPDATE ON runtime_control_checkpoints "
+            "BEGIN SELECT 1; END"
+        )
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        RuntimeControlStore(path).initialize()
+
+    assert (
+        exc_info.value.reason_code
+        == "runtime_needs_attention_schema_collision"
+    )
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert "current_action_id" not in {
+            row[1]
+            for row in conn.execute(
+                "PRAGMA table_info(runtime_control_runs)"
+            )
+        }
+
+
 @pytest.mark.parametrize("completed_statements", range(0, 12))
 def test_v14_to_v15_statement_failure_rolls_back_and_retries(
     tmp_path: Path,
@@ -1565,6 +2270,130 @@ def test_resolved_history_rejects_dangling_checkpoint(tmp_path: Path) -> None:
         exc_info.value.reason_code
         == "runtime_needs_attention_integrity_failed"
     )
+
+
+@pytest.mark.parametrize(
+    "poisoning",
+    ("resolution_observation", "resolution_reconciliation", "resolution_operation"),
+)
+def test_resolved_history_rejects_dangling_resolution_truth(
+    tmp_path: Path,
+    poisoning: str,
+) -> None:
+    store = _store(tmp_path)
+    checkpoint = _checkpoint()
+    store.write_checkpoint_for_recovery(checkpoint)
+    entered = store.commit_needs_attention(
+        runtime_run_id=RUN_ID,
+        action_id=ACTION_ID,
+        admission=_entry_admission(store, checkpoint),
+        checkpoint=checkpoint,
+        envelope=_envelope(action=_action()),
+        expected_state_revision=store.get_run(RUN_ID).state_revision,
+        entered_at=ENTERED_AT,
+    )
+    store.resolve_needs_attention(
+        runtime_run_id=RUN_ID,
+        action_id=ACTION_ID,
+        admission=_satisfaction_admission(store),
+        expected_state_revision=entered.state_revision,
+        resolved_at=RESOLVED_AT,
+    )
+    [action] = store.list_user_actions(runtime_run_id=RUN_ID)
+    with sqlite3.connect(store.path) as conn:
+        if poisoning == "resolution_observation":
+            conn.execute(
+                "DROP TRIGGER "
+                "runtime_authenticated_observations_delete_forbidden"
+            )
+            conn.execute(
+                """
+                DELETE FROM runtime_control_authenticated_observations
+                WHERE observation_ref = ?
+                """,
+                (action.resolution_evidence_ref,),
+            )
+        elif poisoning == "resolution_reconciliation":
+            conn.execute(
+                "DROP TRIGGER "
+                "runtime_control_source_reconciliations_no_delete"
+            )
+            conn.execute(
+                """
+                DELETE FROM runtime_control_source_reconciliations
+                WHERE reconciliation_id = ?
+                """,
+                (action.resolution_reconciliation_id,),
+            )
+        else:
+            conn.execute(
+                """
+                DELETE FROM runtime_control_source_operations
+                WHERE runtime_run_id = ? AND operation_id = ?
+                """,
+                (RUN_ID, action.resolution_operation_id),
+            )
+
+    for read in (
+        lambda: store.get_run(RUN_ID),
+        lambda: store.list_user_actions(runtime_run_id=RUN_ID),
+    ):
+        with pytest.raises(RuntimeControlError) as exc_info:
+            read()
+        assert (
+            exc_info.value.reason_code
+            == "runtime_needs_attention_integrity_failed"
+        )
+
+
+@pytest.mark.parametrize(
+    ("status", "outcome"),
+    (
+        ("cancelled", "cancelled"),
+        ("completed", "succeeded_with_results"),
+        ("completed", "succeeded_empty"),
+        ("completed", "degraded_with_results"),
+    ),
+)
+@pytest.mark.parametrize("full_failure_truth", (False, True))
+def test_nonfailed_public_reads_reject_forged_failure_truth(
+    tmp_path: Path,
+    status: str,
+    outcome: str,
+    full_failure_truth: bool,
+) -> None:
+    store = _store(tmp_path, status="running")
+    with sqlite3.connect(store.path) as conn:
+        conn.execute("PRAGMA ignore_check_constraints=ON")
+        conn.execute(
+            """
+            UPDATE runtime_control_runs
+            SET status = ?, product_outcome = ?,
+                current_failure_id = 'forged',
+                current_failure_revision = 1,
+                current_failure_owner_lease_id = ?,
+                current_failure_authority_mode = ?
+            WHERE runtime_run_id = ?
+            """,
+            (
+                status,
+                outcome,
+                "forged-lease" if full_failure_truth else None,
+                "active_owner" if full_failure_truth else None,
+                RUN_ID,
+            ),
+        )
+
+    for read in (
+        lambda: store.get_run(RUN_ID),
+        lambda: store.list_user_actions(runtime_run_id=RUN_ID),
+    ):
+        with pytest.raises(RuntimeControlError) as exc_info:
+            read()
+        assert exc_info.value.reason_code in {
+            "runtime_failed_outcome_integrity_failed",
+            "runtime_needs_attention_integrity_failed",
+        }
 
 
 def test_cancelled_history_rejects_missing_failure_envelope(

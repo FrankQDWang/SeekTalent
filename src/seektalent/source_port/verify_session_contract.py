@@ -552,6 +552,42 @@ def canonical_request_intent_hash(request: VerifySessionRequestV1) -> str:
     return sha256(canonical_request_intent_bytes(request)).hexdigest()
 
 
+def verify_session_request_semantic_digest(
+    request: VerifySessionRequestV1,
+) -> str:
+    """Bind stable verify semantics without binding a logical operation epoch."""
+    validated = _validated_request(request)
+    identity = validated.identity
+    return sha256(
+        canonical_json_bytes(
+            {
+                "contract_version": VERIFY_SESSION_REQUEST_CONTRACT,
+                "source": identity.source,
+                "operation_kind": identity.operation_kind,
+                "run_id": identity.run_id,
+                "accepted_requirement_revision_id": (
+                    identity.accepted_requirement_revision_id
+                ),
+                "profile_binding_generation": (
+                    identity.profile_binding_generation
+                ),
+                "browser_control_scope_id": (
+                    identity.browser_control_scope_id
+                ),
+                "profile_mode": validated.profile_mode,
+                "profile_binding_ref": validated.profile_binding_ref,
+                "provider_account_ref": validated.provider_account_ref,
+                "required_capabilities": validated.required_capabilities,
+                "user_interaction_policy": (
+                    validated.user_interaction_policy
+                ),
+                "verify_search_surface": validated.verify_search_surface,
+                "component_receipt_refs": validated.component_receipt_refs,
+            }
+        )
+    ).hexdigest()
+
+
 def canonical_verify_session_result_bytes(result: VerifySessionResultV1) -> bytes:
     """Return strict RFC 8785 bytes for closed verify-session facts."""
     validated = _validated_result(result)
@@ -798,5 +834,6 @@ __all__ = [
     "validate_verify_session_result_echo_facts",
     "validate_verify_session_result_echo",
     "verify_session_request_echo",
+    "verify_session_request_semantic_digest",
     "verify_session_result_hash",
 ]

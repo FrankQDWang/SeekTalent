@@ -38,6 +38,7 @@ NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS = (
       source_id TEXT NOT NULL,
       operation_kind TEXT NOT NULL,
       request_hash TEXT NOT NULL,
+      request_semantic_digest TEXT NOT NULL,
       idempotency_key TEXT NOT NULL,
       accepted_requirement_revision_id TEXT NOT NULL,
       runtime_attempt_no INTEGER NOT NULL,
@@ -50,6 +51,10 @@ NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS = (
       actual_profile_binding_generation INTEGER NOT NULL,
       session_readiness TEXT NOT NULL,
       action_digest TEXT,
+      dispatch_authorization_ordinal INTEGER NOT NULL,
+      dispatch_intent_id TEXT NOT NULL,
+      dispatch_intent_digest TEXT NOT NULL,
+      source_operation_acceptance_ref TEXT NOT NULL,
       committed_at TEXT NOT NULL,
       UNIQUE(session_id, direction_seq),
       UNIQUE(session_id, message_id),
@@ -81,10 +86,12 @@ NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS = (
       runtime_attempt_no INTEGER NOT NULL,
       runtime_attempt_fence_ref TEXT NOT NULL,
       request_hash TEXT NOT NULL,
+      entry_request_semantic_digest TEXT NOT NULL,
       profile_binding_generation INTEGER NOT NULL,
       browser_control_scope_id TEXT NOT NULL,
       source_ledger_revision INTEGER NOT NULL,
       source_reconciliation_revision INTEGER NOT NULL,
+      entry_dispatch_authorization_ordinal INTEGER NOT NULL,
       dispatch_intent_id TEXT NOT NULL,
       dispatch_intent_digest TEXT NOT NULL,
       source_operation_acceptance_ref TEXT NOT NULL,
@@ -95,6 +102,16 @@ NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS = (
       status TEXT NOT NULL,
       resolution_evidence_ref TEXT,
       resolution_binding_digest TEXT,
+      resolution_operation_id TEXT,
+      resolution_result_digest TEXT,
+      resolution_request_hash TEXT,
+      resolution_request_semantic_digest TEXT,
+      resolution_runtime_attempt_fence_ref TEXT,
+      resolution_dispatch_authorization_ordinal INTEGER,
+      resolution_reconciliation_id TEXT,
+      resolution_reconciliation_digest TEXT,
+      resolution_source_ledger_revision INTEGER,
+      resolution_source_reconciliation_revision INTEGER,
       resolution_at TEXT,
       authority_mode TEXT NOT NULL,
       owner_lease_id TEXT,
@@ -102,10 +119,47 @@ NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS = (
       CHECK (status IN ('pending', 'resolved', 'cancelled', 'failed')),
       CHECK (
         (status = 'pending' AND resolution_evidence_ref IS NULL
-          AND resolution_binding_digest IS NULL AND resolution_at IS NULL)
+          AND resolution_binding_digest IS NULL
+          AND resolution_operation_id IS NULL
+          AND resolution_result_digest IS NULL
+          AND resolution_request_hash IS NULL
+          AND resolution_request_semantic_digest IS NULL
+          AND resolution_runtime_attempt_fence_ref IS NULL
+          AND resolution_dispatch_authorization_ordinal IS NULL
+          AND resolution_reconciliation_id IS NULL
+          AND resolution_reconciliation_digest IS NULL
+          AND resolution_source_ledger_revision IS NULL
+          AND resolution_source_reconciliation_revision IS NULL
+          AND resolution_at IS NULL)
         OR
-        (status <> 'pending' AND resolution_evidence_ref IS NOT NULL
-          AND resolution_binding_digest IS NOT NULL AND resolution_at IS NOT NULL)
+        (status = 'resolved' AND resolution_evidence_ref IS NOT NULL
+          AND resolution_binding_digest IS NOT NULL
+          AND resolution_operation_id IS NOT NULL
+          AND resolution_result_digest IS NOT NULL
+          AND resolution_request_hash IS NOT NULL
+          AND resolution_request_semantic_digest IS NOT NULL
+          AND resolution_runtime_attempt_fence_ref IS NOT NULL
+          AND resolution_dispatch_authorization_ordinal IS NOT NULL
+          AND resolution_reconciliation_id IS NOT NULL
+          AND resolution_reconciliation_digest IS NOT NULL
+          AND resolution_source_ledger_revision IS NOT NULL
+          AND resolution_source_reconciliation_revision IS NOT NULL
+          AND resolution_at IS NOT NULL)
+        OR
+        (status IN ('cancelled', 'failed')
+          AND resolution_evidence_ref IS NOT NULL
+          AND resolution_binding_digest IS NOT NULL
+          AND resolution_operation_id IS NULL
+          AND resolution_result_digest IS NULL
+          AND resolution_request_hash IS NULL
+          AND resolution_request_semantic_digest IS NULL
+          AND resolution_runtime_attempt_fence_ref IS NULL
+          AND resolution_dispatch_authorization_ordinal IS NULL
+          AND resolution_reconciliation_id IS NULL
+          AND resolution_reconciliation_digest IS NULL
+          AND resolution_source_ledger_revision IS NULL
+          AND resolution_source_reconciliation_revision IS NULL
+          AND resolution_at IS NOT NULL)
       ),
       CHECK (
         (authority_mode = 'no_owner' AND owner_lease_id IS NULL
@@ -142,6 +196,10 @@ NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS = (
       OR NEW.candidate_truth_hash <> OLD.candidate_truth_hash
       OR NEW.entry_observation_ref <> OLD.entry_observation_ref
       OR NEW.entry_observation_digest <> OLD.entry_observation_digest
+      OR NEW.entry_request_semantic_digest
+         <> OLD.entry_request_semantic_digest
+      OR NEW.entry_dispatch_authorization_ordinal
+         <> OLD.entry_dispatch_authorization_ordinal
       OR NEW.accepted_requirement_revision_id <> OLD.accepted_requirement_revision_id
       OR NEW.runtime_attempt_no <> OLD.runtime_attempt_no
       OR NEW.runtime_attempt_fence_ref <> OLD.runtime_attempt_fence_ref
@@ -256,10 +314,12 @@ ACTION_COLUMNS = {
     "runtime_attempt_no": ("INTEGER", 1, None, 0, 0),
     "runtime_attempt_fence_ref": ("TEXT", 1, None, 0, 0),
     "request_hash": ("TEXT", 1, None, 0, 0),
+    "entry_request_semantic_digest": ("TEXT", 1, None, 0, 0),
     "profile_binding_generation": ("INTEGER", 1, None, 0, 0),
     "browser_control_scope_id": ("TEXT", 1, None, 0, 0),
     "source_ledger_revision": ("INTEGER", 1, None, 0, 0),
     "source_reconciliation_revision": ("INTEGER", 1, None, 0, 0),
+    "entry_dispatch_authorization_ordinal": ("INTEGER", 1, None, 0, 0),
     "dispatch_intent_id": ("TEXT", 1, None, 0, 0),
     "dispatch_intent_digest": ("TEXT", 1, None, 0, 0),
     "source_operation_acceptance_ref": ("TEXT", 1, None, 0, 0),
@@ -270,6 +330,22 @@ ACTION_COLUMNS = {
     "status": ("TEXT", 1, None, 0, 0),
     "resolution_evidence_ref": ("TEXT", 0, None, 0, 0),
     "resolution_binding_digest": ("TEXT", 0, None, 0, 0),
+    "resolution_operation_id": ("TEXT", 0, None, 0, 0),
+    "resolution_result_digest": ("TEXT", 0, None, 0, 0),
+    "resolution_request_hash": ("TEXT", 0, None, 0, 0),
+    "resolution_request_semantic_digest": ("TEXT", 0, None, 0, 0),
+    "resolution_runtime_attempt_fence_ref": ("TEXT", 0, None, 0, 0),
+    "resolution_dispatch_authorization_ordinal": ("INTEGER", 0, None, 0, 0),
+    "resolution_reconciliation_id": ("TEXT", 0, None, 0, 0),
+    "resolution_reconciliation_digest": ("TEXT", 0, None, 0, 0),
+    "resolution_source_ledger_revision": ("INTEGER", 0, None, 0, 0),
+    "resolution_source_reconciliation_revision": (
+        "INTEGER",
+        0,
+        None,
+        0,
+        0,
+    ),
     "resolution_at": ("TEXT", 0, None, 0, 0),
     "authority_mode": ("TEXT", 1, None, 0, 0),
     "owner_lease_id": ("TEXT", 0, None, 0, 0),
@@ -288,6 +364,7 @@ OBSERVATION_COLUMNS = {
     "source_id": ("TEXT", 1, None, 0, 0),
     "operation_kind": ("TEXT", 1, None, 0, 0),
     "request_hash": ("TEXT", 1, None, 0, 0),
+    "request_semantic_digest": ("TEXT", 1, None, 0, 0),
     "idempotency_key": ("TEXT", 1, None, 0, 0),
     "accepted_requirement_revision_id": ("TEXT", 1, None, 0, 0),
     "runtime_attempt_no": ("INTEGER", 1, None, 0, 0),
@@ -300,6 +377,10 @@ OBSERVATION_COLUMNS = {
     "actual_profile_binding_generation": ("INTEGER", 1, None, 0, 0),
     "session_readiness": ("TEXT", 1, None, 0, 0),
     "action_digest": ("TEXT", 0, None, 0, 0),
+    "dispatch_authorization_ordinal": ("INTEGER", 1, None, 0, 0),
+    "dispatch_intent_id": ("TEXT", 1, None, 0, 0),
+    "dispatch_intent_digest": ("TEXT", 1, None, 0, 0),
+    "source_operation_acceptance_ref": ("TEXT", 1, None, 0, 0),
     "committed_at": ("TEXT", 1, None, 0, 0),
 }
 _EXPECTED_OBJECT_SQL = {
@@ -341,12 +422,24 @@ def migrate_needs_attention_v14_to_v15(conn: sqlite3.Connection) -> None:
             for row in conn.execute(
                 """
                 SELECT type, name FROM sqlite_master
-                WHERE name LIKE 'runtime_user_actions_%'
-                   OR name LIKE 'idx_runtime_user_actions_%'
-                   OR name LIKE 'runtime_authenticated_observations_%'
-                   OR name LIKE 'runtime_action_checkpoints_%'
-                   OR name = 'runtime_control_authenticated_observations'
-                   OR name = 'runtime_control_user_actions'
+                WHERE name IN (
+                    'runtime_control_authenticated_observations',
+                    'runtime_control_user_actions'
+                )
+                   OR (
+                     type IN ('index', 'trigger')
+                     AND tbl_name IN (
+                       'runtime_control_authenticated_observations',
+                       'runtime_control_user_actions',
+                       'runtime_control_checkpoints'
+                     )
+                     AND NOT (
+                       name LIKE 'sqlite_autoindex_%' AND sql IS NULL
+                     )
+                   )
+                   OR (
+                     type = 'trigger' AND tbl_name = 'runtime_control_runs'
+                   )
                 """
             )
         }
@@ -399,12 +492,24 @@ def validate_needs_attention_schema(conn: sqlite3.Connection) -> None:
             conn.execute(
                 """
                 SELECT type, name, sql FROM sqlite_master
-                WHERE name LIKE 'runtime_user_actions_%'
-                   OR name LIKE 'idx_runtime_user_actions_%'
-                   OR name LIKE 'runtime_authenticated_observations_%'
-                   OR name LIKE 'runtime_action_checkpoints_%'
-                   OR name = 'runtime_control_authenticated_observations'
-                   OR name = 'runtime_control_user_actions'
+                WHERE name IN (
+                    'runtime_control_authenticated_observations',
+                    'runtime_control_user_actions'
+                )
+                   OR (
+                     type IN ('index', 'trigger')
+                     AND tbl_name IN (
+                       'runtime_control_authenticated_observations',
+                       'runtime_control_user_actions',
+                       'runtime_control_checkpoints'
+                     )
+                     AND NOT (
+                       name LIKE 'sqlite_autoindex_%' AND sql IS NULL
+                     )
+                   )
+                   OR (
+                     type = 'trigger' AND tbl_name = 'runtime_control_runs'
+                   )
                 """
             )
         )

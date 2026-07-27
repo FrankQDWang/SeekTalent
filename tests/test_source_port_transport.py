@@ -30,10 +30,15 @@ from seektalent.source_port.authenticated_verify_session_frames import (
     ReceivedVerifySessionSubmit,
     ReceivedVerifySessionReconcileRequired,
     VerifySessionRejectedV1,
+    require_authenticated_verify_session_result,
 )
 from seektalent.source_port.command_journal import create_command_journal, open_command_journal
 from seektalent.source_port.history_contract import SourceHistoryMatched, SourceHistoryNotFound
-from seektalent.source_port.verify_session_contract import VerifySessionRequestV1, VerifySessionResultV1
+from seektalent.source_port.verify_session_contract import (
+    VerifySessionRequestV1,
+    VerifySessionResultV1,
+    verify_session_request_semantic_digest,
+)
 from seektalent.source_port.verify_session_journal_effect import create_verify_session_journal_effect_composition
 import seektalent.source_port.verify_session_journal_effect as journal_effect
 from seektalent.release_manifest import parse_release_manifest
@@ -464,6 +469,15 @@ def test_real_ready_pipe_writes_the_accepted_ack_before_the_deterministic_wtscli
         assert len(terminal_messages) == 1
         assert isinstance(terminal_messages[0], ReceivedVerifySessionResult)
         assert terminal_messages[0].payload.session_readiness == "ready"
+        authenticated = require_authenticated_verify_session_result(
+            terminal_messages[0]
+        )
+        assert authenticated.dispatch_authorization == (
+            request.delivery.authorization
+        )
+        assert authenticated.request_semantic_digest == (
+            verify_session_request_semantic_digest(request)
+        )
         assert verify_writes_recorded.wait(1)
         assert len(verify_write_deadlines) == 2
         assert verify_write_deadlines[0] == verify_write_deadlines[1]

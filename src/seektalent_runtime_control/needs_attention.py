@@ -196,18 +196,31 @@ def commit_needs_attention(
                 checkpoint_hash, candidate_truth_hash, entry_observation_ref,
                 entry_observation_digest, accepted_requirement_revision_id,
                 runtime_attempt_no, runtime_attempt_fence_ref, request_hash,
+                entry_request_semantic_digest,
                 profile_binding_generation, browser_control_scope_id,
                 source_ledger_revision, source_reconciliation_revision,
+                entry_dispatch_authorization_ordinal,
                 dispatch_intent_id, dispatch_intent_digest,
                 source_operation_acceptance_ref,
                 reconciliation_id, reconciliation_digest, failure_id,
                 failure_revision, status, resolution_evidence_ref,
-                resolution_binding_digest, resolution_at, authority_mode,
+                resolution_binding_digest, resolution_operation_id,
+                resolution_result_digest,
+                resolution_request_hash,
+                resolution_request_semantic_digest,
+                resolution_runtime_attempt_fence_ref,
+                resolution_dispatch_authorization_ordinal,
+                resolution_reconciliation_id,
+                resolution_reconciliation_digest,
+                resolution_source_ledger_revision,
+                resolution_source_reconciliation_revision,
+                resolution_at, authority_mode,
                 owner_lease_id, created_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?,
-                    'pending', NULL, NULL, NULL, ?, ?, ?)
+                    ?, ?, ?, ?,
+                    'pending', NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL,
+                    NULL, NULL, NULL, NULL, NULL, ?, ?, ?)
             """,
             (
                 action_id,
@@ -226,10 +239,12 @@ def commit_needs_attention(
                 data.runtime_attempt_no,
                 data.runtime_attempt_fence_ref,
                 data.request_hash,
+                data.request_semantic_digest,
                 data.profile_binding_generation,
                 data.browser_control_scope_id,
                 data.source_ledger_revision,
                 data.source_reconciliation_revision,
+                data.dispatch_authorization_ordinal,
                 data.dispatch_intent_id,
                 data.dispatch_intent_digest,
                 data.source_operation_acceptance_ref,
@@ -512,6 +527,7 @@ def _exit_needs_attention(
                 resolution_binding_digest=resolution_binding_digest,
                 resolved_at=resolved_at,
                 failed_envelope=failed_envelope,
+                satisfaction=satisfaction,
             )
             conn.commit()
             return replay
@@ -536,7 +552,7 @@ def _exit_needs_attention(
             if (
                 satisfaction.action
                 != _canonical_action_from_row(action_row)
-                or satisfaction.operation_id != action_row["operation_id"]
+                or satisfaction.operation_id == action_row["operation_id"]
                 or satisfaction.checkpoint_id != action_row["checkpoint_id"]
             ):
                 raise RuntimeControlError(
@@ -569,13 +585,62 @@ def _exit_needs_attention(
             """
             UPDATE runtime_control_user_actions
             SET status = ?, resolution_evidence_ref = ?,
-                resolution_binding_digest = ?, resolution_at = ?
+                resolution_binding_digest = ?,
+                resolution_operation_id = ?,
+                resolution_result_digest = ?,
+                resolution_request_hash = ?,
+                resolution_request_semantic_digest = ?,
+                resolution_runtime_attempt_fence_ref = ?,
+                resolution_dispatch_authorization_ordinal = ?,
+                resolution_reconciliation_id = ?,
+                resolution_reconciliation_digest = ?,
+                resolution_source_ledger_revision = ?,
+                resolution_source_reconciliation_revision = ?,
+                resolution_at = ?
             WHERE action_id = ? AND runtime_run_id = ? AND status = 'pending'
             """,
             (
                 action_status,
                 resolution_evidence_ref,
                 resolution_binding_digest,
+                None if satisfaction is None else satisfaction.operation_id,
+                None if satisfaction is None else satisfaction.result_digest,
+                None if satisfaction is None else satisfaction.request_hash,
+                (
+                    None
+                    if satisfaction is None
+                    else satisfaction.request_semantic_digest
+                ),
+                (
+                    None
+                    if satisfaction is None
+                    else satisfaction.runtime_attempt_fence_ref
+                ),
+                (
+                    None
+                    if satisfaction is None
+                    else satisfaction.dispatch_authorization_ordinal
+                ),
+                (
+                    None
+                    if satisfaction is None
+                    else satisfaction.reconciliation_id
+                ),
+                (
+                    None
+                    if satisfaction is None
+                    else satisfaction.reconciliation_digest
+                ),
+                (
+                    None
+                    if satisfaction is None
+                    else satisfaction.source_ledger_revision
+                ),
+                (
+                    None
+                    if satisfaction is None
+                    else satisfaction.source_reconciliation_revision
+                ),
                 resolved_at,
                 action_id,
                 runtime_run_id,
@@ -664,12 +729,29 @@ def validate_needs_attention_row(
 ) -> None:
     _validate_action_history(conn, row)
     if row["status"] != "needs_attention":
+        foreign_failure_truth = (
+            row["product_outcome"] != "failed"
+            and any(
+                row[name] is not None
+                for name in (
+                    "current_failure_id",
+                    "current_failure_revision",
+                    "current_failure_owner_lease_id",
+                    "current_failure_authority_mode",
+                )
+            )
+        )
         if (
             row["product_outcome"] == "needs_attention"
             or row["current_action_id"] is not None
+            or foreign_failure_truth
         ):
             raise RuntimeControlError(
-                "runtime_needs_attention_integrity_failed"
+                (
+                    "runtime_failed_outcome_integrity_failed"
+                    if foreign_failure_truth
+                    else "runtime_needs_attention_integrity_failed"
+                )
             )
         return
     state_revision = row["state_revision"]
@@ -776,20 +858,47 @@ def _validate_action_history(
             )
         for action_row in actions:
             status = action_row["status"]
-            resolution_values = (
+            resolution_common = (
                 action_row["resolution_evidence_ref"],
                 action_row["resolution_binding_digest"],
                 action_row["resolution_at"],
+            )
+            satisfaction_values = (
+                action_row["resolution_operation_id"],
+                action_row["resolution_result_digest"],
+                action_row["resolution_request_hash"],
+                action_row["resolution_request_semantic_digest"],
+                action_row["resolution_runtime_attempt_fence_ref"],
+                action_row["resolution_dispatch_authorization_ordinal"],
+                action_row["resolution_reconciliation_id"],
+                action_row["resolution_reconciliation_digest"],
+                action_row["resolution_source_ledger_revision"],
+                action_row["resolution_source_reconciliation_revision"],
             )
             if (
                 status not in {"pending", "resolved", "cancelled", "failed"}
                 or (
                     status == "pending"
-                    and any(value is not None for value in resolution_values)
+                    and any(
+                        value is not None
+                        for value in (*resolution_common, *satisfaction_values)
+                    )
                 )
                 or (
-                    status != "pending"
-                    and any(value is None for value in resolution_values)
+                    status == "resolved"
+                    and any(
+                        value is None
+                        for value in (*resolution_common, *satisfaction_values)
+                    )
+                )
+                or (
+                    status in {"cancelled", "failed"}
+                    and (
+                        any(value is None for value in resolution_common)
+                        or any(
+                            value is not None for value in satisfaction_values
+                        )
+                    )
                 )
                 or action_row["authority_mode"]
                 not in {"no_owner", "active_owner"}
@@ -813,22 +922,24 @@ def _validate_action_history(
                 SELECT *
                 FROM runtime_control_source_operation_admission_expectations
                 WHERE runtime_run_id = ? AND operation_id = ?
-                  AND dispatch_authorization_ordinal = 1
+                  AND dispatch_authorization_ordinal = ?
                 """,
                 (
                     action_row["runtime_run_id"],
                     action_row["operation_id"],
+                    action_row["entry_dispatch_authorization_ordinal"],
                 ),
             ).fetchone()
             dispatch = conn.execute(
                 """
                 SELECT * FROM runtime_control_source_dispatch_outbox
                 WHERE runtime_run_id = ? AND operation_id = ?
-                  AND dispatch_authorization_ordinal = 1
+                  AND dispatch_authorization_ordinal = ?
                 """,
                 (
                     action_row["runtime_run_id"],
                     action_row["operation_id"],
+                    action_row["entry_dispatch_authorization_ordinal"],
                 ),
             ).fetchone()
             if (
@@ -839,22 +950,22 @@ def _validate_action_history(
                 or operation is None
                 or expectation is None
                 or dispatch is None
+                or expectation["dispatch_authorization_ordinal"]
+                != action_row["entry_dispatch_authorization_ordinal"]
+                or dispatch["dispatch_authorization_ordinal"]
+                != action_row["entry_dispatch_authorization_ordinal"]
                 or operation["source_id"] != "liepin"
                 or operation["operation_kind"] != "verify_session"
                 or operation["canonical_request_hash"]
                 != action_row["request_hash"]
                 or operation["accepted_requirement_revision_id"]
                 != action_row["accepted_requirement_revision_id"]
-                or operation["runtime_attempt_no"]
-                != action_row["runtime_attempt_no"]
                 or operation["ledger_revision"]
                 != action_row["source_ledger_revision"]
                 or operation["reconciliation_revision"]
                 != action_row["source_reconciliation_revision"]
                 or expectation["runtime_attempt_no"]
                 != action_row["runtime_attempt_no"]
-                or expectation["runtime_attempt_authority_ref"]
-                != operation["runtime_attempt_authority_ref"]
                 or expectation["runtime_attempt_fence_ref"]
                 != action_row["runtime_attempt_fence_ref"]
                 or expectation["profile_binding_generation"]
@@ -897,6 +1008,8 @@ def _validate_action_history(
                 or observation["runtime_attempt_fence_ref"]
                 != action_row["runtime_attempt_fence_ref"]
                 or observation["request_hash"] != action_row["request_hash"]
+                or observation["request_semantic_digest"]
+                != action_row["entry_request_semantic_digest"]
                 or observation["profile_binding_generation"]
                 != action_row["profile_binding_generation"]
                 or observation["browser_control_scope_id"]
@@ -906,6 +1019,14 @@ def _validate_action_history(
                     _canonical_json(action.model_dump(mode="json"))
                 ).hexdigest()
                 or observation["session_readiness"] != "not_ready"
+                or observation["dispatch_authorization_ordinal"]
+                != action_row["entry_dispatch_authorization_ordinal"]
+                or observation["dispatch_intent_id"]
+                != action_row["dispatch_intent_id"]
+                or observation["dispatch_intent_digest"]
+                != action_row["dispatch_intent_digest"]
+                or observation["source_operation_acceptance_ref"]
+                != action_row["source_operation_acceptance_ref"]
                 or dispatch["expected_ledger_revision"]
                 != observation["expected_ledger_revision"]
                 or dispatch["expected_reconciliation_revision"]
@@ -922,6 +1043,7 @@ def _validate_action_history(
             if (
                 envelope.run_id != action_row["runtime_run_id"]
                 or envelope.operation_id != action_row["operation_id"]
+                or envelope.attempt_no != action_row["runtime_attempt_no"]
                 or envelope.current_outcome != "needs_attention"
                 or envelope.user_action != action
                 or envelope.reason_code != "user_action_required"
@@ -964,10 +1086,13 @@ def _validate_action_history(
                     != sha256(
                         _canonical_json(dict(reconciliation))
                     ).hexdigest()
-                    or reconciliation["history_result_digest"]
-                    != action_row["entry_observation_digest"]
+                    or reconciliation["history_result_ref"]
+                    != "sha256:" + reconciliation["history_result_digest"]
+                    or reconciliation["reconciliation_id"]
+                    != "source-history-"
+                    + reconciliation["history_result_digest"]
                     or reconciliation["conclusive_observation_ref"]
-                    != action_row["entry_observation_ref"]
+                    != action_row["entry_observation_digest"]
                     or reconciliation["runtime_run_id"]
                     != action_row["runtime_run_id"]
                     or reconciliation["operation_id"]
@@ -994,16 +1119,78 @@ def _validate_action_history(
                     conn,
                     action_row["resolution_evidence_ref"],
                 )
+                resolution_operation = conn.execute(
+                    """
+                    SELECT * FROM runtime_control_source_operations
+                    WHERE runtime_run_id = ? AND operation_id = ?
+                    """,
+                    (
+                        action_row["runtime_run_id"],
+                        action_row["resolution_operation_id"],
+                    ),
+                ).fetchone()
+                resolution_expectation = conn.execute(
+                    """
+                    SELECT *
+                    FROM runtime_control_source_operation_admission_expectations
+                    WHERE runtime_run_id = ? AND operation_id = ?
+                      AND dispatch_authorization_ordinal = ?
+                    """,
+                    (
+                        action_row["runtime_run_id"],
+                        action_row["resolution_operation_id"],
+                        action_row[
+                            "resolution_dispatch_authorization_ordinal"
+                        ],
+                    ),
+                ).fetchone()
+                resolution_dispatch = conn.execute(
+                    """
+                    SELECT * FROM runtime_control_source_dispatch_outbox
+                    WHERE runtime_run_id = ? AND operation_id = ?
+                      AND dispatch_authorization_ordinal = ?
+                    """,
+                    (
+                        action_row["runtime_run_id"],
+                        action_row["resolution_operation_id"],
+                        action_row[
+                            "resolution_dispatch_authorization_ordinal"
+                        ],
+                    ),
+                ).fetchone()
+                resolution_reconciliation = conn.execute(
+                    """
+                    SELECT * FROM runtime_control_source_reconciliations
+                    WHERE reconciliation_id = ?
+                    """,
+                    (action_row["resolution_reconciliation_id"],),
+                ).fetchone()
                 if (
                     resolution_observation is None
+                    or resolution_operation is None
+                    or resolution_expectation is None
+                    or resolution_dispatch is None
+                    or resolution_reconciliation is None
                     or resolution_observation["session_readiness"] != "ready"
                     or resolution_observation["action_digest"] is not None
                     or resolution_observation["runtime_run_id"]
                     != action_row["runtime_run_id"]
                     or resolution_observation["operation_id"]
-                    != action_row["operation_id"]
+                    != action_row["resolution_operation_id"]
+                    or resolution_observation["operation_id"]
+                    == action_row["operation_id"]
+                    or resolution_observation["result_digest"]
+                    != action_row["resolution_result_digest"]
+                    or resolution_observation[
+                        "dispatch_authorization_ordinal"
+                    ]
+                    != action_row["resolution_dispatch_authorization_ordinal"]
                     or resolution_observation["request_hash"]
-                    != action_row["request_hash"]
+                    != action_row["resolution_request_hash"]
+                    or resolution_observation["request_semantic_digest"]
+                    != action_row["resolution_request_semantic_digest"]
+                    or resolution_observation["request_semantic_digest"]
+                    != action_row["entry_request_semantic_digest"]
                     or resolution_observation[
                         "accepted_requirement_revision_id"
                     ]
@@ -1011,7 +1198,7 @@ def _validate_action_history(
                     or resolution_observation["runtime_attempt_no"]
                     != action_row["runtime_attempt_no"]
                     or resolution_observation["runtime_attempt_fence_ref"]
-                    != action_row["runtime_attempt_fence_ref"]
+                    != action_row["resolution_runtime_attempt_fence_ref"]
                     or resolution_observation[
                         "profile_binding_generation"
                     ]
@@ -1026,9 +1213,63 @@ def _validate_action_history(
                         "actual_profile_binding_generation"
                     ]
                     < observation["actual_profile_binding_generation"]
+                    or resolution_operation["operation_phase"] != "reconciled"
+                    or resolution_operation["canonical_request_hash"]
+                    != action_row["resolution_request_hash"]
+                    or resolution_operation["source_operation_disposition"]
+                    != "completed"
+                    or resolution_operation["retry_posture"] != "no_retry"
+                    or resolution_operation["ledger_revision"]
+                    != action_row["resolution_source_ledger_revision"]
+                    or resolution_operation["reconciliation_revision"]
+                    != action_row[
+                        "resolution_source_reconciliation_revision"
+                    ]
+                    or resolution_expectation["runtime_attempt_fence_ref"]
+                    != action_row["resolution_runtime_attempt_fence_ref"]
+                    or resolution_expectation["profile_binding_generation"]
+                    != action_row["profile_binding_generation"]
+                    or resolution_expectation["browser_control_scope_id"]
+                    != action_row["browser_control_scope_id"]
+                    or resolution_dispatch["dispatch_intent_id"]
+                    != resolution_observation["dispatch_intent_id"]
+                    or resolution_dispatch["canonical_request_hash"]
+                    != action_row["resolution_request_hash"]
+                    or resolution_dispatch["dispatch_intent_digest"]
+                    != resolution_observation["dispatch_intent_digest"]
+                    or resolution_dispatch["source_operation_acceptance_ref"]
+                    != resolution_observation[
+                        "source_operation_acceptance_ref"
+                    ]
+                    or resolution_reconciliation["runtime_run_id"]
+                    != action_row["runtime_run_id"]
+                    or resolution_reconciliation["operation_id"]
+                    != action_row["resolution_operation_id"]
+                    or resolution_reconciliation["canonical_request_hash"]
+                    != action_row["resolution_request_hash"]
+                    or resolution_reconciliation[
+                        "source_operation_disposition"
+                    ]
+                    != "completed"
+                    or resolution_reconciliation["retry_posture"] != "no_retry"
+                    or resolution_reconciliation[
+                        "conclusive_observation_ref"
+                    ]
+                    != action_row["resolution_result_digest"]
+                    or resolution_reconciliation["history_result_ref"]
+                    != "sha256:"
+                    + resolution_reconciliation["history_result_digest"]
+                    or resolution_reconciliation["reconciliation_id"]
+                    != "source-history-"
+                    + resolution_reconciliation["history_result_digest"]
+                    or sha256(
+                        _canonical_json(dict(resolution_reconciliation))
+                    ).hexdigest()
+                    != action_row["resolution_reconciliation_digest"]
                     or _satisfaction_binding_digest(
                         action_row=action_row,
                         observation_row=resolution_observation,
+                        reconciliation_row=resolution_reconciliation,
                     )
                     != action_row["resolution_binding_digest"]
                 ):
@@ -1116,7 +1357,8 @@ def _require_needs_attention_envelope(
         or envelope.user_action != data.action
         or envelope.reason_code != "user_action_required"
         or envelope.occurred_at != entered_at
-        or (attempt_no is not None and envelope.attempt_no != attempt_no)
+        or envelope.attempt_no != data.runtime_attempt_no
+        or (attempt_no is not None and attempt_no != data.runtime_attempt_no)
     ):
         raise RuntimeControlError(
             "runtime_needs_attention_envelope_mismatch"
@@ -1233,6 +1475,7 @@ def _require_exit_replay(
     resolution_binding_digest: str,
     resolved_at: str,
     failed_envelope: FailureEnvelopeV1 | None,
+    satisfaction: _ActionSatisfactionData | None,
 ) -> sqlite3.Row:
     expected_outcome = None if target_status == "resume_requested" else target_status
     if (
@@ -1245,6 +1488,31 @@ def _require_exit_replay(
         != resolution_binding_digest
         or action_row["resolution_at"] != resolved_at
         or _active_lease_row(conn, row["runtime_run_id"]) is not None
+        or (
+            satisfaction is not None
+            and (
+                action_row["resolution_operation_id"]
+                != satisfaction.operation_id
+                or action_row["resolution_result_digest"]
+                != satisfaction.result_digest
+                or action_row["resolution_request_hash"]
+                != satisfaction.request_hash
+                or action_row["resolution_request_semantic_digest"]
+                != satisfaction.request_semantic_digest
+                or action_row["resolution_runtime_attempt_fence_ref"]
+                != satisfaction.runtime_attempt_fence_ref
+                or action_row["resolution_dispatch_authorization_ordinal"]
+                != satisfaction.dispatch_authorization_ordinal
+                or action_row["resolution_reconciliation_id"]
+                != satisfaction.reconciliation_id
+                or action_row["resolution_reconciliation_digest"]
+                != satisfaction.reconciliation_digest
+                or action_row["resolution_source_ledger_revision"]
+                != satisfaction.source_ledger_revision
+                or action_row["resolution_source_reconciliation_revision"]
+                != satisfaction.source_reconciliation_revision
+            )
+        )
     ):
         raise RuntimeControlError(
             "runtime_needs_attention_replay_conflict"
