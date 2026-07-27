@@ -423,6 +423,14 @@ def validate_failed_outcome_row(
     )
     if outcome_truth == (None, None, None, None, None):
         return
+    if row["product_outcome"] in {
+        "needs_attention",
+        "cancelled",
+        "succeeded_with_results",
+        "succeeded_empty",
+        "degraded_with_results",
+    }:
+        return
     try:
         active_lease_present = (
             _active_lease_row(conn, row["runtime_run_id"]) is not None
@@ -742,6 +750,7 @@ def require_run_truth_mutable(row: sqlite3.Row) -> None:
         or row["current_failure_revision"] is not None
         or row["current_failure_owner_lease_id"] is not None
         or row["current_failure_authority_mode"] is not None
+        or row["current_action_id"] is not None
     ):
         raise RuntimeControlError("runtime_failed_outcome_terminal_immutable")
 

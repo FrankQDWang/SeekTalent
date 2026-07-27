@@ -10,6 +10,7 @@ from seektalent.diagnostics_scalar import (
     ScalarContract,
     enum_values,
 )
+from seektalent.user_action import USER_ACTION_INSTRUCTIONS as USER_ACTION_INSTRUCTIONS
 
 
 COMPONENTS = frozenset(
@@ -134,11 +135,6 @@ if set(EXTERNAL_CAUSE_REASONS) != set(CAUSE_CODES):
     raise RuntimeError("diagnostics_external_cause_registry_incomplete")
 
 DIAGNOSTIC_GAP_REASONS = frozenset({"diagnostic_gap_detected", "external_trace_rejected"})
-USER_ACTION_INSTRUCTIONS = {
-    "reauthenticate": "provider.reauthenticate",
-    "restart_component": "component.restart",
-    "retry_later": "operation.retry_later",
-}
 SUPPORT_ACTION_INSTRUCTIONS = {
     "contact_support": "support.contact",
     "collect_diagnostics": "support.collect_diagnostics",

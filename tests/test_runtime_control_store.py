@@ -67,7 +67,7 @@ def test_populated_v7_migrates_to_v12_with_readable_backup_and_reopens(tmp_path:
     backups = list((tmp_path / "migration_backups").glob("runtime-control-*.sqlite3"))
     assert len(backups) == 1
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == RUNTIME_CONTROL_SCHEMA_VERSION == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == RUNTIME_CONTROL_SCHEMA_VERSION == 15
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_events").fetchone()[0] == 1
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
@@ -118,7 +118,7 @@ def test_v7_to_v8_statement_failure_rolls_back_ddl_and_user_version(
     monkeypatch.setattr(store_module, "_SOURCE_OPERATION_V8_SCHEMA_STATEMENTS", statements)
     store.initialize()
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
 
 
 @pytest.mark.parametrize("completed_statements", [1, 2, 3])
@@ -148,7 +148,7 @@ def test_real_v1_to_v8_source_schema_failure_stops_at_clean_v7(
     monkeypatch.setattr(store_module, "_SOURCE_OPERATION_V8_SCHEMA_STATEMENTS", statements)
     RuntimeControlStore(db_path).initialize()
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_events").fetchone()[0] == 1
 
@@ -174,7 +174,7 @@ def test_populated_v8_migrates_to_v12_with_readable_backup_and_reopens(tmp_path:
     backups = list((tmp_path / "migration_backups").glob("runtime-control-*.sqlite3"))
     assert len(backups) == 1
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == RUNTIME_CONTROL_SCHEMA_VERSION == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == RUNTIME_CONTROL_SCHEMA_VERSION == 15
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_operations").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_dispatch_outbox").fetchone()[0] == 1
@@ -219,7 +219,7 @@ def test_v8_to_v9_statement_failure_rolls_back_ddl_and_user_version(
     monkeypatch.setattr(store_module, "_SOURCE_RECONCILIATION_SCHEMA_STATEMENTS", statements)
     store.initialize()
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_runs").fetchone()[0] == 1
 
 
@@ -245,7 +245,7 @@ def test_populated_v9_migrates_to_v12_without_inventing_expectations(tmp_path: P
     backups = list((tmp_path / "migration_backups").glob("runtime-control-*.sqlite3"))
     assert len(backups) == 1
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == RUNTIME_CONTROL_SCHEMA_VERSION == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == RUNTIME_CONTROL_SCHEMA_VERSION == 15
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_operations").fetchone()[0] == 1
         assert conn.execute("SELECT COUNT(*) FROM runtime_control_source_dispatch_outbox").fetchone()[0] == 1
         assert (
@@ -298,7 +298,7 @@ def test_v9_to_v10_statement_failure_rolls_back_ddl_and_user_version(
     )
     store.initialize()
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
 
 
 def test_v7_to_v9_second_phase_failure_rolls_back_both_source_schemas(
@@ -333,7 +333,7 @@ def test_v7_to_v9_second_phase_failure_rolls_back_both_source_schemas(
     monkeypatch.setattr(store_module, "_SOURCE_RECONCILIATION_SCHEMA_STATEMENTS", statements)
     store.initialize()
     with sqlite3.connect(db_path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     assert {
         "runtime_control_source_operations",

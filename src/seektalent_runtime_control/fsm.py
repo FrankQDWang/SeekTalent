@@ -8,24 +8,26 @@ TERMINAL_RUN_STATUSES: frozenset[str] = frozenset({"cancelled", "completed", "fa
 
 _ALLOWED_TRANSITIONS: dict[str, frozenset[str]] = {
     "queued": frozenset({"queued", "starting", "cancellation_requested", "cancelled", "failed"}),
-    "starting": frozenset({"starting", "running", "cancellation_requested", "cancelled", "failed"}),
+    "starting": frozenset({"starting", "running", "needs_attention", "cancellation_requested", "cancelled", "failed"}),
     "running": frozenset(
         {
             "running",
             "pause_requested",
             "paused",
             "resume_requested",
+            "needs_attention",
             "cancellation_requested",
             "cancelled",
             "completed",
             "failed",
         }
     ),
-    "pause_requested": frozenset({"pause_requested", "paused", "cancellation_requested", "cancelled", "failed"}),
+    "pause_requested": frozenset({"pause_requested", "paused", "needs_attention", "cancellation_requested", "cancelled", "failed"}),
     "paused": frozenset({"paused", "resume_requested", "cancellation_requested", "cancelled", "failed"}),
     "resume_requested": frozenset(
-        {"resume_requested", "starting", "running", "pause_requested", "cancellation_requested", "cancelled", "failed"}
+        {"resume_requested", "starting", "running", "pause_requested", "needs_attention", "cancellation_requested", "cancelled", "failed"}
     ),
+    "needs_attention": frozenset({"needs_attention", "resume_requested", "cancelled", "failed"}),
     "cancellation_requested": frozenset({"cancellation_requested", "cancelled", "failed"}),
     "cancelled": frozenset({"cancelled"}),
     "completed": frozenset({"completed"}),
@@ -59,6 +61,8 @@ def require_run_transition(current_status: str, target_status: str) -> RunStatus
         return "paused"
     if target_status == "resume_requested":
         return "resume_requested"
+    if target_status == "needs_attention":
+        return "needs_attention"
     if target_status == "cancellation_requested":
         return "cancellation_requested"
     if target_status == "cancelled":

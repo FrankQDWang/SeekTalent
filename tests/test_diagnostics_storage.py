@@ -37,6 +37,15 @@ def _initialized_path(tmp_path: Path) -> Path:
 
 def _downgrade_v14_run_columns_to_v13(path: Path) -> None:
     with sqlite3.connect(path) as conn:
+        conn.execute("DROP TRIGGER runtime_user_actions_delete_forbidden")
+        conn.execute("DROP TRIGGER runtime_user_actions_one_way_resolution")
+        conn.execute("DROP TRIGGER runtime_user_actions_immutable_binding")
+        conn.execute("DROP INDEX idx_runtime_user_actions_run_created")
+        conn.execute("DROP INDEX idx_runtime_user_actions_one_pending")
+        conn.execute("DROP TABLE runtime_control_user_actions")
+        conn.execute(
+            "ALTER TABLE runtime_control_runs DROP COLUMN current_action_id"
+        )
         conn.execute(
             "ALTER TABLE runtime_control_runs "
             "DROP COLUMN current_failure_authority_mode"
@@ -80,7 +89,7 @@ def test_fresh_runtime_control_schema_v14_owns_failure_envelope_table(
             )
         }
 
-    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 14
+    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 15
     assert {
         "failure_id",
         "revision",
@@ -125,7 +134,7 @@ def test_real_v13_to_v14_migration_matches_fresh_schema_and_reopens(
         fresh_version = fresh.execute("PRAGMA user_version").fetchone()[0]
 
     assert migrated_columns == fresh_columns
-    assert migrated_version == fresh_version == 14
+    assert migrated_version == fresh_version == 15
 
 
 def test_v13_failure_envelope_migration_orders_interleaved_lineages(
@@ -247,7 +256,7 @@ def test_v13_failure_envelope_column_shape_fails_closed_and_retries(
 
     RuntimeControlStore(path).initialize()
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
@@ -385,7 +394,7 @@ def test_v13_partial_outcome_schema_fails_closed_and_is_retryable(
 
     RuntimeControlStore(path).initialize()
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
@@ -440,7 +449,7 @@ def test_fresh_v14_outcome_ddl_failure_rolls_back_and_retries(
     )
     RuntimeControlStore(path).initialize()
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
@@ -489,7 +498,7 @@ def test_v13_to_v14_outcome_ddl_failure_rolls_back_and_retries(
     )
     RuntimeControlStore(path).initialize()
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
@@ -572,7 +581,7 @@ def test_v13_legacy_outcome_row_fails_closed_without_alias_migration(
 
     RuntimeControlStore(path).initialize()
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
 
 
 @pytest.mark.parametrize("claimed_version", (13, 14))
@@ -693,7 +702,7 @@ def test_poisoned_complete_failed_outcome_schema_fails_closed_before_version_bum
 
     RuntimeControlStore(path).initialize()
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
 
 
 @pytest.mark.parametrize("completed_statements", (1, 2, 3))
@@ -736,7 +745,7 @@ def test_fresh_failure_envelope_ddl_failure_rolls_back_and_retries(
     RuntimeControlStore(path).initialize()
 
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
         assert (
             conn.execute(
                 """
@@ -773,7 +782,7 @@ def test_real_v12_to_v13_migration_creates_backup_and_reopens(
     backups = list((tmp_path / "migration_backups").glob("runtime-control-*.sqlite3"))
     assert len(backups) == 1
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
         assert (
             conn.execute(
                 "SELECT COUNT(*) FROM runtime_control_failure_envelope_revisions"
@@ -1554,10 +1563,13 @@ def test_failure_envelope_writer_has_only_the_main_owned_atomic_boundary() -> No
                 )
             ):
                 callers.append(f"{path.relative_to(root)}:{node.lineno}")
-    assert len(callers) == 1
-    assert callers[0].startswith(
-        "seektalent_runtime_control/failed_outcome.py:"
-    )
+    assert len(callers) == 3
+    assert {
+        caller.split(":", 1)[0] for caller in callers
+    } == {
+        "seektalent_runtime_control/failed_outcome.py",
+        "seektalent_runtime_control/needs_attention.py",
+    }
 
 
 def test_production_failed_outcome_callers_remain_zero() -> None:

@@ -14,6 +14,7 @@ RunStatus = Literal[
     "running",
     "pause_requested",
     "paused",
+    "needs_attention",
     "resume_requested",
     "cancellation_requested",
     "cancelled",
@@ -52,6 +53,7 @@ class RuntimeRunRecord(BaseModel):
         "no_owner",
         "active_owner",
     ] | None = None
+    current_action_id: str | None = None
     state_revision: int = 0
 
 
@@ -228,6 +230,29 @@ class RuntimeCheckpoint(BaseModel):
     pending_commands: list[dict[str, object]] = Field(default_factory=list)
     artifact_manifest_ref: str | None = None
     schema_version: str
+    created_at: str
+
+
+class RuntimeUserAction(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    action_id: str
+    runtime_run_id: str
+    action_code: str
+    instruction_key: str
+    action_scope: str
+    affected_scope_ref: str
+    operation_id: str
+    checkpoint_id: str
+    checkpoint_hash: str
+    candidate_truth_hash: str
+    failure_id: str
+    failure_revision: int
+    status: Literal["pending", "resolved", "cancelled", "failed"]
+    resolution_evidence_ref: str | None = None
+    resolution_at: str | None = None
+    authority_mode: Literal["no_owner", "active_owner"]
+    owner_lease_id: str | None = None
     created_at: str
 
 

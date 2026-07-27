@@ -39,6 +39,9 @@ from seektalent_runtime_control.checkpoint_recovery import (
     decide_expired_lease_recovery,
     validate_recoverable_checkpoint,
 )
+from seektalent_runtime_control.checkpoint_participant import (
+    write_checkpoint_participant,
+)
 from seektalent_runtime_control.clock import max_iso_timestamp, timestamp_lte
 from seektalent_runtime_control.errors import RuntimeControlError, RuntimeControlLookupError
 from seektalent_runtime_control.failed_outcome import (
@@ -49,6 +52,14 @@ from seektalent_runtime_control.failed_outcome import (
     validate_failed_outcome_schema,
 )
 from seektalent_runtime_control.fsm import require_run_transition
+from seektalent_runtime_control.needs_attention import (
+    migrate_needs_attention_v14_to_v15,
+    validate_needs_attention_row,
+    validate_needs_attention_schema,
+)
+from seektalent_runtime_control.needs_attention_store import (
+    NeedsAttentionStoreMixin,
+)
 from seektalent_runtime_control.models import (
     RuntimeCheckpoint,
     RuntimeControlCandidateEvidence,
@@ -130,7 +141,7 @@ from seektalent_runtime_control.source_reconciliation import (
 from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
 
 
-RUNTIME_CONTROL_SCHEMA_VERSION = 14
+RUNTIME_CONTROL_SCHEMA_VERSION = 15
 RUNTIME_CHECKPOINT_SCHEMA_VERSION = "runtime-control-checkpoint/v1"
 RUNTIME_CONTROL_EVENT_SCHEMA_VERSION = "runtime-control-event/v1"
 MAX_RUNTIME_CONTROL_JSON_BYTES = 16 * 1024
@@ -156,7 +167,7 @@ _REQUIRED_STAGE_OUTPUT_KINDS = {
     "shortlist",
 }
 
-class RuntimeControlStore:
+class RuntimeControlStore(NeedsAttentionStoreMixin):
     def __init__(self, path: str | Path, *, busy_timeout_ms: int = 5000) -> None:
         self.path = Path(path)
         self.busy_timeout_ms = busy_timeout_ms
@@ -178,6 +189,7 @@ class RuntimeControlStore:
                 ) from exc
             if version == RUNTIME_CONTROL_SCHEMA_VERSION:
                 validate_failed_outcome_schema(conn)
+                validate_needs_attention_schema(conn)
                 return
             if version > 0:
                 backup_sqlite_before_migration(
@@ -204,7 +216,7 @@ class RuntimeControlStore:
                 run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                 conn.commit()
                 version = 7
-            if version in {7, 8, 9, 10, 11, 12, 13}:
+            if version in {7, 8, 9, 10, 11, 12, 13, 14}:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
                     if version == 7:
@@ -235,6 +247,11 @@ class RuntimeControlStore:
                         migrate_failure_envelope_schema_v13_to_v14(conn)
                         migrate_failed_outcome_v13_to_v14(conn)
                         conn.execute("PRAGMA user_version = 14")
+                        version = 14
+                    if version == 14:
+                        validate_failed_outcome_schema(conn)
+                        migrate_needs_attention_v14_to_v15(conn)
+                        conn.execute("PRAGMA user_version = 15")
                     run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                     conn.commit()
                 except Exception:
@@ -249,6 +266,7 @@ class RuntimeControlStore:
                 with conn:
                     create_failure_envelope_schema(conn)
                     migrate_failed_outcome_v13_to_v14(conn)
+                    migrate_needs_attention_v14_to_v15(conn)
                     conn.execute(f"PRAGMA user_version = {RUNTIME_CONTROL_SCHEMA_VERSION}")
                     run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
 
@@ -2412,29 +2430,7 @@ class RuntimeControlStore:
                 if run_row is None:
                     raise RuntimeControlLookupError("runtime_run_not_found")
                 require_run_truth_mutable(run_row)
-                conn.execute(
-                    """
-                    INSERT INTO runtime_control_checkpoints (
-                        checkpoint_id, runtime_run_id, stage, round_no, safe_boundary,
-                        run_state_json, source_plan_json, pending_commands_json,
-                        artifact_manifest_ref, schema_version, created_at
-                    )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        checkpoint.checkpoint_id,
-                        checkpoint.runtime_run_id,
-                        checkpoint.stage,
-                        checkpoint.round_no,
-                        checkpoint.safe_boundary,
-                        _json(checkpoint.run_state),
-                        _json(checkpoint.source_plan),
-                        _json(checkpoint.pending_commands),
-                        checkpoint.artifact_manifest_ref,
-                        checkpoint.schema_version,
-                        checkpoint.created_at,
-                    ),
-                )
+                write_checkpoint_participant(conn, checkpoint)
                 updated = conn.execute(
                     """
                     UPDATE runtime_control_runs
@@ -2459,7 +2455,6 @@ class RuntimeControlStore:
                     raise RuntimeControlError(
                         "runtime_failed_outcome_terminal_immutable"
                     )
-                _sync_candidate_truth_from_checkpoint(conn, checkpoint)
                 conn.commit()
             except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
                 conn.rollback()
@@ -5777,6 +5772,7 @@ def _run_from_row(row: sqlite3.Row) -> RuntimeRunRecord:
         current_failure_authority_mode=row[
             "current_failure_authority_mode"
         ],
+        current_action_id=row["current_action_id"],
         state_revision=int(row["state_revision"]),
     )
 
@@ -5785,6 +5781,7 @@ def _validated_run_from_row(
     conn: sqlite3.Connection,
     row: sqlite3.Row,
 ) -> RuntimeRunRecord:
+    validate_needs_attention_row(conn, row)
     validate_failed_outcome_row(conn, row)
     return _run_from_row(row)
 
