@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -133,6 +134,33 @@ def test_native_probe_stays_outside_production_composition() -> None:
         assert "import seektalent" not in source
         assert "from seektalent" not in source
     assert "subprocess.Popen" not in MACOS_HELPER.read_text(encoding="utf-8")
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX executable reap proof")
+def test_native_executable_timeout_kills_and_reaps_exact_child(
+    tmp_path: Path,
+) -> None:
+    from tools.native_probes.launch_binding_common import (
+        ProbeFailure,
+        run_executable,
+    )
+
+    pid_path = tmp_path / "child.pid"
+    executable = tmp_path / "bounded-child"
+    executable.write_text(
+        "#!/bin/sh\n"
+        f"printf '%s' \"$$\" > {shlex.quote(str(pid_path))}\n"
+        "exec /bin/sleep 60\n",
+        encoding="utf-8",
+    )
+    executable.chmod(0o700)
+
+    with pytest.raises(ProbeFailure, match="bounded executable"):
+        run_executable(executable, timeout_seconds=1)
+
+    pid = int(pid_path.read_text(encoding="utf-8"))
+    with pytest.raises(ProcessLookupError):
+        os.kill(pid, 0)
 
 
 def test_native_workflow_has_the_three_fixed_native_hosts() -> None:

@@ -117,6 +117,31 @@ _PROJECTION_FIELDS = (
     "occurred_at",
     "observed_at",
 )
+_STORAGE_COLUMNS = (
+    "failure_id",
+    "revision",
+    "canonical_bytes",
+    "canonical_sha256",
+    *_PROJECTION_FIELDS[2:],
+)
+_STORAGE_COLUMN_LIST = ", ".join(_STORAGE_COLUMNS)
+_STORAGE_COLUMN_FACTS = (
+    ("failure_id", "TEXT", 1, None, 1, 0),
+    ("revision", "INTEGER", 1, None, 2, 0),
+    ("canonical_bytes", "BLOB", 1, None, 0, 0),
+    ("canonical_sha256", "TEXT", 1, None, 0, 0),
+    ("run_id", "TEXT", 1, None, 0, 0),
+    ("operation_id", "TEXT", 0, None, 0, 0),
+    ("attempt_no", "INTEGER", 0, None, 0, 0),
+    ("correlation_id", "TEXT", 0, None, 0, 0),
+    ("component", "TEXT", 1, None, 0, 0),
+    ("domain", "TEXT", 1, None, 0, 0),
+    ("failure_kind", "TEXT", 1, None, 0, 0),
+    ("reason_code", "TEXT", 1, None, 0, 0),
+    ("current_outcome", "TEXT", 0, None, 0, 0),
+    ("occurred_at", "TEXT", 1, None, 0, 0),
+    ("observed_at", "TEXT", 1, None, 0, 0),
+)
 _COLUMN_INDEX = {
     "failure_id": 0,
     "revision": 1,
@@ -173,7 +198,30 @@ def migrate_failure_envelope_schema_v13_to_v14(
     """Replace the legacy outcome constraint without accepting legacy aliases."""
 
     try:
-        rows = conn.execute(f"SELECT * FROM {FAILURE_ENVELOPE_TABLE}").fetchall()
+        column_facts = tuple(
+            (
+                row[1],
+                row[2].upper(),
+                row[3],
+                row[4],
+                row[5],
+                row[6],
+            )
+            for row in conn.execute(
+                f"PRAGMA table_xinfo({FAILURE_ENVELOPE_TABLE})"
+            )
+        )
+        if column_facts != _STORAGE_COLUMN_FACTS:
+            raise FailureEnvelopeStorageError(
+                "failure_envelope_schema_failed"
+            )
+        rows = conn.execute(
+            f"""
+            SELECT {_STORAGE_COLUMN_LIST}
+            FROM {FAILURE_ENVELOPE_TABLE}
+            ORDER BY failure_id, revision
+            """
+        ).fetchall()
         for row in rows:
             _verified_envelope_from_row(row)
         conn.execute("DROP TRIGGER runtime_control_failure_envelopes_no_overwrite")
@@ -188,9 +236,10 @@ def migrate_failure_envelope_schema_v13_to_v14(
         create_failure_envelope_schema(conn)
         conn.execute(
             f"""
-            INSERT INTO {FAILURE_ENVELOPE_TABLE}
-            SELECT *
+            INSERT INTO {FAILURE_ENVELOPE_TABLE} ({_STORAGE_COLUMN_LIST})
+            SELECT {_STORAGE_COLUMN_LIST}
             FROM {FAILURE_ENVELOPE_TABLE}_v13
+            ORDER BY failure_id, revision
             """
         )
         conn.execute(f"DROP TABLE {FAILURE_ENVELOPE_TABLE}_v13")

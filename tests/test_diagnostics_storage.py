@@ -37,6 +37,14 @@ def _initialized_path(tmp_path: Path) -> Path:
 
 def _downgrade_v14_run_columns_to_v13(path: Path) -> None:
     with sqlite3.connect(path) as conn:
+        conn.execute(
+            "ALTER TABLE runtime_control_runs "
+            "DROP COLUMN current_failure_authority_mode"
+        )
+        conn.execute(
+            "ALTER TABLE runtime_control_runs "
+            "DROP COLUMN current_failure_owner_lease_id"
+        )
         conn.execute("ALTER TABLE runtime_control_runs DROP COLUMN product_outcome")
         conn.execute("ALTER TABLE runtime_control_runs DROP COLUMN current_failure_id")
         conn.execute(
@@ -120,6 +128,229 @@ def test_real_v13_to_v14_migration_matches_fresh_schema_and_reopens(
     assert migrated_version == fresh_version == 14
 
 
+def test_v13_failure_envelope_migration_orders_interleaved_lineages(
+    tmp_path: Path,
+) -> None:
+    from seektalent.diagnostics_storage import (
+        FAILURE_ENVELOPE_TABLE,
+        store_failure_envelope_revision,
+    )
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    migrated_path = _initialized_path(tmp_path / "migrated")
+    lineage_a = "a" * 32
+    lineage_b = "b" * 32
+    envelopes = (
+        _envelope(failure_id=lineage_a),
+        _envelope(failure_id=lineage_b),
+        _envelope(failure_id=lineage_b, revision=2),
+        _envelope(failure_id=lineage_a, revision=2),
+    )
+    with sqlite3.connect(migrated_path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        for envelope in envelopes:
+            store_failure_envelope_revision(conn, envelope)
+        conn.commit()
+        before = conn.execute(
+            f"""
+            SELECT *
+            FROM {FAILURE_ENVELOPE_TABLE}
+            ORDER BY failure_id, revision
+            """
+        ).fetchall()
+
+    _downgrade_v14_run_columns_to_v13(migrated_path)
+    RuntimeControlStore(migrated_path).initialize()
+
+    fresh_path = _initialized_path(tmp_path / "fresh")
+    with sqlite3.connect(migrated_path) as migrated, sqlite3.connect(
+        fresh_path
+    ) as fresh:
+        after = migrated.execute(
+            f"""
+            SELECT *
+            FROM {FAILURE_ENVELOPE_TABLE}
+            ORDER BY failure_id, revision
+            """
+        ).fetchall()
+        migrated_schema = migrated.execute(
+            """
+            SELECT type, name, sql
+            FROM sqlite_master
+            WHERE tbl_name = ?
+            ORDER BY type, name
+            """,
+            (FAILURE_ENVELOPE_TABLE,),
+        ).fetchall()
+        fresh_schema = fresh.execute(
+            """
+            SELECT type, name, sql
+            FROM sqlite_master
+            WHERE tbl_name = ?
+            ORDER BY type, name
+            """,
+            (FAILURE_ENVELOPE_TABLE,),
+        ).fetchall()
+
+    assert after == before
+    assert [(row[0], row[1]) for row in after] == [
+        (lineage_a, 1),
+        (lineage_a, 2),
+        (lineage_b, 1),
+        (lineage_b, 2),
+    ]
+    assert migrated_schema == fresh_schema
+
+
+@pytest.mark.parametrize("poisoning", ("extra", "missing", "reordered"))
+def test_v13_failure_envelope_column_shape_fails_closed_and_retries(
+    tmp_path: Path,
+    poisoning: str,
+) -> None:
+    import seektalent.diagnostics_storage as storage_module
+    from seektalent.diagnostics_storage import (
+        FailureEnvelopeStorageError,
+        create_failure_envelope_schema,
+    )
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    path = _initialized_path(tmp_path)
+    table_sql = storage_module._SCHEMA_STATEMENTS[0]
+    if poisoning == "extra":
+        table_sql = table_sql.replace(
+            "      observed_at TEXT NOT NULL,\n",
+            "      observed_at TEXT NOT NULL,\n      poisoned TEXT,\n",
+        )
+    elif poisoning == "missing":
+        table_sql = table_sql.replace("      correlation_id TEXT,\n", "")
+    else:
+        table_sql = table_sql.replace(
+            "      operation_id TEXT,\n      attempt_no INTEGER,\n",
+            "      attempt_no INTEGER,\n      operation_id TEXT,\n",
+        )
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            f"DROP TABLE {storage_module.FAILURE_ENVELOPE_TABLE}"
+        )
+        conn.execute(table_sql)
+        conn.execute("PRAGMA user_version = 13")
+
+    with pytest.raises(FailureEnvelopeStorageError) as exc_info:
+        RuntimeControlStore(path).initialize()
+    assert exc_info.value.reason == "failure_envelope_schema_failed"
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+        conn.execute(
+            f"DROP TABLE {storage_module.FAILURE_ENVELOPE_TABLE}"
+        )
+        create_failure_envelope_schema(conn)
+
+    RuntimeControlStore(path).initialize()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_v14_outcome_authority_shape_constraint_matrix(
+    tmp_path: Path,
+) -> None:
+    path = _initialized_path(tmp_path)
+
+    def insert_shape(
+        conn: sqlite3.Connection,
+        *,
+        suffix: int,
+        status: str,
+        outcome: str,
+        failure_id: str | None,
+        failure_revision: int | None,
+        authority_mode: str | None,
+        owner_lease_id: str | None,
+    ) -> None:
+        runtime_run_id = f"{suffix:032x}"
+        conn.execute(
+            """
+            INSERT INTO runtime_control_runs (
+                runtime_run_id, run_intent_id, start_idempotency_key,
+                approved_requirement_revision_id, status, current_stage,
+                source_ids_json, created_at, updated_at,
+                product_outcome, current_failure_id,
+                current_failure_revision, current_failure_authority_mode,
+                current_failure_owner_lease_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, '[]', ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                runtime_run_id,
+                f"intent_{runtime_run_id}",
+                f"start_{runtime_run_id}",
+                "reqapproved_test",
+                status,
+                status,
+                "2026-07-27T00:00:00Z",
+                "2026-07-27T00:00:00Z",
+                outcome,
+                failure_id,
+                failure_revision,
+                authority_mode,
+                owner_lease_id,
+            ),
+        )
+
+    valid = (
+        ("failed", "failed", "no_owner", None),
+        ("failed", "failed", "active_owner", "rtlease_failed"),
+        ("needs_attention", "needs_attention", "no_owner", None),
+        (
+            "needs_attention",
+            "needs_attention",
+            "active_owner",
+            "rtlease_attention",
+        ),
+    )
+    invalid = (
+        ("failed", "needs_attention", "no_owner", None, "1" * 32, 1),
+        ("needs_attention", "failed", "no_owner", None, "2" * 32, 1),
+        ("needs_attention", "needs_attention", None, None, None, None),
+        ("failed", "failed", "active_owner", None, "3" * 32, 1),
+        ("cancelled", "cancelled", None, None, "4" * 32, 1),
+    )
+    with sqlite3.connect(path) as conn:
+        for suffix, (status, outcome, mode, owner) in enumerate(
+            valid,
+            start=1,
+        ):
+            insert_shape(
+                conn,
+                suffix=suffix,
+                status=status,
+                outcome=outcome,
+                failure_id=f"{suffix + 10:032x}",
+                failure_revision=1,
+                authority_mode=mode,
+                owner_lease_id=owner,
+            )
+        for suffix, (
+            status,
+            outcome,
+            mode,
+            owner,
+            failure_id,
+            revision,
+        ) in enumerate(invalid, start=100):
+            with pytest.raises(sqlite3.IntegrityError):
+                insert_shape(
+                    conn,
+                    suffix=suffix,
+                    status=status,
+                    outcome=outcome,
+                    failure_id=failure_id,
+                    failure_revision=revision,
+                    authority_mode=mode,
+                    owner_lease_id=owner,
+                )
+
+
 def test_v13_partial_outcome_schema_fails_closed_and_is_retryable(
     tmp_path: Path,
 ) -> None:
@@ -158,7 +389,7 @@ def test_v13_partial_outcome_schema_fails_closed_and_is_retryable(
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
-@pytest.mark.parametrize("completed_statements", (0, 1, 2, 3))
+@pytest.mark.parametrize("completed_statements", (0, 1, 2, 3, 4, 5))
 def test_fresh_v14_outcome_ddl_failure_rolls_back_and_retries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -191,6 +422,8 @@ def test_fresh_v14_outcome_ddl_failure_rolls_back_and_retries(
             "current_failure_revision",
             "current_failure_id",
             "product_outcome",
+            "current_failure_owner_lease_id",
+            "current_failure_authority_mode",
         } & columns
         assert conn.execute(
             """
@@ -211,7 +444,7 @@ def test_fresh_v14_outcome_ddl_failure_rolls_back_and_retries(
         assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
 
 
-@pytest.mark.parametrize("completed_statements", (0, 1, 2, 3))
+@pytest.mark.parametrize("completed_statements", (0, 1, 2, 3, 4, 5))
 def test_v13_to_v14_outcome_ddl_failure_rolls_back_and_retries(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -245,6 +478,8 @@ def test_v13_to_v14_outcome_ddl_failure_rolls_back_and_retries(
             "current_failure_revision",
             "current_failure_id",
             "product_outcome",
+            "current_failure_owner_lease_id",
+            "current_failure_authority_mode",
         } & columns
 
     monkeypatch.setattr(
@@ -334,6 +569,127 @@ def test_v13_legacy_outcome_row_fails_closed_without_alias_migration(
             END
             """
         )
+
+    RuntimeControlStore(path).initialize()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+
+
+@pytest.mark.parametrize("claimed_version", (13, 14))
+def test_poisoned_complete_failed_outcome_schema_fails_closed_before_version_bump(
+    tmp_path: Path,
+    claimed_version: int,
+) -> None:
+    from seektalent_runtime_control.errors import RuntimeControlError
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    path = _initialized_path(tmp_path)
+    _downgrade_v14_run_columns_to_v13(path)
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """
+            ALTER TABLE runtime_control_runs
+            ADD COLUMN state_revision TEXT NOT NULL DEFAULT 0
+              CHECK (state_revision >= 0)
+            """
+        )
+        conn.execute(
+            """
+            ALTER TABLE runtime_control_runs
+            ADD COLUMN current_failure_revision INTEGER
+              CHECK (current_failure_revision IS NULL OR current_failure_revision >= 1)
+            """
+        )
+        conn.execute(
+            """
+            ALTER TABLE runtime_control_runs
+            ADD COLUMN current_failure_id TEXT
+              CHECK (
+                (current_failure_id IS NULL) = (current_failure_revision IS NULL)
+              )
+            """
+        )
+        conn.execute(
+            """
+            ALTER TABLE runtime_control_runs
+            ADD COLUMN product_outcome TEXT
+              CHECK (
+                product_outcome IS NULL
+                OR product_outcome IN (
+                  'succeeded_with_results',
+                  'needs_attention'
+                )
+              )
+            """
+        )
+        conn.execute(
+            """
+            ALTER TABLE runtime_control_runs
+            ADD COLUMN current_failure_owner_lease_id TEXT
+              CHECK (
+                current_failure_owner_lease_id IS NULL
+                OR (
+                  product_outcome IN ('failed', 'needs_attention')
+                  AND current_failure_id IS NOT NULL
+                  AND current_failure_revision IS NOT NULL
+                )
+              )
+            """
+        )
+        conn.execute(
+            """
+            ALTER TABLE runtime_control_runs
+            ADD COLUMN current_failure_authority_mode TEXT
+              CHECK (
+                (
+                  current_failure_authority_mode IS NULL
+                  AND current_failure_id IS NULL
+                  AND current_failure_revision IS NULL
+                  AND current_failure_owner_lease_id IS NULL
+                )
+                OR (
+                  current_failure_authority_mode = 'no_owner'
+                  AND product_outcome IN ('failed', 'needs_attention')
+                  AND current_failure_id IS NOT NULL
+                  AND current_failure_revision IS NOT NULL
+                  AND current_failure_owner_lease_id IS NULL
+                )
+                OR (
+                  current_failure_authority_mode = 'active_owner'
+                  AND product_outcome IN ('failed', 'needs_attention')
+                  AND current_failure_id IS NOT NULL
+                  AND current_failure_revision IS NOT NULL
+                  AND current_failure_owner_lease_id IS NOT NULL
+                )
+              )
+            """
+        )
+        conn.execute(f"PRAGMA user_version = {claimed_version}")
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        RuntimeControlStore(path).initialize()
+
+    assert (
+        exc_info.value.reason_code
+        == "runtime_control_failed_outcome_schema_collision"
+    )
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == claimed_version
+        conn.execute(
+            "ALTER TABLE runtime_control_runs "
+            "DROP COLUMN current_failure_authority_mode"
+        )
+        conn.execute(
+            "ALTER TABLE runtime_control_runs "
+            "DROP COLUMN current_failure_owner_lease_id"
+        )
+        conn.execute("ALTER TABLE runtime_control_runs DROP COLUMN product_outcome")
+        conn.execute("ALTER TABLE runtime_control_runs DROP COLUMN current_failure_id")
+        conn.execute(
+            "ALTER TABLE runtime_control_runs DROP COLUMN current_failure_revision"
+        )
+        conn.execute("ALTER TABLE runtime_control_runs DROP COLUMN state_revision")
+        conn.execute("PRAGMA user_version = 13")
 
     RuntimeControlStore(path).initialize()
     with sqlite3.connect(path) as conn:

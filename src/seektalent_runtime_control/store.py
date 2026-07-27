@@ -44,7 +44,9 @@ from seektalent_runtime_control.errors import RuntimeControlError, RuntimeContro
 from seektalent_runtime_control.failed_outcome import (
     commit_failed_outcome as _commit_failed_outcome,
     migrate_failed_outcome_v13_to_v14,
+    require_run_truth_mutable,
     validate_failed_outcome_row,
+    validate_failed_outcome_schema,
 )
 from seektalent_runtime_control.fsm import require_run_transition
 from seektalent_runtime_control.models import (
@@ -76,6 +78,7 @@ from seektalent_runtime_control.run_acceptance import (
     existing_run_for_start,
     insert_run,
     normalize_run_record,
+    validate_initial_run_truth,
     validate_run_acceptance,
 )
 from seektalent_runtime_control.safe_retry_turnover import (
@@ -174,6 +177,7 @@ class RuntimeControlStore:
                     str(exc),
                 ) from exc
             if version == RUNTIME_CONTROL_SCHEMA_VERSION:
+                validate_failed_outcome_schema(conn)
                 return
             if version > 0:
                 backup_sqlite_before_migration(
@@ -250,18 +254,22 @@ class RuntimeControlStore:
 
     def create_run(self, run: RuntimeRunRecord) -> RuntimeRunRecord:
         stored = normalize_run_record(run)
+        validate_initial_run_truth(stored)
         with self._connect() as conn, conn:
             existing = existing_run_for_start(conn, stored)
             if existing is not None:
-                return _run_from_row(existing)
+                return _validated_run_from_row(conn, existing)
             try:
                 insert_run(conn, stored)
             except sqlite3.IntegrityError:
                 existing = existing_run_for_start(conn, stored)
                 if existing is not None:
-                    return _run_from_row(existing)
+                    return _validated_run_from_row(conn, existing)
                 raise
-        return stored
+            inserted = _run_row(conn, stored.runtime_run_id)
+            if inserted is None:
+                raise RuntimeControlError("runtime_run_creation_incomplete")
+            return _validated_run_from_row(conn, inserted)
 
     def accept_run(
         self,
@@ -272,6 +280,7 @@ class RuntimeControlStore:
     ) -> RuntimeRunRecord:
         """Commit a new run and its initial acceptance evidence atomically."""
         stored = normalize_run_record(run)
+        validate_initial_run_truth(stored)
         validate_run_acceptance(stored, initial_event=initial_event, snapshot=snapshot)
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
@@ -282,7 +291,7 @@ class RuntimeControlStore:
                     if accepted is None:
                         raise RuntimeControlError("runtime_run_acceptance_incomplete")
                     conn.commit()
-                    return _run_from_row(accepted)
+                    return _validated_run_from_row(conn, accepted)
                 insert_run(conn, stored)
                 _append_event_in_transaction(
                     conn,
@@ -296,11 +305,12 @@ class RuntimeControlStore:
                 accepted = accepted_run_row(conn, stored.runtime_run_id)
                 if accepted is None:
                     raise RuntimeControlError("runtime_run_acceptance_incomplete")
+                accepted_run = _validated_run_from_row(conn, accepted)
                 conn.commit()
             except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
                 conn.rollback()
                 raise
-        return _run_from_row(accepted)
+        return accepted_run
 
     def get_run(self, runtime_run_id: str) -> RuntimeRunRecord:
         with self._connect() as conn:
@@ -310,8 +320,7 @@ class RuntimeControlStore:
             ).fetchone()
             if row is None:
                 raise RuntimeControlLookupError("runtime_run_not_found")
-            validate_failed_outcome_row(conn, row)
-            return _run_from_row(row)
+            return _validated_run_from_row(conn, row)
 
     def get_run_by_approved_requirement_revision(
         self,
@@ -328,17 +337,17 @@ class RuntimeControlStore:
                 """,
                 (approved_requirement_revision_id,),
             ).fetchone()
-        return _run_from_row(row) if row is not None else None
+            return _validated_run_from_row(conn, row) if row is not None else None
 
     def get_run_by_run_intent_id(self, run_intent_id: str) -> RuntimeRunRecord | None:
         with self._connect() as conn:
             row = _run_row_by_run_intent(conn, run_intent_id)
-        return _run_from_row(row) if row is not None else None
+            return _validated_run_from_row(conn, row) if row is not None else None
 
     def get_run_by_start_idempotency_key(self, start_idempotency_key: str) -> RuntimeRunRecord | None:
         with self._connect() as conn:
             row = _run_row_by_start_idempotency_key(conn, start_idempotency_key)
-        return _run_from_row(row) if row is not None else None
+            return _validated_run_from_row(conn, row) if row is not None else None
 
     def accept_source_operation(
         self,
@@ -992,21 +1001,33 @@ class RuntimeControlStore:
         updated_at: str,
     ) -> RuntimeRunRecord:
         with self._connect() as conn, conn:
-            conn.execute(
+            existing = _run_row(conn, runtime_run_id)
+            if existing is None:
+                raise RuntimeControlLookupError("runtime_run_not_found")
+            require_run_truth_mutable(existing)
+            updated = conn.execute(
                 """
                 UPDATE runtime_control_runs
-                SET workbench_session_id = ?, updated_at = ?
+                SET workbench_session_id = ?, updated_at = ?,
+                    state_revision = state_revision + 1
                 WHERE runtime_run_id = ?
+                  AND product_outcome IS NULL
+                  AND current_failure_id IS NULL
+                  AND current_failure_revision IS NULL
+                  AND current_failure_owner_lease_id IS NULL
+                  AND current_failure_authority_mode IS NULL
                 """,
                 (workbench_session_id, updated_at, runtime_run_id),
             )
+            if updated.rowcount != 1:
+                raise RuntimeControlError(
+                    "runtime_failed_outcome_terminal_immutable"
+                )
             row = conn.execute(
                 "SELECT * FROM runtime_control_runs WHERE runtime_run_id = ?",
                 (runtime_run_id,),
             ).fetchone()
-        if row is None:
-            raise RuntimeControlLookupError("runtime_run_not_found")
-        return _run_from_row(row)
+            return _validated_run_from_row(conn, row)
 
     def update_run_status(
         self,
@@ -1027,17 +1048,22 @@ class RuntimeControlStore:
             ).fetchone()
             if row is None:
                 raise RuntimeControlLookupError("runtime_run_not_found")
+            require_run_truth_mutable(row)
             require_run_transition(row["status"], status)
-            conn.execute(
+            changed = conn.execute(
                 """
                 UPDATE runtime_control_runs
                 SET status = ?, current_stage = ?, current_round = ?, updated_at = ?,
                     stop_reason_code = COALESCE(?, stop_reason_code),
                     completed_at = COALESCE(?, completed_at),
                     latest_checkpoint_id = COALESCE(?, latest_checkpoint_id),
-                    state_revision = state_revision
-                        + CASE WHEN status <> ? THEN 1 ELSE 0 END
+                    state_revision = state_revision + 1
                 WHERE runtime_run_id = ?
+                  AND product_outcome IS NULL
+                  AND current_failure_id IS NULL
+                  AND current_failure_revision IS NULL
+                  AND current_failure_owner_lease_id IS NULL
+                  AND current_failure_authority_mode IS NULL
                 """,
                 (
                     status,
@@ -1047,15 +1073,18 @@ class RuntimeControlStore:
                     stop_reason_code,
                     completed_at,
                     latest_checkpoint_id,
-                    status,
                     runtime_run_id,
                 ),
             )
+            if changed.rowcount != 1:
+                raise RuntimeControlError(
+                    "runtime_failed_outcome_terminal_immutable"
+                )
             updated = conn.execute(
                 "SELECT * FROM runtime_control_runs WHERE runtime_run_id = ?",
                 (runtime_run_id,),
             ).fetchone()
-        return _run_from_row(updated)
+            return _validated_run_from_row(conn, updated)
 
     def commit_failed_outcome(
         self,
@@ -1085,7 +1114,7 @@ class RuntimeControlStore:
                 operation_id=operation_id,
                 statement_hook=statement_hook,
             )
-            return _run_from_row(row)
+            return _validated_run_from_row(conn, row)
 
     def acquire_executor_lease(
         self,
@@ -1098,8 +1127,10 @@ class RuntimeControlStore:
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                if _run_row(conn, runtime_run_id) is None:
+                run_row = _run_row(conn, runtime_run_id)
+                if run_row is None:
                     raise RuntimeControlLookupError("runtime_run_not_found")
+                require_run_truth_mutable(run_row)
                 active = _active_lease_row(conn, runtime_run_id)
                 if active is not None:
                     raise RuntimeControlError("runtime_executor_lease_active")
@@ -1145,6 +1176,23 @@ class RuntimeControlStore:
                         lease.reason_code,
                     ),
                 )
+                advanced = conn.execute(
+                    """
+                    UPDATE runtime_control_runs
+                    SET state_revision = state_revision + 1
+                    WHERE runtime_run_id = ?
+                      AND product_outcome IS NULL
+                      AND current_failure_id IS NULL
+                      AND current_failure_revision IS NULL
+                      AND current_failure_owner_lease_id IS NULL
+                      AND current_failure_authority_mode IS NULL
+                    """,
+                    (runtime_run_id,),
+                )
+                if advanced.rowcount != 1:
+                    raise RuntimeControlError(
+                        "runtime_failed_outcome_terminal_immutable"
+                    )
                 conn.commit()
             except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
                 conn.rollback()
@@ -1188,6 +1236,18 @@ class RuntimeControlStore:
                     """,
                     (stored_heartbeat_at, stored_lease_expires_at, lease_row["lease_id"]),
                 )
+                run_row = _run_row(conn, runtime_run_id)
+                if run_row is None:
+                    raise RuntimeControlLookupError("runtime_run_not_found")
+                require_run_truth_mutable(run_row)
+                conn.execute(
+                    """
+                    UPDATE runtime_control_runs
+                    SET state_revision = state_revision + 1
+                    WHERE runtime_run_id = ?
+                    """,
+                    (runtime_run_id,),
+                )
                 updated = conn.execute(
                     "SELECT * FROM runtime_control_executor_leases WHERE lease_id = ?",
                     (lease_row["lease_id"],),
@@ -1208,21 +1268,80 @@ class RuntimeControlStore:
         status: str = "released",
         reason_code: str | None = None,
     ) -> RuntimeExecutorLease:
-        with self._connect() as conn, conn:
-            lease_row = _require_active_executor(conn, runtime_run_id, executor_id, attempt_no=attempt_no)
-            stored_released_at = max_iso_timestamp(released_at, lease_row["heartbeat_at"], lease_row["acquired_at"])
-            conn.execute(
-                """
-                UPDATE runtime_control_executor_leases
-                SET status = ?, released_at = ?, reason_code = ?
-                WHERE lease_id = ?
-                """,
-                (status, stored_released_at, reason_code, lease_row["lease_id"]),
-            )
-            updated = conn.execute(
-                "SELECT * FROM runtime_control_executor_leases WHERE lease_id = ?",
-                (lease_row["lease_id"],),
-            ).fetchone()
+        with self._connect() as conn:
+            try:
+                conn.execute("BEGIN IMMEDIATE")
+                lease_row = _require_active_executor(
+                    conn,
+                    runtime_run_id,
+                    executor_id,
+                    attempt_no=attempt_no,
+                )
+                run_row = _run_row(conn, runtime_run_id)
+                if run_row is None:
+                    raise RuntimeControlLookupError("runtime_run_not_found")
+                validate_failed_outcome_row(conn, run_row)
+                require_run_truth_mutable(run_row)
+                stored_released_at = max_iso_timestamp(
+                    released_at,
+                    lease_row["heartbeat_at"],
+                    lease_row["acquired_at"],
+                )
+                released = conn.execute(
+                    """
+                    UPDATE runtime_control_executor_leases
+                    SET status = ?, released_at = ?, reason_code = ?
+                    WHERE lease_id = ?
+                      AND runtime_run_id = ?
+                      AND executor_id = ?
+                      AND attempt_no = ?
+                      AND status = 'active'
+                    """,
+                    (
+                        status,
+                        stored_released_at,
+                        reason_code,
+                        lease_row["lease_id"],
+                        runtime_run_id,
+                        executor_id,
+                        lease_row["attempt_no"],
+                    ),
+                )
+                if released.rowcount != 1:
+                    raise RuntimeControlError("runtime_executor_stale")
+                advanced = conn.execute(
+                    """
+                    UPDATE runtime_control_runs
+                    SET state_revision = state_revision + 1
+                    WHERE runtime_run_id = ?
+                      AND state_revision = ?
+                      AND product_outcome IS NULL
+                      AND current_failure_id IS NULL
+                      AND current_failure_revision IS NULL
+                      AND current_failure_owner_lease_id IS NULL
+                      AND current_failure_authority_mode IS NULL
+                    """,
+                    (runtime_run_id, run_row["state_revision"]),
+                )
+                if advanced.rowcount != 1:
+                    raise RuntimeControlError("runtime_executor_stale")
+                updated = conn.execute(
+                    """
+                    SELECT *
+                    FROM runtime_control_executor_leases
+                    WHERE lease_id = ?
+                    """,
+                    (lease_row["lease_id"],),
+                ).fetchone()
+                conn.commit()
+            except RuntimeControlError:
+                conn.rollback()
+                raise
+            except (sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise RuntimeControlError(
+                    "runtime_executor_release_failed"
+                ) from None
         return _lease_from_row(updated)
 
     def list_active_executor_leases(self, *, executor_id: str | None = None) -> list[RuntimeExecutorLease]:
@@ -1251,10 +1370,18 @@ class RuntimeControlStore:
             try:
                 rows = conn.execute(
                     """
-                    SELECT *
-                    FROM runtime_control_executor_leases
-                    WHERE status = 'active' AND lease_expires_at <= ?
-                    ORDER BY lease_expires_at ASC, attempt_no ASC
+                    SELECT lease.*
+                    FROM runtime_control_executor_leases AS lease
+                    JOIN runtime_control_runs AS run
+                      ON run.runtime_run_id = lease.runtime_run_id
+                    WHERE lease.status = 'active'
+                      AND lease.lease_expires_at <= ?
+                      AND run.product_outcome IS NULL
+                      AND run.current_failure_id IS NULL
+                      AND run.current_failure_revision IS NULL
+                      AND run.current_failure_owner_lease_id IS NULL
+                      AND run.current_failure_authority_mode IS NULL
+                    ORDER BY lease.lease_expires_at ASC, lease.attempt_no ASC
                     LIMIT ?
                     """,
                     (now, batch_size),
@@ -1267,6 +1394,14 @@ class RuntimeControlStore:
                         WHERE lease_id = ?
                         """,
                         (now, row["lease_id"]),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE runtime_control_runs
+                        SET state_revision = state_revision + 1
+                        WHERE runtime_run_id = ?
+                        """,
+                        (row["runtime_run_id"],),
                     )
                 conn.commit()
             except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
@@ -1307,6 +1442,7 @@ class RuntimeControlStore:
                 if run_row is None:
                     conn.commit()
                     return None
+                require_run_truth_mutable(run_row)
                 if lease_row["status"] == "active":
                     updated = conn.execute(
                         """
@@ -1320,6 +1456,14 @@ class RuntimeControlStore:
                     if updated.rowcount != 1:
                         conn.commit()
                         return None
+                    conn.execute(
+                        """
+                        UPDATE runtime_control_runs
+                        SET state_revision = state_revision + 1
+                        WHERE runtime_run_id = ?
+                        """,
+                        (run_row["runtime_run_id"],),
+                    )
                 elif _active_lease_row(conn, lease_row["runtime_run_id"]) is not None:
                     conn.commit()
                     return None
@@ -1879,21 +2023,33 @@ class RuntimeControlStore:
         updated_at: str,
     ) -> RuntimeRunRecord:
         with self._connect() as conn, conn:
-            conn.execute(
+            existing = _run_row(conn, runtime_run_id)
+            if existing is None:
+                raise RuntimeControlLookupError("runtime_run_not_found")
+            require_run_truth_mutable(existing)
+            updated = conn.execute(
                 """
                 UPDATE runtime_control_runs
-                SET approved_requirement_revision_id = ?, updated_at = ?
+                SET approved_requirement_revision_id = ?, updated_at = ?,
+                    state_revision = state_revision + 1
                 WHERE runtime_run_id = ?
+                  AND product_outcome IS NULL
+                  AND current_failure_id IS NULL
+                  AND current_failure_revision IS NULL
+                  AND current_failure_owner_lease_id IS NULL
+                  AND current_failure_authority_mode IS NULL
                 """,
                 (approved_requirement_revision_id, updated_at, runtime_run_id),
             )
+            if updated.rowcount != 1:
+                raise RuntimeControlError(
+                    "runtime_failed_outcome_terminal_immutable"
+                )
             row = conn.execute(
                 "SELECT * FROM runtime_control_runs WHERE runtime_run_id = ?",
                 (runtime_run_id,),
             ).fetchone()
-        if row is None:
-            raise RuntimeControlLookupError("runtime_run_not_found")
-        return _run_from_row(row)
+            return _validated_run_from_row(conn, row)
 
     def has_event(self, *, runtime_run_id: str, event_type: str, round_no: int | None = None) -> bool:
         clauses = ["runtime_run_id = ?", "event_type = ?"]
@@ -1966,6 +2122,11 @@ class RuntimeControlStore:
                     JOIN runtime_control_runs AS run
                       ON run.runtime_run_id = checkpoint.runtime_run_id
                     WHERE run.status IN ('cancelled', 'completed', 'failed')
+                      AND run.product_outcome IS NULL
+                      AND run.current_failure_id IS NULL
+                      AND run.current_failure_revision IS NULL
+                      AND run.current_failure_owner_lease_id IS NULL
+                      AND run.current_failure_authority_mode IS NULL
                       AND NOT EXISTS (
                         SELECT 1
                         FROM runtime_control_executor_leases active_lease
@@ -1984,6 +2145,11 @@ class RuntimeControlStore:
                         UPDATE runtime_control_runs
                         SET latest_checkpoint_id = NULL
                         WHERE latest_checkpoint_id = ?
+                          AND product_outcome IS NULL
+                          AND current_failure_id IS NULL
+                          AND current_failure_revision IS NULL
+                          AND current_failure_owner_lease_id IS NULL
+                          AND current_failure_authority_mode IS NULL
                         """,
                         (row["checkpoint_id"],),
                     )
@@ -2242,6 +2408,10 @@ class RuntimeControlStore:
                     attempt_no=attempt_no,
                     observed_at=checkpoint.created_at,
                 )
+                run_row = _run_row(conn, checkpoint.runtime_run_id)
+                if run_row is None:
+                    raise RuntimeControlLookupError("runtime_run_not_found")
+                require_run_truth_mutable(run_row)
                 conn.execute(
                     """
                     INSERT INTO runtime_control_checkpoints (
@@ -2265,11 +2435,17 @@ class RuntimeControlStore:
                         checkpoint.created_at,
                     ),
                 )
-                conn.execute(
+                updated = conn.execute(
                     """
                     UPDATE runtime_control_runs
-                    SET latest_checkpoint_id = ?, current_stage = ?, current_round = ?, updated_at = ?
+                    SET latest_checkpoint_id = ?, current_stage = ?, current_round = ?,
+                        updated_at = ?, state_revision = state_revision + 1
                     WHERE runtime_run_id = ?
+                      AND product_outcome IS NULL
+                      AND current_failure_id IS NULL
+                      AND current_failure_revision IS NULL
+                      AND current_failure_owner_lease_id IS NULL
+                      AND current_failure_authority_mode IS NULL
                     """,
                     (
                         checkpoint.checkpoint_id,
@@ -2279,6 +2455,10 @@ class RuntimeControlStore:
                         checkpoint.runtime_run_id,
                     ),
                 )
+                if updated.rowcount != 1:
+                    raise RuntimeControlError(
+                        "runtime_failed_outcome_terminal_immutable"
+                    )
                 _sync_candidate_truth_from_checkpoint(conn, checkpoint)
                 conn.commit()
             except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
@@ -3118,12 +3298,13 @@ class RuntimeControlStore:
                     "SELECT * FROM runtime_control_runs WHERE runtime_run_id = ?",
                     (run_row["runtime_run_id"],),
                 ).fetchone()
+                runtime_run = _validated_run_from_row(conn, updated_run)
                 conn.commit()
             except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
                 conn.rollback()
                 raise
         return RuntimeWorkerClaim(
-            runtime_run=_run_from_row(updated_run),
+            runtime_run=runtime_run,
             lease=lease,
             claimed_event=claim_event,
             claim_reason=claim_reason,
@@ -3702,6 +3883,7 @@ def _append_event_in_transaction(
     ).fetchone()
     if row is None:
         raise RuntimeControlLookupError("runtime_run_not_found")
+    require_run_truth_mutable(row)
     target_status = run_status if run_status is not None else row["status"]
     require_run_transition(row["status"], target_status)
     payload_json, payload_size_bytes = _json_with_size(
@@ -3749,16 +3931,20 @@ def _append_event_in_transaction(
             if existing is not None:
                 return _event_from_row(existing)
         raise
-    conn.execute(
+    updated = conn.execute(
         """
         UPDATE runtime_control_runs
         SET latest_event_seq = ?, status = ?, current_stage = ?, current_round = ?, updated_at = ?,
             stop_reason_code = COALESCE(?, stop_reason_code),
             completed_at = COALESCE(?, completed_at),
             latest_checkpoint_id = COALESCE(?, latest_checkpoint_id),
-            state_revision = state_revision
-                + CASE WHEN status <> ? THEN 1 ELSE 0 END
+            state_revision = state_revision + 1
         WHERE runtime_run_id = ?
+          AND product_outcome IS NULL
+          AND current_failure_id IS NULL
+          AND current_failure_revision IS NULL
+          AND current_failure_owner_lease_id IS NULL
+          AND current_failure_authority_mode IS NULL
         """,
         (
             event_seq,
@@ -3769,10 +3955,11 @@ def _append_event_in_transaction(
             stop_reason_code,
             completed_at,
             latest_checkpoint_id,
-            target_status,
             event.runtime_run_id,
         ),
     )
+    if updated.rowcount != 1:
+        raise RuntimeControlError("runtime_failed_outcome_terminal_immutable")
     if snapshot is not None:
         _replace_snapshot(conn, snapshot, latest_event_seq=event_seq)
     stored = conn.execute(
@@ -4777,6 +4964,11 @@ def _retention_checkpoint_stats(
         FROM runtime_control_checkpoints AS checkpoint
         JOIN runtime_control_runs AS run ON run.runtime_run_id = checkpoint.runtime_run_id
         WHERE run.status IN ('cancelled', 'completed', 'failed')
+          AND run.product_outcome IS NULL
+          AND run.current_failure_id IS NULL
+          AND run.current_failure_revision IS NULL
+          AND run.current_failure_owner_lease_id IS NULL
+          AND run.current_failure_authority_mode IS NULL
           AND run.completed_at IS NOT NULL
           AND run.completed_at < ?
           AND NOT EXISTS (
@@ -4816,6 +5008,11 @@ def _retention_executor_lease_stats(
         FROM runtime_control_executor_leases AS lease
         JOIN runtime_control_runs AS run ON run.runtime_run_id = lease.runtime_run_id
         WHERE run.status IN ('cancelled', 'completed', 'failed')
+          AND run.product_outcome IS NULL
+          AND run.current_failure_id IS NULL
+          AND run.current_failure_revision IS NULL
+          AND run.current_failure_owner_lease_id IS NULL
+          AND run.current_failure_authority_mode IS NULL
           AND run.completed_at IS NOT NULL
           AND run.completed_at < ?
           AND NOT EXISTS (
@@ -5059,6 +5256,11 @@ def _retention_checkpoint_ids(
         FROM runtime_control_checkpoints AS checkpoint
         JOIN runtime_control_runs AS run ON run.runtime_run_id = checkpoint.runtime_run_id
         WHERE run.status IN ('cancelled', 'completed', 'failed')
+          AND run.product_outcome IS NULL
+          AND run.current_failure_id IS NULL
+          AND run.current_failure_revision IS NULL
+          AND run.current_failure_owner_lease_id IS NULL
+          AND run.current_failure_authority_mode IS NULL
           AND run.completed_at IS NOT NULL
           AND run.completed_at < ?
           AND NOT EXISTS (
@@ -5089,6 +5291,11 @@ def _retention_executor_lease_ids(
         FROM runtime_control_executor_leases AS lease
         JOIN runtime_control_runs AS run ON run.runtime_run_id = lease.runtime_run_id
         WHERE run.status IN ('cancelled', 'completed', 'failed')
+          AND run.product_outcome IS NULL
+          AND run.current_failure_id IS NULL
+          AND run.current_failure_revision IS NULL
+          AND run.current_failure_owner_lease_id IS NULL
+          AND run.current_failure_authority_mode IS NULL
           AND run.completed_at IS NOT NULL
           AND run.completed_at < ?
           AND NOT EXISTS (
@@ -5214,6 +5421,11 @@ def _clear_latest_checkpoint_refs(conn: sqlite3.Connection, checkpoint_ids: list
         UPDATE runtime_control_runs
         SET latest_checkpoint_id = NULL
         WHERE latest_checkpoint_id IN ({placeholders})
+          AND product_outcome IS NULL
+          AND current_failure_id IS NULL
+          AND current_failure_revision IS NULL
+          AND current_failure_owner_lease_id IS NULL
+          AND current_failure_authority_mode IS NULL
         """,
         checkpoint_ids,
     )
@@ -5559,8 +5771,22 @@ def _run_from_row(row: sqlite3.Row) -> RuntimeRunRecord:
         product_outcome=row["product_outcome"],
         current_failure_id=row["current_failure_id"],
         current_failure_revision=row["current_failure_revision"],
+        current_failure_owner_lease_id=row[
+            "current_failure_owner_lease_id"
+        ],
+        current_failure_authority_mode=row[
+            "current_failure_authority_mode"
+        ],
         state_revision=int(row["state_revision"]),
     )
+
+
+def _validated_run_from_row(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+) -> RuntimeRunRecord:
+    validate_failed_outcome_row(conn, row)
+    return _run_from_row(row)
 
 
 def _lease_from_row(row: sqlite3.Row) -> RuntimeExecutorLease:

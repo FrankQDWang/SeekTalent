@@ -3,17 +3,19 @@
   "goal_id": "runtime-control-plane-2026-06",
   "change_type": "major_refactor",
   "summary": "Add the T2c3a main-owned atomic terminal failed-outcome transaction.",
-  "rationale": "Issue #425 advances runtime-control SQLite from v13 to v14 and adds one production-unreachable failed-outcome boundary. RuntimeControlStore remains the direct facade because it already owns connection setup, ordered migrations, run state, executor leases, and BEGIN IMMEDIATE transaction timing. The detailed transaction is isolated in failed_outcome.py while the store exposes only the required bounded API and advances state_revision on existing state transitions.",
+  "rationale": "Issue #425 advances runtime-control SQLite from v13 to v14 and adds one production-unreachable failed-outcome boundary. RuntimeControlStore remains the direct facade because it already owns connection setup, ordered migrations, run state, executor leases, and BEGIN IMMEDIATE transaction timing. The detailed transaction is isolated in failed_outcome.py while the store exposes only the required bounded API, validates canonical failed truth on every RuntimeRunRecord read, freezes that truth against legacy mutators, and advances state_revision across run, event, checkpoint, and executor-authority epochs.",
   "touched_layers": [
+    "governance",
     "other"
   ],
   "red_files": [
-    "src/seektalent_runtime_control/store.py"
+    "src/seektalent_runtime_control/store.py",
+    "tools/native_probes/launch_binding_common.py"
   ],
   "line_count_exemptions": [
     "src/seektalent_runtime_control/store.py"
   ],
-  "line_count_rationale": "The existing oversized store remains the SQLite owner and receives only the schema-version wiring, direct API facade, state-revision increments, and readback hook required by #425. The new transaction, migration checks, authority validation, replay, and integrity logic live in a focused module; moving unrelated existing store responsibilities would exceed this issue and increase regression risk.",
+  "line_count_rationale": "The existing oversized store remains the SQLite owner and receives only the schema-version wiring, direct API facade, connection-aware validated readback, canonical-terminal mutation guards, and authority-complete state-revision increments required by #425. The new transaction, exact schema checks, authority validation, replay, and integrity logic live in a focused module; moving unrelated existing store responsibilities would exceed this issue and increase regression risk. The governance manifest also records the load-tolerant native evidence boundary added after repeated full-suite timeout failures.",
   "deletion_targets": [
     "terminal failed truth that can commit state, outcome, envelope, reference, and lease release separately",
     "legacy partial or unknown ProductOutcome aliases in canonical diagnostics",
@@ -37,8 +39,19 @@
   ],
   "risks": [
     "A v13 database with partial or poisoned run columns or legacy Failure Envelope outcomes must remain at v13 and retry cleanly after repair.",
+    "Failure Envelope migration requires the exact legacy column shape and copies explicit columns in failure-id/revision order so interleaved lineages remain contiguous and unknown DDL fails before rebuild.",
     "Active-owner commits must reject stale executor or attempt identity and release the exact current lease in the same transaction.",
     "No-owner commits must prove no active lease and compare the exact state revision while cancellation_requested always wins.",
+    "Every executor lease, checkpoint, event, and run-state epoch that can invalidate a no-owner decision must advance the exact bounded integer state revision.",
+    "Retention stats, dry-run, and cleanup must preserve the exact revoked authority row required for active-owner replay while retaining legacy terminal cleanup behavior.",
+    "Executor release must acquire the SQLite write lock before reading authority and run truth so a stale release cannot overwrite a concurrent canonical failed commit.",
+    "Run creation and admission must reject caller-supplied outcome, failure reference, or nonzero state revision and return the validated durable row.",
+    "Lease fencing uses a main-storage UTC decision time captured under BEGIN IMMEDIATE; producer occurred_at, observed_at, and terminal_at never grant authority.",
+    "A closed authority-mode field plus an exact nullable owner-lease reference distinguishes active-owner commits from no-owner reconciliation; SQLite constraints, ordinary readback, and replay cross-validate both facts without inferring authority from envelope attempt context or allowing evidence loss to downgrade commit mode.",
+    "Authority-table loss or corruption during canonical readback and replay must produce bounded integrity or storage reasons without leaking SQLite details, table names, SQL, or paths.",
+    "Native-probe and packaged-artifact evidence use bounded load-tolerant test budgets; native timeout cleanup explicitly kills and reaps the exact child, while production sidecar default deadlines remain unchanged.",
+    "The v14 schema closes failed and needs_attention state/outcome/reference/mode pairs while the production-unreachable Python boundary in this slice admits and writes only failed.",
+    "BEGIN IMMEDIATE contention and rollback failures at the failed-outcome boundary must remain bounded and retryable without exposing raw SQLite errors.",
     "Production callers remain zero; this slice does not route legacy failures or implement needs_attention, journal, export, UI, or success and cancellation hard cuts."
   ]
 }

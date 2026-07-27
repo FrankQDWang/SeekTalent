@@ -47,6 +47,11 @@ class RuntimeRunRecord(BaseModel):
     product_outcome: ProductOutcome | None = None
     current_failure_id: str | None = None
     current_failure_revision: int | None = None
+    current_failure_owner_lease_id: str | None = None
+    current_failure_authority_mode: Literal[
+        "no_owner",
+        "active_owner",
+    ] | None = None
     state_revision: int = 0
 
 
