@@ -1,0 +1,44 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Add the T2c3a main-owned atomic terminal failed-outcome transaction.",
+  "rationale": "Issue #425 advances runtime-control SQLite from v13 to v14 and adds one production-unreachable failed-outcome boundary. RuntimeControlStore remains the direct facade because it already owns connection setup, ordered migrations, run state, executor leases, and BEGIN IMMEDIATE transaction timing. The detailed transaction is isolated in failed_outcome.py while the store exposes only the required bounded API and advances state_revision on existing state transitions.",
+  "touched_layers": [
+    "other"
+  ],
+  "red_files": [
+    "src/seektalent_runtime_control/store.py"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent_runtime_control/store.py"
+  ],
+  "line_count_rationale": "The existing oversized store remains the SQLite owner and receives only the schema-version wiring, direct API facade, state-revision increments, and readback hook required by #425. The new transaction, migration checks, authority validation, replay, and integrity logic live in a focused module; moving unrelated existing store responsibilities would exceed this issue and increase regression risk.",
+  "deletion_targets": [
+    "terminal failed truth that can commit state, outcome, envelope, reference, and lease release separately",
+    "legacy partial or unknown ProductOutcome aliases in canonical diagnostics",
+    "no-owner failure commits that rely on a read followed by an unconditional update"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest",
+    "uv run --group dev python -m pytest -p no:tach tests/test_diagnostics_schema.py tests/test_diagnostics_storage.py tests/test_runtime_control_failed_outcome.py tests/test_runtime_control_store.py tests/test_runtime_control_event_contract.py tests/test_runtime_control_safe_retry_turnover.py tests/test_runtime_control_source_reconciliation.py -q",
+    "uv run --group dev pytest",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev ty check src tests tools",
+    "uv run --group dev python tools/check_arch_imports.py",
+    "uv run --group dev python tools/check_workbench_schema_modes.py",
+    "uv run --group dev python tools/check_source_boundaries.py",
+    "uv run --group dev python tools/check_privacy_gate.py --base origin/main",
+    "uv run --group dev python tools/check_agent_safety_gate.py --base origin/main",
+    "uv run --group dev python tools/check_ai_bad_smells.py --base origin/main",
+    "uv run --group dev python tools/check_pr_governance.py --base origin/main"
+  ],
+  "risks": [
+    "A v13 database with partial or poisoned run columns or legacy Failure Envelope outcomes must remain at v13 and retry cleanly after repair.",
+    "Active-owner commits must reject stale executor or attempt identity and release the exact current lease in the same transaction.",
+    "No-owner commits must prove no active lease and compare the exact state revision while cancellation_requested always wins.",
+    "Production callers remain zero; this slice does not route legacy failures or implement needs_attention, journal, export, UI, or success and cancellation hard cuts."
+  ]
+}

@@ -11,7 +11,11 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from seektalent.diagnostics_storage import create_failure_envelope_schema
+from seektalent.diagnostics_event_models import FailureEnvelopeV1
+from seektalent.diagnostics_storage import (
+    create_failure_envelope_schema,
+    migrate_failure_envelope_schema_v13_to_v14,
+)
 from seektalent.source_references import SourceReference
 from seektalent.sqlite_migrations import (
     SQLiteMigrationError,
@@ -37,6 +41,11 @@ from seektalent_runtime_control.checkpoint_recovery import (
 )
 from seektalent_runtime_control.clock import max_iso_timestamp, timestamp_lte
 from seektalent_runtime_control.errors import RuntimeControlError, RuntimeControlLookupError
+from seektalent_runtime_control.failed_outcome import (
+    commit_failed_outcome as _commit_failed_outcome,
+    migrate_failed_outcome_v13_to_v14,
+    validate_failed_outcome_row,
+)
 from seektalent_runtime_control.fsm import require_run_transition
 from seektalent_runtime_control.models import (
     RuntimeCheckpoint,
@@ -118,7 +127,7 @@ from seektalent_runtime_control.source_reconciliation import (
 from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
 
 
-RUNTIME_CONTROL_SCHEMA_VERSION = 13
+RUNTIME_CONTROL_SCHEMA_VERSION = 14
 RUNTIME_CHECKPOINT_SCHEMA_VERSION = "runtime-control-checkpoint/v1"
 RUNTIME_CONTROL_EVENT_SCHEMA_VERSION = "runtime-control-event/v1"
 MAX_RUNTIME_CONTROL_JSON_BYTES = 16 * 1024
@@ -143,7 +152,6 @@ _REQUIRED_STAGE_OUTPUT_KINDS = {
     "runtime_public_finalization",
     "shortlist",
 }
-
 
 class RuntimeControlStore:
     def __init__(self, path: str | Path, *, busy_timeout_ms: int = 5000) -> None:
@@ -192,7 +200,7 @@ class RuntimeControlStore:
                 run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                 conn.commit()
                 version = 7
-            if version in {7, 8, 9, 10, 11, 12}:
+            if version in {7, 8, 9, 10, 11, 12, 13}:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
                     if version == 7:
@@ -218,6 +226,11 @@ class RuntimeControlStore:
                     if version == 12:
                         create_failure_envelope_schema(conn)
                         conn.execute("PRAGMA user_version = 13")
+                        version = 13
+                    if version == 13:
+                        migrate_failure_envelope_schema_v13_to_v14(conn)
+                        migrate_failed_outcome_v13_to_v14(conn)
+                        conn.execute("PRAGMA user_version = 14")
                     run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                     conn.commit()
                 except Exception:
@@ -231,6 +244,7 @@ class RuntimeControlStore:
                 conn.execute("BEGIN IMMEDIATE")
                 with conn:
                     create_failure_envelope_schema(conn)
+                    migrate_failed_outcome_v13_to_v14(conn)
                     conn.execute(f"PRAGMA user_version = {RUNTIME_CONTROL_SCHEMA_VERSION}")
                     run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
 
@@ -294,9 +308,10 @@ class RuntimeControlStore:
                 "SELECT * FROM runtime_control_runs WHERE runtime_run_id = ?",
                 (runtime_run_id,),
             ).fetchone()
-        if row is None:
-            raise RuntimeControlLookupError("runtime_run_not_found")
-        return _run_from_row(row)
+            if row is None:
+                raise RuntimeControlLookupError("runtime_run_not_found")
+            validate_failed_outcome_row(conn, row)
+            return _run_from_row(row)
 
     def get_run_by_approved_requirement_revision(
         self,
@@ -1019,7 +1034,9 @@ class RuntimeControlStore:
                 SET status = ?, current_stage = ?, current_round = ?, updated_at = ?,
                     stop_reason_code = COALESCE(?, stop_reason_code),
                     completed_at = COALESCE(?, completed_at),
-                    latest_checkpoint_id = COALESCE(?, latest_checkpoint_id)
+                    latest_checkpoint_id = COALESCE(?, latest_checkpoint_id),
+                    state_revision = state_revision
+                        + CASE WHEN status <> ? THEN 1 ELSE 0 END
                 WHERE runtime_run_id = ?
                 """,
                 (
@@ -1030,6 +1047,7 @@ class RuntimeControlStore:
                     stop_reason_code,
                     completed_at,
                     latest_checkpoint_id,
+                    status,
                     runtime_run_id,
                 ),
             )
@@ -1038,6 +1056,36 @@ class RuntimeControlStore:
                 (runtime_run_id,),
             ).fetchone()
         return _run_from_row(updated)
+
+    def commit_failed_outcome(
+        self,
+        *,
+        runtime_run_id: str,
+        envelope: FailureEnvelopeV1 | bytes,
+        terminal_reason_code: str,
+        terminal_at: str,
+        expected_state_revision: int,
+        executor_id: str | None = None,
+        attempt_no: int | None = None,
+        operation_id: str | None = None,
+        statement_hook: Callable[[int, str], None] | None = None,
+    ) -> RuntimeRunRecord:
+        """Atomically commit one canonical failed outcome and revoke its owner."""
+
+        with self._connect() as conn:
+            row = _commit_failed_outcome(
+                conn,
+                runtime_run_id=runtime_run_id,
+                envelope=envelope,
+                terminal_reason_code=terminal_reason_code,
+                terminal_at=terminal_at,
+                expected_state_revision=expected_state_revision,
+                executor_id=executor_id,
+                attempt_no=attempt_no,
+                operation_id=operation_id,
+                statement_hook=statement_hook,
+            )
+            return _run_from_row(row)
 
     def acquire_executor_lease(
         self,
@@ -1328,7 +1376,8 @@ class RuntimeControlStore:
                     UPDATE runtime_control_runs
                     SET status = ?, current_stage = ?, current_round = ?, updated_at = ?,
                         stop_reason_code = CASE WHEN ? THEN ? ELSE stop_reason_code END,
-                        completed_at = CASE WHEN ? THEN COALESCE(completed_at, ?) ELSE completed_at END
+                        completed_at = CASE WHEN ? THEN COALESCE(completed_at, ?) ELSE completed_at END,
+                        state_revision = state_revision + 1
                     WHERE runtime_run_id = ? AND status = ?
                     """,
                     (
@@ -3706,7 +3755,9 @@ def _append_event_in_transaction(
         SET latest_event_seq = ?, status = ?, current_stage = ?, current_round = ?, updated_at = ?,
             stop_reason_code = COALESCE(?, stop_reason_code),
             completed_at = COALESCE(?, completed_at),
-            latest_checkpoint_id = COALESCE(?, latest_checkpoint_id)
+            latest_checkpoint_id = COALESCE(?, latest_checkpoint_id),
+            state_revision = state_revision
+                + CASE WHEN status <> ? THEN 1 ELSE 0 END
         WHERE runtime_run_id = ?
         """,
         (
@@ -3718,6 +3769,7 @@ def _append_event_in_transaction(
             stop_reason_code,
             completed_at,
             latest_checkpoint_id,
+            target_status,
             event.runtime_run_id,
         ),
     )
@@ -5504,6 +5556,10 @@ def _run_from_row(row: sqlite3.Row) -> RuntimeRunRecord:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         completed_at=row["completed_at"],
+        product_outcome=row["product_outcome"],
+        current_failure_id=row["current_failure_id"],
+        current_failure_revision=row["current_failure_revision"],
+        state_revision=int(row["state_revision"]),
     )
 
 

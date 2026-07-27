@@ -1,6 +1,6 @@
 {
   "canonical-event.json": "607b94316fa4b2e6e68da3a4712a33910c761588915b4917fa62202a660ea68c",
-  "failure-envelope.json": "29894339e9a4311ad55e6b2bdcd93966a12e9f7bde26cb0b891b018f8382aff1",
+  "failure-envelope.json": "eaa5764b383618921f992c9f4853d31df0f0e7707793e618526845cfbdf2296c",
   "journal-append-ack.json": "7f27545fec1b71fd88613acc3977afffd92e45e2940b089ff90e69b4f500a2bb",
   "machine-capability-receipt.json": "57524cdcd2bbf878d186d890b93b8b646861da39cf08ab6a443201e03bfb59f4",
   "operation-evidence.json": "fb0f280aea269b7f757408cb89d5415e5e5645b9298ef422cfa54002a42ebfd6",

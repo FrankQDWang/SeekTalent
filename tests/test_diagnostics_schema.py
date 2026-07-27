@@ -1410,9 +1410,43 @@ def test_operation_evidence_value_and_durable_ref_are_paired() -> None:
     }
     payload["source_operation_disposition"] = "completed"
     payload["product_outcome_ref"] = {"identity": _id("9"), "revision": 3}
-    payload["product_outcome"] = "succeeded"
+    payload["product_outcome"] = "succeeded_with_results"
     payload["canonical_hash"] = _embedded_hash(payload)
     parse_operation_evidence(json.dumps(payload).encode())
+
+
+@pytest.mark.parametrize(
+    "outcome",
+    (
+        "succeeded_with_results",
+        "succeeded_empty",
+        "degraded_with_results",
+        "needs_attention",
+        "failed",
+        "cancelled",
+    ),
+)
+def test_failure_envelope_uses_canonical_product_outcome_vocabulary(
+    outcome: str,
+) -> None:
+    payload = _failure()
+    payload["current_outcome"] = outcome
+    parse_failure_envelope(json.dumps(payload).encode())
+
+
+@pytest.mark.parametrize("legacy", ("partial", "unknown", "succeeded"))
+def test_legacy_product_outcome_values_fail_closed(legacy: str) -> None:
+    failure = _failure()
+    failure["current_outcome"] = legacy
+    with pytest.raises(ValueError, match="diagnostics_schema_validation"):
+        parse_failure_envelope(json.dumps(failure).encode())
+
+    evidence = _operation_evidence()
+    evidence["product_outcome_ref"] = {"identity": _id("9"), "revision": 3}
+    evidence["product_outcome"] = legacy
+    evidence["canonical_hash"] = _embedded_hash(evidence)
+    with pytest.raises(ValueError, match="diagnostics_schema_validation"):
+        parse_operation_evidence(json.dumps(evidence).encode())
 
 
 @pytest.mark.parametrize(

@@ -5,6 +5,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from seektalent.source_references import SourceReference
+from seektalent.product_outcome import ProductOutcome
 
 
 RunStatus = Literal[
@@ -43,6 +44,10 @@ class RuntimeRunRecord(BaseModel):
     created_at: str
     updated_at: str
     completed_at: str | None = None
+    product_outcome: ProductOutcome | None = None
+    current_failure_id: str | None = None
+    current_failure_revision: int | None = None
+    state_revision: int = 0
 
 
 class RuntimeControlEventInput(BaseModel):

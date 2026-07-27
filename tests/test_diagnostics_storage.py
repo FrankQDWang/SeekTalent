@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+from hashlib import sha256
 import json
 from pathlib import Path
 import sqlite3
@@ -34,7 +35,18 @@ def _initialized_path(tmp_path: Path) -> Path:
     return path
 
 
-def test_fresh_runtime_control_schema_v13_owns_failure_envelope_table(
+def _downgrade_v14_run_columns_to_v13(path: Path) -> None:
+    with sqlite3.connect(path) as conn:
+        conn.execute("ALTER TABLE runtime_control_runs DROP COLUMN product_outcome")
+        conn.execute("ALTER TABLE runtime_control_runs DROP COLUMN current_failure_id")
+        conn.execute(
+            "ALTER TABLE runtime_control_runs DROP COLUMN current_failure_revision"
+        )
+        conn.execute("ALTER TABLE runtime_control_runs DROP COLUMN state_revision")
+        conn.execute("PRAGMA user_version = 13")
+
+
+def test_fresh_runtime_control_schema_v14_owns_failure_envelope_table(
     tmp_path: Path,
 ) -> None:
     from seektalent_runtime_control.store import (
@@ -60,7 +72,7 @@ def test_fresh_runtime_control_schema_v13_owns_failure_envelope_table(
             )
         }
 
-    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 13
+    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 14
     assert {
         "failure_id",
         "revision",
@@ -79,6 +91,253 @@ def test_fresh_runtime_control_schema_v13_owns_failure_envelope_table(
         "observed_at",
     } <= columns
     assert "idx_runtime_failure_envelopes_run" in indexes
+
+
+def test_real_v13_to_v14_migration_matches_fresh_schema_and_reopens(
+    tmp_path: Path,
+) -> None:
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    migrated_path = _initialized_path(tmp_path / "migrated")
+    _downgrade_v14_run_columns_to_v13(migrated_path)
+    RuntimeControlStore(migrated_path).initialize()
+    RuntimeControlStore(migrated_path).initialize()
+
+    fresh_path = _initialized_path(tmp_path / "fresh")
+    with sqlite3.connect(migrated_path) as migrated, sqlite3.connect(
+        fresh_path
+    ) as fresh:
+        migrated_columns = migrated.execute(
+            "PRAGMA table_info(runtime_control_runs)"
+        ).fetchall()
+        fresh_columns = fresh.execute(
+            "PRAGMA table_info(runtime_control_runs)"
+        ).fetchall()
+        migrated_version = migrated.execute("PRAGMA user_version").fetchone()[0]
+        fresh_version = fresh.execute("PRAGMA user_version").fetchone()[0]
+
+    assert migrated_columns == fresh_columns
+    assert migrated_version == fresh_version == 14
+
+
+def test_v13_partial_outcome_schema_fails_closed_and_is_retryable(
+    tmp_path: Path,
+) -> None:
+    from seektalent_runtime_control.errors import RuntimeControlError
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    path = _initialized_path(tmp_path)
+    _downgrade_v14_run_columns_to_v13(path)
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            """
+            ALTER TABLE runtime_control_runs
+            ADD COLUMN state_revision INTEGER NOT NULL DEFAULT 0
+            """
+        )
+
+    with pytest.raises(RuntimeControlError) as exc_info:
+        RuntimeControlStore(path).initialize()
+    assert (
+        exc_info.value.reason_code
+        == "runtime_control_failed_outcome_schema_collision"
+    )
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(runtime_control_runs)")
+        }
+        assert "state_revision" in columns
+        assert "product_outcome" not in columns
+        conn.execute("ALTER TABLE runtime_control_runs DROP COLUMN state_revision")
+
+    RuntimeControlStore(path).initialize()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+@pytest.mark.parametrize("completed_statements", (0, 1, 2, 3))
+def test_fresh_v14_outcome_ddl_failure_rolls_back_and_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    completed_statements: int,
+) -> None:
+    from seektalent_runtime_control import failed_outcome as outcome_module
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    path = tmp_path / "runtime_control.sqlite3"
+    statements = outcome_module.FAILED_OUTCOME_V14_SCHEMA_STATEMENTS
+    monkeypatch.setattr(
+        outcome_module,
+        "FAILED_OUTCOME_V14_SCHEMA_STATEMENTS",
+        (
+            *statements[:completed_statements],
+            "ALTER TABL runtime_control_runs injected_invalid_statement",
+        ),
+    )
+    with pytest.raises(sqlite3.OperationalError):
+        RuntimeControlStore(path).initialize()
+
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 0
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(runtime_control_runs)")
+        }
+        assert not {
+            "state_revision",
+            "current_failure_revision",
+            "current_failure_id",
+            "product_outcome",
+        } & columns
+        assert conn.execute(
+            """
+            SELECT 1 FROM sqlite_master
+            WHERE name LIKE '%failure_envelope%'
+              AND name NOT LIKE 'sqlite_autoindex%'
+            """
+        ).fetchone() is None
+
+    monkeypatch.setattr(
+        outcome_module,
+        "FAILED_OUTCOME_V14_SCHEMA_STATEMENTS",
+        statements,
+    )
+    RuntimeControlStore(path).initialize()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+@pytest.mark.parametrize("completed_statements", (0, 1, 2, 3))
+def test_v13_to_v14_outcome_ddl_failure_rolls_back_and_retries(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    completed_statements: int,
+) -> None:
+    from seektalent_runtime_control import failed_outcome as outcome_module
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    path = _initialized_path(tmp_path)
+    _downgrade_v14_run_columns_to_v13(path)
+    statements = outcome_module.FAILED_OUTCOME_V14_SCHEMA_STATEMENTS
+    monkeypatch.setattr(
+        outcome_module,
+        "FAILED_OUTCOME_V14_SCHEMA_STATEMENTS",
+        (
+            *statements[:completed_statements],
+            "ALTER TABL runtime_control_runs injected_invalid_statement",
+        ),
+    )
+    with pytest.raises(sqlite3.OperationalError):
+        RuntimeControlStore(path).initialize()
+
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+        columns = {
+            row[1]
+            for row in conn.execute("PRAGMA table_info(runtime_control_runs)")
+        }
+        assert not {
+            "state_revision",
+            "current_failure_revision",
+            "current_failure_id",
+            "product_outcome",
+        } & columns
+
+    monkeypatch.setattr(
+        outcome_module,
+        "FAILED_OUTCOME_V14_SCHEMA_STATEMENTS",
+        statements,
+    )
+    RuntimeControlStore(path).initialize()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
+        assert conn.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+
+
+def test_v13_legacy_outcome_row_fails_closed_without_alias_migration(
+    tmp_path: Path,
+) -> None:
+    from seektalent.diagnostics_storage import (
+        FailureEnvelopeStorageError,
+        store_failure_envelope_revision,
+    )
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    path = _initialized_path(tmp_path)
+    payload = _failure()
+    payload["current_outcome"] = "failed"
+    envelope = parse_failure_envelope(
+        json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+    )
+    canonical = canonical_diagnostics_bytes(envelope)
+    legacy = canonical.replace(
+        b'"current_outcome":"failed"',
+        b'"current_outcome":"partial"',
+    )
+    with sqlite3.connect(path) as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        store_failure_envelope_revision(conn, envelope)
+        conn.commit()
+        conn.execute("DROP TRIGGER runtime_control_failure_envelopes_no_update")
+        conn.execute("PRAGMA ignore_check_constraints = ON")
+        conn.execute(
+            """
+            UPDATE runtime_control_failure_envelope_revisions
+            SET canonical_bytes = ?, canonical_sha256 = ?, current_outcome = 'partial'
+            WHERE failure_id = ? AND revision = 1
+            """,
+            (legacy, sha256(legacy).hexdigest(), envelope.failure_id),
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER runtime_control_failure_envelopes_no_update
+            BEFORE UPDATE ON runtime_control_failure_envelope_revisions
+            BEGIN
+              SELECT RAISE(ABORT, 'failure_envelope_immutable');
+            END
+            """
+        )
+    _downgrade_v14_run_columns_to_v13(path)
+
+    with pytest.raises(FailureEnvelopeStorageError):
+        RuntimeControlStore(path).initialize()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert conn.execute(
+            """
+            SELECT current_outcome
+            FROM runtime_control_failure_envelope_revisions
+            WHERE failure_id = ? AND revision = 1
+            """,
+            (envelope.failure_id,),
+        ).fetchone() == ("partial",)
+        conn.execute("DROP TRIGGER runtime_control_failure_envelopes_no_update")
+        conn.execute("PRAGMA ignore_check_constraints = ON")
+        conn.execute(
+            """
+            UPDATE runtime_control_failure_envelope_revisions
+            SET canonical_bytes = ?, canonical_sha256 = ?, current_outcome = 'failed'
+            WHERE failure_id = ? AND revision = 1
+            """,
+            (canonical, sha256(canonical).hexdigest(), envelope.failure_id),
+        )
+        conn.execute(
+            """
+            CREATE TRIGGER runtime_control_failure_envelopes_no_update
+            BEFORE UPDATE ON runtime_control_failure_envelope_revisions
+            BEGIN
+              SELECT RAISE(ABORT, 'failure_envelope_immutable');
+            END
+            """
+        )
+
+    RuntimeControlStore(path).initialize()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
 
 
 @pytest.mark.parametrize("completed_statements", (1, 2, 3))
@@ -121,7 +380,7 @@ def test_fresh_failure_envelope_ddl_failure_rolls_back_and_retries(
     RuntimeControlStore(path).initialize()
 
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
         assert (
             conn.execute(
                 """
@@ -158,7 +417,7 @@ def test_real_v12_to_v13_migration_creates_backup_and_reopens(
     backups = list((tmp_path / "migration_backups").glob("runtime-control-*.sqlite3"))
     assert len(backups) == 1
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
         assert (
             conn.execute(
                 "SELECT COUNT(*) FROM runtime_control_failure_envelope_revisions"
@@ -920,7 +1179,7 @@ def test_sidecar_browser_source_and_wtscli_have_zero_writer_calls_or_table_acces
     assert violations == []
 
 
-def test_production_failure_envelope_writer_callers_remain_zero() -> None:
+def test_failure_envelope_writer_has_only_the_main_owned_atomic_boundary() -> None:
     root = Path(__file__).parents[1] / "src"
     callers: list[str] = []
     for path in root.rglob("*.py"):
@@ -936,6 +1195,31 @@ def test_production_failure_envelope_writer_callers_remain_zero() -> None:
                 or (
                     isinstance(node.func, ast.Attribute)
                     and node.func.attr == "store_failure_envelope_revision"
+                )
+            ):
+                callers.append(f"{path.relative_to(root)}:{node.lineno}")
+    assert len(callers) == 1
+    assert callers[0].startswith(
+        "seektalent_runtime_control/failed_outcome.py:"
+    )
+
+
+def test_production_failed_outcome_callers_remain_zero() -> None:
+    root = Path(__file__).parents[1] / "src"
+    callers: list[str] = []
+    for path in root.rglob("*.py"):
+        if path.name == "store.py" and path.parent.name == "seektalent_runtime_control":
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call) and (
+                (
+                    isinstance(node.func, ast.Name)
+                    and node.func.id == "commit_failed_outcome"
+                )
+                or (
+                    isinstance(node.func, ast.Attribute)
+                    and node.func.attr == "commit_failed_outcome"
                 )
             ):
                 callers.append(f"{path.relative_to(root)}:{node.lineno}")
