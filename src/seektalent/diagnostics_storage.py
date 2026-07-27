@@ -42,7 +42,17 @@ _SCHEMA_STATEMENTS = (
         AND canonical_sha256 NOT GLOB '*[^0-9a-f]*'
       ),
       CHECK (attempt_no IS NULL OR (attempt_no >= 1 AND attempt_no <= 9007199254740991)),
-      CHECK (current_outcome IS NULL OR current_outcome IN ('partial', 'failed', 'unknown'))
+      CHECK (
+        current_outcome IS NULL
+        OR current_outcome IN (
+          'succeeded_with_results',
+          'succeeded_empty',
+          'degraded_with_results',
+          'needs_attention',
+          'failed',
+          'cancelled'
+        )
+      )
     )
     """,
     f"""
@@ -107,6 +117,31 @@ _PROJECTION_FIELDS = (
     "occurred_at",
     "observed_at",
 )
+_STORAGE_COLUMNS = (
+    "failure_id",
+    "revision",
+    "canonical_bytes",
+    "canonical_sha256",
+    *_PROJECTION_FIELDS[2:],
+)
+_STORAGE_COLUMN_LIST = ", ".join(_STORAGE_COLUMNS)
+_STORAGE_COLUMN_FACTS = (
+    ("failure_id", "TEXT", 1, None, 1, 0),
+    ("revision", "INTEGER", 1, None, 2, 0),
+    ("canonical_bytes", "BLOB", 1, None, 0, 0),
+    ("canonical_sha256", "TEXT", 1, None, 0, 0),
+    ("run_id", "TEXT", 1, None, 0, 0),
+    ("operation_id", "TEXT", 0, None, 0, 0),
+    ("attempt_no", "INTEGER", 0, None, 0, 0),
+    ("correlation_id", "TEXT", 0, None, 0, 0),
+    ("component", "TEXT", 1, None, 0, 0),
+    ("domain", "TEXT", 1, None, 0, 0),
+    ("failure_kind", "TEXT", 1, None, 0, 0),
+    ("reason_code", "TEXT", 1, None, 0, 0),
+    ("current_outcome", "TEXT", 0, None, 0, 0),
+    ("occurred_at", "TEXT", 1, None, 0, 0),
+    ("observed_at", "TEXT", 1, None, 0, 0),
+)
 _COLUMN_INDEX = {
     "failure_id": 0,
     "revision": 1,
@@ -153,6 +188,63 @@ def create_failure_envelope_schema(conn: sqlite3.Connection) -> None:
     try:
         for statement in _SCHEMA_STATEMENTS:
             conn.execute(statement)
+    except sqlite3.Error:
+        raise FailureEnvelopeStorageError("failure_envelope_schema_failed") from None
+
+
+def migrate_failure_envelope_schema_v13_to_v14(
+    conn: sqlite3.Connection,
+) -> None:
+    """Replace the legacy outcome constraint without accepting legacy aliases."""
+
+    try:
+        column_facts = tuple(
+            (
+                row[1],
+                row[2].upper(),
+                row[3],
+                row[4],
+                row[5],
+                row[6],
+            )
+            for row in conn.execute(
+                f"PRAGMA table_xinfo({FAILURE_ENVELOPE_TABLE})"
+            )
+        )
+        if column_facts != _STORAGE_COLUMN_FACTS:
+            raise FailureEnvelopeStorageError(
+                "failure_envelope_schema_failed"
+            )
+        rows = conn.execute(
+            f"""
+            SELECT {_STORAGE_COLUMN_LIST}
+            FROM {FAILURE_ENVELOPE_TABLE}
+            ORDER BY failure_id, revision
+            """
+        ).fetchall()
+        for row in rows:
+            _verified_envelope_from_row(row)
+        conn.execute("DROP TRIGGER runtime_control_failure_envelopes_no_overwrite")
+        conn.execute("DROP TRIGGER runtime_control_failure_envelopes_contiguous")
+        conn.execute("DROP TRIGGER runtime_control_failure_envelopes_no_update")
+        conn.execute("DROP TRIGGER runtime_control_failure_envelopes_no_delete")
+        conn.execute("DROP INDEX idx_runtime_failure_envelopes_run")
+        conn.execute(
+            f"ALTER TABLE {FAILURE_ENVELOPE_TABLE} "
+            f"RENAME TO {FAILURE_ENVELOPE_TABLE}_v13"
+        )
+        create_failure_envelope_schema(conn)
+        conn.execute(
+            f"""
+            INSERT INTO {FAILURE_ENVELOPE_TABLE} ({_STORAGE_COLUMN_LIST})
+            SELECT {_STORAGE_COLUMN_LIST}
+            FROM {FAILURE_ENVELOPE_TABLE}_v13
+            ORDER BY failure_id, revision
+            """
+        )
+        conn.execute(f"DROP TABLE {FAILURE_ENVELOPE_TABLE}_v13")
+    except FailureEnvelopeStorageError:
+        raise
     except sqlite3.Error:
         raise FailureEnvelopeStorageError("failure_envelope_schema_failed") from None
 

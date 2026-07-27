@@ -27,10 +27,10 @@ def test_v11_to_v12_preserves_ordinal_one_rows_and_reconciliation(tmp_path: Path
 
     store.initialize()
 
-    assert RUNTIME_CONTROL_SCHEMA_VERSION == 13
+    assert RUNTIME_CONTROL_SCHEMA_VERSION == 14
     with sqlite3.connect(store.path) as conn:
         conn.row_factory = sqlite3.Row
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 13
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 14
         expectation = conn.execute(
             """
             SELECT dispatch_authorization_ordinal, runtime_attempt_no,
@@ -105,7 +105,7 @@ def test_v11_to_v12_faults_roll_back_schema_and_rows(
         lambda _point: None,
     )
     store.initialize()
-    assert _source_epoch_version(store.path) == 13
+    assert _source_epoch_version(store.path) == 14
     assert _source_epoch_rows(store.path, legacy_columns=True) == before
 
 

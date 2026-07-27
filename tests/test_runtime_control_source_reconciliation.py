@@ -170,7 +170,7 @@ def test_v10_reconciliation_migration_preserves_existing_rows_exactly(tmp_path: 
             WHERE type = 'table' AND name = 'runtime_control_source_reconciliations'
             """
         ).fetchone()[0]
-    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 13
+    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 14
     assert _reconciliation_rows(store.path) == before
     assert (
         "source_operation_disposition IN ('completed', 'partial', 'user_action_required', 'incompatible', 'failed')"

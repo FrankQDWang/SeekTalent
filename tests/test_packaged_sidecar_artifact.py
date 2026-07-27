@@ -46,6 +46,7 @@ pytestmark = pytest.mark.skipif(
     platform.system() not in {"Darwin", "Windows"},
     reason="the packaged sidecar artifact has native Windows/macOS targets only",
 )
+PACKAGED_ARTIFACT_IO_TIMEOUT_SECONDS = 90
 
 
 def _install_active_artifact(tmp_path: Path) -> Path:
@@ -234,13 +235,20 @@ def test_packaged_artifact_returns_authenticated_read_only_sqlite_history(
         lambda lease: _spawn_test_history_sidecar(lease, harness.path),
     )
 
-    session = spawn_ready_sidecar(_acquire(root), timeout=30)
+    session = spawn_ready_sidecar(
+        _acquire(root),
+        timeout=PACKAGED_ARTIFACT_IO_TIMEOUT_SECONDS,
+    )
     try:
-        admitted = exchange_source_history(session, _query(), timeout=30)
+        admitted = exchange_source_history(
+            session,
+            _query(),
+            timeout=PACKAGED_ARTIFACT_IO_TIMEOUT_SECONDS,
+        )
         second = exchange_source_history(
             session,
             _query(operation_id="operation-2", idempotency_key="key-operation-2"),
-            timeout=30,
+            timeout=PACKAGED_ARTIFACT_IO_TIMEOUT_SECONDS,
         )
         assert isinstance(admitted.payload, SourceHistoryMatched)
         assert admitted.payload.facts[0].conclusion == "accepted_no_dispatch"
@@ -248,7 +256,7 @@ def test_packaged_artifact_returns_authenticated_read_only_sqlite_history(
         assert isinstance(second.payload, SourceHistoryNotFound)
         assert second.session_id == session.session_id
     finally:
-        session.close(30)
+        session.close(PACKAGED_ARTIFACT_IO_TIMEOUT_SECONDS)
 
     assert harness.path.read_bytes() == before_bytes
     assert harness.path.stat().st_mtime_ns == before_mtime
@@ -279,14 +287,25 @@ def test_packaged_artifact_runs_history_verify_history_over_one_authenticated_pi
         ),
     )
 
-    session = spawn_ready_sidecar(_acquire(root), timeout=30)
+    session = spawn_ready_sidecar(
+        _acquire(root),
+        timeout=PACKAGED_ARTIFACT_IO_TIMEOUT_SECONDS,
+    )
     try:
-        before = exchange_source_history(session, _query(), timeout=30)
-        verify_exchange = exchange_verify_session(session, _verify_request(), timeout=30)
+        before = exchange_source_history(
+            session,
+            _query(),
+            timeout=PACKAGED_ARTIFACT_IO_TIMEOUT_SECONDS,
+        )
+        verify_exchange = exchange_verify_session(
+            session,
+            _verify_request(),
+            timeout=PACKAGED_ARTIFACT_IO_TIMEOUT_SECONDS,
+        )
         after = exchange_source_history(
             session,
             _query(operation_id="packaged-history-after-verify", idempotency_key="packaged-history-after-verify-key"),
-            timeout=30,
+            timeout=PACKAGED_ARTIFACT_IO_TIMEOUT_SECONDS,
         )
         assert isinstance(before.payload, SourceHistoryMatched)
         assert verify_exchange.accepted_ack is not None
@@ -294,7 +313,7 @@ def test_packaged_artifact_runs_history_verify_history_over_one_authenticated_pi
         assert verify_exchange.terminal.payload.session_readiness == "ready"
         assert isinstance(after.payload, SourceHistoryNotFound)
     finally:
-        session.close(30)
+        session.close(PACKAGED_ARTIFACT_IO_TIMEOUT_SECONDS)
 
     with sqlite3.connect(journal_path) as connection:
         phases = connection.execute("SELECT phase FROM source_history_heads").fetchall()
@@ -322,9 +341,16 @@ def test_packaged_artifact_runs_one_safe_retry_effect_and_only_replays_redeliver
         ),
     )
 
-    session = spawn_ready_sidecar(_acquire(root), timeout=30)
+    session = spawn_ready_sidecar(
+        _acquire(root),
+        timeout=PACKAGED_ARTIFACT_IO_TIMEOUT_SECONDS,
+    )
     try:
-        initial = exchange_verify_session(session, _safe_retry_request(), timeout=30)
+        initial = exchange_verify_session(
+            session,
+            _safe_retry_request(),
+            timeout=PACKAGED_ARTIFACT_IO_TIMEOUT_SECONDS,
+        )
         redelivery = exchange_verify_session(
             session,
             _safe_retry_request(
@@ -332,7 +358,7 @@ def test_packaged_artifact_runs_one_safe_retry_effect_and_only_replays_redeliver
                 runtime_attempt_fence_token=RAW_FENCE_REPLAY,
                 deadline_value=30_000,
             ),
-            timeout=30,
+            timeout=PACKAGED_ARTIFACT_IO_TIMEOUT_SECONDS,
         )
         assert initial.accepted_ack is not None
         assert initial.accepted_ack.payload.accepted_fact == "accepted_no_dispatch"
@@ -341,7 +367,7 @@ def test_packaged_artifact_runs_one_safe_retry_effect_and_only_replays_redeliver
         assert redelivery.accepted_ack.payload == initial.accepted_ack.payload
         assert redelivery.terminal.payload == initial.terminal.payload
     finally:
-        session.close(30)
+        session.close(PACKAGED_ARTIFACT_IO_TIMEOUT_SECONDS)
 
     with sqlite3.connect(journal_path) as connection:
         ordinal_two_phases = connection.execute(

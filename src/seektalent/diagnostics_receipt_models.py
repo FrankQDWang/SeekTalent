@@ -37,6 +37,7 @@ from seektalent.diagnostics_model_common import (
     StrictDiagnosticsModel,
     VersionedIdentityRefV1,
 )
+from seektalent.product_outcome import ProductOutcome
 from seektalent.diagnostics_registry import (
     COMPONENTS,
     EVENT_DEFINITIONS,
@@ -330,7 +331,7 @@ class OperationEvidenceV1(ArtifactModel):
     source_operation_disposition_ref: VersionedIdentityRefV1 | None
     source_operation_disposition: Literal["completed", "failed", "unknown"] | None
     product_outcome_ref: VersionedIdentityRefV1 | None
-    product_outcome: Literal["succeeded", "failed", "partial", "unknown"] | None
+    product_outcome: ProductOutcome | None
     missing_evidence_refs: Annotated[tuple[RandomIdentity, ...], Field(max_length=32)]
     rejected_stale_write_count: NonNegativeSafeInteger
     journal_truncation: Literal["none", "budget", "retention", "gap"]

@@ -1369,7 +1369,9 @@ def test_recovery_revokes_expired_executor_authority_without_rewriting_terminal_
     assert service.recover_start_timeouts(resume_recoverable=True) == []
     assert service.recover_start_timeouts(resume_recoverable=False) == []
 
-    assert store.get_run("runtime_run_1") == terminal_run
+    assert store.get_run("runtime_run_1") == terminal_run.model_copy(
+        update={"state_revision": terminal_run.state_revision + 1}
+    )
     assert store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=10).events == terminal_events
     assert store.list_active_executor_leases() == []
     with sqlite3.connect(store.path) as conn:
@@ -1405,7 +1407,9 @@ def test_recovery_only_revokes_expired_lease_for_no_owner_nonterminal_state(
     ).recover_start_timeouts(resume_recoverable=True)
 
     assert decisions == []
-    assert store.get_run("runtime_run_1") == run_before
+    assert store.get_run("runtime_run_1") == run_before.model_copy(
+        update={"state_revision": run_before.state_revision + 1}
+    )
     assert store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=10).events == []
     assert store.list_active_executor_leases() == []
 
@@ -1438,7 +1442,9 @@ def test_lease_only_cleanup_does_not_starve_later_owner_settlement(tmp_path: Pat
     ).recover_start_timeouts(resume_recoverable=False)
 
     assert [decision.runtime_run_id for decision in decisions] == ["runtime_run_owner"]
-    assert store.get_run("runtime_run_paused") == paused_before
+    assert store.get_run("runtime_run_paused") == paused_before.model_copy(
+        update={"state_revision": paused_before.state_revision + 1}
+    )
     assert store.get_run("runtime_run_owner").status == "failed"
     assert store.list_active_executor_leases() == []
 

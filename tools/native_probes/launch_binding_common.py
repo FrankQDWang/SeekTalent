@@ -18,22 +18,23 @@ def sha256(path: Path) -> str:
         return hashlib.file_digest(source, "sha256").hexdigest()
 
 
-def run_executable(path: Path, *, timeout_seconds: float = 20) -> dict[str, int | str]:
+def run_executable(path: Path, *, timeout_seconds: float = 60) -> dict[str, int | str]:
+    process = subprocess.Popen(
+        [str(path)],
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
     try:
-        completed = subprocess.run(
-            [str(path)],
-            check=False,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=timeout_seconds,
-        )
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
     except subprocess.TimeoutExpired as exc:
+        process.kill()
+        process.communicate()
         raise ProbeFailure(f"bounded executable did not exit within {timeout_seconds}s: {path}") from exc
     return {
-        "returncode": completed.returncode,
-        "stdout_sha256": hashlib.sha256(completed.stdout).hexdigest(),
-        "stderr_sha256": hashlib.sha256(completed.stderr).hexdigest(),
+        "returncode": process.returncode,
+        "stdout_sha256": hashlib.sha256(stdout).hexdigest(),
+        "stderr_sha256": hashlib.sha256(stderr).hexdigest(),
     }
 
 

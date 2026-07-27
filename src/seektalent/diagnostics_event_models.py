@@ -45,6 +45,7 @@ from seektalent.diagnostics_registry import (
     require_token,
 )
 from seektalent.diagnostics_scalar import validate_scalar
+from seektalent.product_outcome import ProductOutcome
 
 
 class CanonicalEventV1(ArtifactModel):
@@ -199,7 +200,7 @@ class FailureEnvelopeV1(ArtifactModel):
     diagnostic_gap: DiagnosticGapV1 | None
     observed_boundary_ref: RandomIdentity | None
     source_coverage: SourceCoverageV1 | None
-    current_outcome: Literal["partial", "failed", "unknown"] | None
+    current_outcome: ProductOutcome | None
     user_action: UserActionV1 | None
     support_action: SupportActionV1 | None
     occurred_at: UtcTimestamp
