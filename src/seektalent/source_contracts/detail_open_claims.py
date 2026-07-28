@@ -38,7 +38,8 @@ class DetailOpenClaimLedger:
             if provider_candidate_key_hash in self._claims:
                 return False
             self._claims[provider_candidate_key_hash] = RuntimeDetailOpenClaim(status="claimed")
-            return True
+        self._checkpoint()
+        return True
 
     def record_browser_open_attempt(self, provider_candidate_key_hash: str) -> None:
         with self._lock:
@@ -77,6 +78,7 @@ class DetailOpenClaimLedger:
             if claim.browser_open_attempt_count != 0:
                 raise ValueError("detail_open_claim_attempted_cannot_release")
             del self._claims[provider_candidate_key_hash]
+        self._checkpoint()
 
     def snapshot(self) -> dict[str, RuntimeDetailOpenClaim]:
         with self._lock:

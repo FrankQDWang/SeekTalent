@@ -65,7 +65,12 @@ def test_workflow_adapter_persists_run_and_runtime_callbacks(tmp_path: Path) -> 
     ]
     assert events[3].payload["workflowRuntimeRunId"] == "workflow_run_1"
     assert events[5].payload["checkpointId"] == "rtcheckpoint_1"
-    assert store.get_latest_checkpoint(runtime_run_id="runtime_run_1").run_state == {"round": 1}
+    checkpoint = store.get_latest_checkpoint(
+        runtime_run_id="runtime_run_1"
+    )
+    assert checkpoint is not None
+    assert checkpoint.is_final_manifest is True
+    assert checkpoint.run_state == {}
 
 
 def test_workflow_adapter_persists_private_detail_claim_map_without_exposing_checkpoint_detail(tmp_path: Path) -> None:
@@ -115,7 +120,10 @@ def test_workflow_adapter_persists_private_detail_claim_map_without_exposing_che
 
     checkpoint = store.get_latest_checkpoint(runtime_run_id="runtime_run_1")
     assert checkpoint is not None
-    assert checkpoint.run_state["detail_open_claims_by_provider_key"] == claim_map
+    assert store.get_detail_claim_snapshot(
+        runtime_run_id="runtime_run_1"
+    ) == claim_map
+    assert "detail_open_claims_by_provider_key" not in checkpoint.run_state
 
     detail = RuntimeDetailService(store=store).get_runtime_detail(
         runtime_run_id="runtime_run_1",
@@ -313,6 +321,11 @@ class CallbackRuntime:
                 payload={"stage": "runtime"},
             )
         )
+        detail_claims = self._checkpoint_run_state.get(
+            "detail_open_claims_by_provider_key"
+        )
+        if detail_claims is not None:
+            kwargs["runtime_detail_claim_callback"](detail_claims)
         kwargs["runtime_checkpoint_callback"](
             SimpleNamespace(
                 run_id="workflow_run_1",

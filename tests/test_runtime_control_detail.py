@@ -134,7 +134,7 @@ def test_runtime_detail_checkpoint_cites_checkpoint_and_returns_missing_reason(t
             runtime_run_id="runtime_run_1",
             stage="round",
             round_no=2,
-            safe_boundary="after_scoring",
+            safe_boundary="after_round_controller",
             run_state={"round": 2},
             source_plan={"sourceIds": ["cts"]},
             pending_commands=[],
@@ -160,7 +160,7 @@ def test_runtime_detail_checkpoint_cites_checkpoint_and_returns_missing_reason(t
     )
 
     assert detail.checkpoint_ids == ["rtcheckpoint_1"]
-    assert detail.facts[0]["value"] == "after_scoring"
+    assert detail.facts[0]["value"] == "after_round_controller"
     assert detail.artifact_refs == []
     assert missing.reason_code == "runtime_checkpoint_not_found"
 

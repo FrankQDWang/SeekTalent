@@ -1574,19 +1574,9 @@ def _checkpoint_from_action(
             "runtime_needs_attention_checkpoint_mismatch"
         )
     try:
-        return RuntimeCheckpoint(
-            checkpoint_id=row["checkpoint_id"],
-            runtime_run_id=row["runtime_run_id"],
-            stage=row["stage"],
-            round_no=row["round_no"],
-            safe_boundary=row["safe_boundary"],
-            run_state=json.loads(row["run_state_json"]),
-            source_plan=json.loads(row["source_plan_json"]),
-            pending_commands=json.loads(row["pending_commands_json"]),
-            artifact_manifest_ref=row["artifact_manifest_ref"],
-            schema_version=row["schema_version"],
-            created_at=row["created_at"],
-        )
+        from seektalent_runtime_control.store import _checkpoint_from_row
+
+        return _checkpoint_from_row(row)
     except (TypeError, ValueError, json.JSONDecodeError):
         raise RuntimeControlError(
             "runtime_needs_attention_checkpoint_mismatch"
@@ -1636,6 +1626,12 @@ def _checkpoint_hash(checkpoint: RuntimeCheckpoint) -> str:
 
 
 def _candidate_truth_hash(checkpoint: RuntimeCheckpoint) -> str:
+    if checkpoint.schema_version == "runtime-control-checkpoint/v2":
+        if checkpoint.candidate_truth_hash is None:
+            raise RuntimeControlError(
+                "runtime_needs_attention_checkpoint_mismatch"
+            )
+        return checkpoint.candidate_truth_hash
     from seektalent_runtime_control.candidates import (
         candidate_truth_from_run_state,
     )

@@ -364,6 +364,7 @@ RuntimeSourceQueryPolicyProvider = Callable[
 
 RuntimeStartCallback = Callable[[str], None]
 RuntimeCheckpointCallback = Callable[[object], None]
+RuntimeDetailClaimCallback = Callable[[object], None]
 RuntimeRoundBoundaryCallback = Callable[[int], RequirementSheet | None]
 RuntimeSourceLaneRunner = Callable[[RuntimeSourceLanePlan], Awaitable[RuntimeSourceLaneResult]]
 RuntimeSourceLaneRequestRunner = Callable[[RuntimeSourceLaneRequest, object | None], Awaitable[RuntimeSourceLaneResult]]
@@ -587,6 +588,7 @@ class WorkflowRuntime:
         progress_callback: ProgressCallback | None = None,
         runtime_start_callback: RuntimeStartCallback | None = None,
         runtime_checkpoint_callback: RuntimeCheckpointCallback | None = None,
+        runtime_detail_claim_callback: RuntimeDetailClaimCallback | None = None,
         runtime_round_boundary_callback: RuntimeRoundBoundaryCallback | None = None,
         requirement_cache_scope: str | None = None,
         approved_requirement_sheet: RequirementSheet | None = None,
@@ -601,6 +603,7 @@ class WorkflowRuntime:
                 progress_callback=progress_callback,
                 runtime_start_callback=runtime_start_callback,
                 runtime_checkpoint_callback=runtime_checkpoint_callback,
+                runtime_detail_claim_callback=runtime_detail_claim_callback,
                 runtime_round_boundary_callback=runtime_round_boundary_callback,
                 requirement_cache_scope=requirement_cache_scope,
                 approved_requirement_sheet=approved_requirement_sheet,
@@ -879,9 +882,12 @@ class WorkflowRuntime:
         progress_callback: ProgressCallback | None = None,
         runtime_start_callback: RuntimeStartCallback | None = None,
         runtime_checkpoint_callback: RuntimeCheckpointCallback | None = None,
+        runtime_detail_claim_callback: RuntimeDetailClaimCallback | None = None,
         runtime_round_boundary_callback: RuntimeRoundBoundaryCallback | None = None,
         requirement_cache_scope: str | None = None,
         approved_requirement_sheet: RequirementSheet | None = None,
+        resume_checkpoint: Mapping[str, object] | None = None,
+        resume_run_state: Mapping[str, object] | None = None,
     ) -> RunArtifacts:
         tracer = RunTracer(self.settings.artifacts_path, output_mode=self.settings.runtime_artifact_output_mode)
         corpus_session = tracer.store.create_root(
@@ -913,21 +919,30 @@ class WorkflowRuntime:
                 payload={"stage": "runtime"},
             )
             self._require_live_llm_config()
-            run_state = await self._build_run_state(
-                job_title=job_title,
-                jd=jd,
-                notes=notes,
-                tracer=tracer,
-                progress_callback=progress_callback,
-                requirement_cache_scope=requirement_cache_scope,
-                approved_requirement_sheet=approved_requirement_sheet,
+            run_state = (
+                RunState.model_validate(resume_run_state)
+                if resume_run_state is not None
+                else await self._build_run_state(
+                    job_title=job_title,
+                    jd=jd,
+                    notes=notes,
+                    tracer=tracer,
+                    progress_callback=progress_callback,
+                    requirement_cache_scope=requirement_cache_scope,
+                    approved_requirement_sheet=approved_requirement_sheet,
+                )
             )
+            del resume_checkpoint
             detail_open_claim_ledger: DetailOpenClaimLedger
             detail_open_claim_ledger = DetailOpenClaimLedger(
                 run_state.detail_open_claims_by_provider_key,
-                checkpoint=lambda: self._refresh_runtime_candidate_checkpoint(
-                    runtime_checkpoint_callback=runtime_checkpoint_callback, tracer=tracer,
-                    run_state=run_state, detail_open_claim_ledger=detail_open_claim_ledger),
+                checkpoint=(
+                    lambda: runtime_detail_claim_callback(
+                        detail_open_claim_ledger.snapshot()
+                    )
+                    if runtime_detail_claim_callback is not None
+                    else None
+                ),
             )
             top_scored, stop_reason, rounds_executed, terminal_controller_round = await self._run_rounds(
                 run_state=run_state,
@@ -938,6 +953,13 @@ class WorkflowRuntime:
                 progress_callback=progress_callback,
                 runtime_checkpoint_callback=runtime_checkpoint_callback,
                 runtime_round_boundary_callback=runtime_round_boundary_callback,
+            )
+            self._refresh_runtime_candidate_checkpoint(
+                runtime_checkpoint_callback=runtime_checkpoint_callback,
+                tracer=tracer,
+                run_state=run_state,
+                safe_boundary="before_finalization",
+                round_no=rounds_executed or None,
             )
             finalize_context = build_finalize_context(
                 run_state=run_state,
@@ -1003,7 +1025,8 @@ class WorkflowRuntime:
                 runtime_checkpoint_callback=runtime_checkpoint_callback,
                 tracer=tracer,
                 run_state=run_state,
-                detail_open_claim_ledger=detail_open_claim_ledger,
+                safe_boundary="after_finalization_commit",
+                round_no=None,
             )
             self._emit_runtime_public_event(
                 tracer=tracer,
@@ -1693,7 +1716,8 @@ class WorkflowRuntime:
                     runtime_checkpoint_callback=runtime_checkpoint_callback,
                     tracer=tracer,
                     run_state=run_state,
-                    detail_open_claim_ledger=detail_open_claim_ledger,
+                    safe_boundary="after_source_result_commit",
+                    round_no=round_no,
                 )
             self._emit_runtime_public_event(
                 tracer=tracer,
@@ -1768,7 +1792,8 @@ class WorkflowRuntime:
             runtime_checkpoint_callback=runtime_checkpoint_callback,
             tracer=tracer,
             run_state=run_state,
-            detail_open_claim_ledger=detail_open_claim_ledger,
+            safe_boundary="after_source_result_commit",
+            round_no=round_no,
         )
         self._merge_source_round_dispatch_result(
             run_state=run_state,
@@ -2075,12 +2100,18 @@ class WorkflowRuntime:
                 runtime_run_id=tracer.run_id,
                 source_context=source_context,
             )
-        seen_dedup_keys: set[str] = set()
+        seen_dedup_keys = {
+            candidate.dedup_key
+            for candidate in run_state.candidate_store.values()
+        }
         stop_reason = "max_rounds_reached"
         rounds_executed = 0
         terminal_controller_round: TerminalControllerRound | None = None
 
-        for round_no in range(1, self.settings.max_rounds + 1):
+        for round_no in range(
+            len(run_state.round_history) + 1,
+            self.settings.max_rounds + 1,
+        ):
             if runtime_round_boundary_callback is not None:
                 updated_requirement_sheet = runtime_round_boundary_callback(round_no)
                 if updated_requirement_sheet is not None:
@@ -2404,13 +2435,6 @@ class WorkflowRuntime:
                 item.resume_id for item in new_candidates if item.resume_id not in run_state.seen_resume_ids
             )
             seen_dedup_keys.update(item.dedup_key for item in new_candidates)
-            self._refresh_runtime_candidate_checkpoint(
-                runtime_checkpoint_callback=runtime_checkpoint_callback,
-                tracer=tracer,
-                run_state=run_state,
-                detail_open_claim_ledger=detail_open_claim_ledger,
-            )
-
             previous_scored_count = len(run_state.scorecards_by_resume_id)
             self._emit_progress(
                 progress_callback,
@@ -2742,12 +2766,6 @@ class WorkflowRuntime:
                     },
                 ),
             )
-            self._refresh_runtime_candidate_checkpoint(
-                runtime_checkpoint_callback=runtime_checkpoint_callback,
-                tracer=tracer,
-                run_state=run_state,
-                detail_open_claim_ledger=detail_open_claim_ledger,
-            )
             resume_quality_comment: str | None = None
             resume_quality_comment_error: str | None = None
             quality_candidates = [
@@ -2892,6 +2910,13 @@ class WorkflowRuntime:
                     resume_quality_comment_error=resume_quality_comment_error,
                 ),
             )
+            self._refresh_runtime_candidate_checkpoint(
+                runtime_checkpoint_callback=runtime_checkpoint_callback,
+                tracer=tracer,
+                run_state=run_state,
+                safe_boundary="after_round_controller",
+                round_no=round_no,
+            )
 
             rounds_executed = round_no
 
@@ -2903,23 +2928,30 @@ class WorkflowRuntime:
         runtime_checkpoint_callback: RuntimeCheckpointCallback | None,
         tracer: RunTracer,
         run_state: RunState,
-        detail_open_claim_ledger: DetailOpenClaimLedger,
+        safe_boundary: str = "runtime_candidate_checkpoint",
+        round_no: int | None = None,
+        detail_open_claim_ledger: DetailOpenClaimLedger | None = None,
     ) -> None:
+        del detail_open_claim_ledger
         if runtime_checkpoint_callback is None:
             return
-        snapshot = detail_open_claim_ledger.snapshot()
-        checkpoint_run_state = run_state.model_copy(
-            update={"detail_open_claims_by_provider_key": snapshot},
-        )
         runtime_checkpoint_callback(
             SimpleNamespace(
                 run_id=tracer.run_id,
-                run_state=checkpoint_run_state,
-                candidate_store=checkpoint_run_state.candidate_store,
-                normalized_store=checkpoint_run_state.normalized_store,
+                stage=(
+                    "finalization"
+                    if safe_boundary
+                    in {"before_finalization", "after_finalization_commit"}
+                    else "round"
+                ),
+                round_no=round_no,
+                safe_boundary=safe_boundary,
+                run_state=run_state,
+                candidate_store=run_state.candidate_store,
+                normalized_store=run_state.normalized_store,
                 final_result=SimpleNamespace(candidates=[]),
                 finalization_revision=None,
-                source_coverage_summary=checkpoint_run_state.source_coverage_summary,
+                source_coverage_summary=run_state.source_coverage_summary,
             )
         )
 

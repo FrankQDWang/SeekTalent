@@ -457,7 +457,7 @@ def _seed_active_debris(store: RuntimeControlStore, *, runtime_run_id: str) -> N
             runtime_run_id=runtime_run_id,
             stage="runtime",
             round_no=1,
-            safe_boundary="after_source",
+            safe_boundary="after_source_result_commit",
             run_state={"round": 1},
             source_plan={},
             pending_commands=[],

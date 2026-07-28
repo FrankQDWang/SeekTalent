@@ -90,7 +90,14 @@ def test_attempt_and_terminal_claim_transitions_are_checkpointed() -> None:
     ledger: DetailOpenClaimLedger
     ledger = DetailOpenClaimLedger(claims, checkpoint=lambda: snapshots.append(ledger.snapshot()))
     assert ledger.try_claim("candidate-key") is True
-    assert snapshots == []
     ledger.record_browser_open_attempt("candidate-key")
     ledger.mark_opened("candidate-key")
-    assert [snapshot["candidate-key"].status for snapshot in snapshots] == ["claimed", "opened"]
+    assert [snapshot["candidate-key"].status for snapshot in snapshots] == [
+        "claimed",
+        "claimed",
+        "opened",
+    ]
+    assert [
+        snapshot["candidate-key"].browser_open_attempt_count
+        for snapshot in snapshots
+    ] == [0, 1, 1]

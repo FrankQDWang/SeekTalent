@@ -107,7 +107,8 @@ def test_checkpoint_write_requires_active_executor_and_updates_latest_pointer(tm
 
     assert saved.checkpoint_id == "rtcheckpoint_1"
     assert store.get_run("runtime_run_1").latest_checkpoint_id == "rtcheckpoint_1"
-    assert store.get_latest_checkpoint(runtime_run_id="runtime_run_1") == checkpoint
+    assert store.get_latest_checkpoint(runtime_run_id="runtime_run_1") == saved
+    assert saved.schema_version == "runtime-control-checkpoint/v2"
 
     with pytest.raises(RuntimeControlError) as exc_info:
         store.write_checkpoint(
@@ -192,7 +193,11 @@ def test_recoverable_checkpoint_ignores_newer_unreferenced_row(tmp_path: Path) -
         schema_version="runtime-control-checkpoint/v1",
         created_at="2026-06-08T00:00:01.000000Z",
     )
-    store.write_checkpoint(pointer, executor_id="executor_1", attempt_no=lease.attempt_no)
+    pointer = store.write_checkpoint(
+        pointer,
+        executor_id="executor_1",
+        attempt_no=lease.attempt_no,
+    )
     with sqlite3.connect(db_path) as conn:
         _insert_checkpoint_row(
             conn,
@@ -285,14 +290,19 @@ def test_each_registered_safe_boundary_runs_its_validator(
         schema_version="runtime-control-checkpoint/v1",
         created_at="2026-06-08T00:00:01.000000Z",
     )
-    store.write_checkpoint(checkpoint, executor_id="executor_1", attempt_no=lease.attempt_no)
+    checkpoint = store.write_checkpoint(
+        checkpoint,
+        executor_id="executor_1",
+        attempt_no=lease.attempt_no,
+    )
 
     assert store.get_latest_recoverable_checkpoint(runtime_run_id="runtime_run_1") == checkpoint
 
 
 def test_registered_boundary_fails_when_its_committed_truth_is_invalid(tmp_path: Path) -> None:
+    from seektalent_runtime_control.errors import RuntimeControlError
     from seektalent_runtime_control.models import RuntimeCheckpoint
-    from seektalent_runtime_control.store import RuntimeCheckpointLoadFailure, RuntimeControlStore
+    from seektalent_runtime_control.store import RuntimeControlStore
 
     store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
     store.initialize()
@@ -303,30 +313,27 @@ def test_registered_boundary_fails_when_its_committed_truth_is_invalid(tmp_path:
         acquired_at="2026-06-08T00:00:00.000000Z",
         lease_expires_at="2026-06-08T00:01:00.000000Z",
     )
-    store.write_checkpoint(
-        RuntimeCheckpoint(
-            checkpoint_id="rtcheckpoint_invalid_boundary",
-            runtime_run_id="runtime_run_1",
-            stage="round",
-            round_no=2,
-            safe_boundary="after_round_controller",
-            run_state={"round": 1},
-            source_plan={"sourceIds": ["cts", "custom_source"]},
-            pending_commands=[],
-            artifact_manifest_ref=None,
-            schema_version="runtime-control-checkpoint/v1",
-            created_at="2026-06-08T00:00:01.000000Z",
-        ),
-        executor_id="executor_1",
-        attempt_no=lease.attempt_no,
-    )
-
-    assert store.get_latest_recoverable_checkpoint(
-        runtime_run_id="runtime_run_1"
-    ) == RuntimeCheckpointLoadFailure(
-        checkpoint_id="rtcheckpoint_invalid_boundary",
-        reason_code="runtime_checkpoint_safe_boundary_invalid",
-    )
+    with pytest.raises(
+        RuntimeControlError,
+        match="runtime_checkpoint_safe_boundary_invalid",
+    ):
+        store.write_checkpoint(
+            RuntimeCheckpoint(
+                checkpoint_id="rtcheckpoint_invalid_boundary",
+                runtime_run_id="runtime_run_1",
+                stage="round",
+                round_no=2,
+                safe_boundary="after_round_controller",
+                run_state={"round": 1},
+                source_plan={"sourceIds": ["cts", "custom_source"]},
+                pending_commands=[],
+                artifact_manifest_ref=None,
+                schema_version="runtime-control-checkpoint/v1",
+                created_at="2026-06-08T00:00:01.000000Z",
+            ),
+            executor_id="executor_1",
+            attempt_no=lease.attempt_no,
+        )
 
 
 def test_before_source_dispatch_fails_closed_without_positive_dispatch_evidence(tmp_path: Path) -> None:
@@ -529,7 +536,11 @@ def test_runtime_candidate_boundary_validates_same_sqlite_candidate_truth(tmp_pa
         schema_version="runtime-control-checkpoint/v1",
         created_at="2026-06-08T00:00:01.000000Z",
     )
-    store.write_checkpoint(checkpoint, executor_id="executor_1", attempt_no=lease.attempt_no)
+    checkpoint = store.write_checkpoint(
+        checkpoint,
+        executor_id="executor_1",
+        attempt_no=lease.attempt_no,
+    )
     assert store.get_latest_recoverable_checkpoint(runtime_run_id="runtime_run_1") == checkpoint
 
     with sqlite3.connect(db_path) as conn:
@@ -587,7 +598,11 @@ def test_runtime_candidate_boundary_rejects_business_column_tampering_with_uncha
         schema_version="runtime-control-checkpoint/v1",
         created_at="2026-06-08T00:00:01.000000Z",
     )
-    store.write_checkpoint(checkpoint, executor_id="executor_1", attempt_no=lease.attempt_no)
+    checkpoint = store.write_checkpoint(
+        checkpoint,
+        executor_id="executor_1",
+        attempt_no=lease.attempt_no,
+    )
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
@@ -641,7 +656,11 @@ def test_runtime_candidate_boundary_rejects_lossy_persisted_json_shape(tmp_path:
         schema_version="runtime-control-checkpoint/v1",
         created_at="2026-06-08T00:00:01.000000Z",
     )
-    store.write_checkpoint(checkpoint, executor_id="executor_1", attempt_no=lease.attempt_no)
+    checkpoint = store.write_checkpoint(
+        checkpoint,
+        executor_id="executor_1",
+        attempt_no=lease.attempt_no,
+    )
     with sqlite3.connect(db_path) as conn:
         conn.execute(
             """
@@ -721,7 +740,7 @@ def test_runtime_candidate_boundary_rejects_stale_persisted_truth_from_older_che
     tmp_path: Path,
 ) -> None:
     from seektalent_runtime_control.models import RuntimeCheckpoint
-    from seektalent_runtime_control.store import RuntimeCheckpointLoadFailure, RuntimeControlStore
+    from seektalent_runtime_control.store import RuntimeControlStore
 
     store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
     store.initialize()
@@ -770,14 +789,16 @@ def test_runtime_candidate_boundary_rejects_stale_persisted_truth_from_older_che
         schema_version="runtime-control-checkpoint/v1",
         created_at="2026-06-08T00:00:02.000000Z",
     )
-    store.write_checkpoint(latest, executor_id="executor_1", attempt_no=lease.attempt_no)
-
-    assert store.get_latest_recoverable_checkpoint(
-        runtime_run_id="runtime_run_1"
-    ) == RuntimeCheckpointLoadFailure(
-        checkpoint_id="rtcheckpoint_candidate_empty",
-        reason_code="runtime_checkpoint_safe_boundary_invalid",
+    latest = store.write_checkpoint(
+        latest,
+        executor_id="executor_1",
+        attempt_no=lease.attempt_no,
     )
+    assert (
+        store.get_latest_recoverable_checkpoint(runtime_run_id="runtime_run_1")
+        == latest
+    )
+    assert store.list_candidate_identities(runtime_run_id="runtime_run_1") == []
 
 
 def test_after_round_controller_validates_same_sqlite_candidate_truth(tmp_path: Path) -> None:
@@ -816,8 +837,15 @@ def test_after_round_controller_validates_same_sqlite_candidate_truth(tmp_path: 
         schema_version="runtime-control-checkpoint/v1",
         created_at="2026-06-08T00:00:01.000000Z",
     )
-    store.write_checkpoint(checkpoint, executor_id="executor_1", attempt_no=lease.attempt_no)
-    assert store.get_latest_recoverable_checkpoint(runtime_run_id="runtime_run_1") == checkpoint
+    checkpoint = store.write_checkpoint(
+        checkpoint,
+        executor_id="executor_1",
+        attempt_no=lease.attempt_no,
+    )
+    assert (
+        store.get_latest_recoverable_checkpoint(runtime_run_id="runtime_run_1")
+        == checkpoint
+    )
 
     with sqlite3.connect(db_path) as conn:
         conn.execute(

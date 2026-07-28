@@ -231,6 +231,28 @@ class RuntimeCheckpoint(BaseModel):
     artifact_manifest_ref: str | None = None
     schema_version: str
     created_at: str
+    state_revision: int = 0
+    accepted_requirement_revision_id: str | None = None
+    control_state_hash: str | None = None
+    candidate_truth_revision: int = 0
+    candidate_truth_hash: str | None = None
+    detail_claim_revision: int = 0
+    detail_claim_hash: str | None = None
+    durable_refs: dict[str, object] = Field(default_factory=dict)
+    field_bytes: dict[str, int] = Field(default_factory=dict)
+    serialization_latency_ms: float = 0.0
+    projection_latency_ms: float = 0.0
+    payload_size_bytes: int = 0
+    is_final_manifest: bool = False
+
+
+class RuntimeCheckpointCompactionResult(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    runtime_run_id: str
+    checkpoint_count: int
+    checkpoint_bytes: int
+    manifest_checkpoint_id: str
 
 
 class RuntimeUserAction(BaseModel):

@@ -76,7 +76,12 @@ def _after_round_controller_is_valid(
     return (
         _checkpoint_matches_run(checkpoint, context)
         and checkpoint.round_no is not None
-        and _round_marker_matches(checkpoint)
+        and (
+            _round_marker_matches(checkpoint)
+            if checkpoint.schema_version == "runtime-control-checkpoint/v1"
+            else checkpoint.durable_refs.get("roundLedgerHighWatermark")
+            == checkpoint.round_no
+        )
         and context.candidate_truth_valid
     )
 
@@ -84,7 +89,12 @@ def _after_round_controller_is_valid(
 SAFE_BOUNDARY_REGISTRY: dict[str, SafeBoundaryValidator] = {
     "before_source_dispatch": _before_source_dispatch_is_valid,
     "runtime_candidate_checkpoint": _runtime_candidate_checkpoint_is_valid,
+    "after_source_result_commit": _runtime_candidate_checkpoint_is_valid,
     "after_round_controller": _after_round_controller_is_valid,
+    "before_finalization": _runtime_candidate_checkpoint_is_valid,
+    "after_finalization_commit": _runtime_candidate_checkpoint_is_valid,
+    "entering_pause": _runtime_candidate_checkpoint_is_valid,
+    "entering_needs_attention": _runtime_candidate_checkpoint_is_valid,
 }
 
 
