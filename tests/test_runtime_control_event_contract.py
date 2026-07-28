@@ -395,7 +395,7 @@ def test_public_runtime_progress_uses_canonical_summary_for_safe_looking_runtime
 
     assert event.summary == (
         "第 1 轮猎聘检索受阻："
-        "猎聘检索结果暂时无法确认，系统需要先核对本次操作状态。"
+        "猎聘检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。"
     )
     assert raw_message not in repr(event.model_dump(mode="json"))
 

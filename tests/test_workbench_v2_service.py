@@ -1191,7 +1191,7 @@ def test_v2_blocked_liepin_source_result_uses_canonical_summary_instead_of_raw_s
 
     assert progress_events[-1].payload["summary"] == (
         "第 1 轮猎聘检索受阻："
-        "猎聘检索结果暂时无法确认，系统需要先核对本次操作状态。"
+        "猎聘检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。"
     )
 
 
@@ -3773,7 +3773,7 @@ def test_v2_runtime_display_uses_canonical_progress_summary_for_safe_looking_run
 
     assert payload["summary"] == (
         "第 1 轮猎聘检索受阻："
-        "猎聘检索结果暂时无法确认，系统需要先核对本次操作状态。"
+        "猎聘检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。"
     )
     assert raw_summary not in json.dumps(payload, ensure_ascii=False)
 
@@ -3834,7 +3834,7 @@ def test_v2_runtime_display_uses_canonical_reason_for_search_failure() -> None:
 
     assert payload["summary"] == (
         "第 1 轮检索失败："
-        "来源检索结果暂时无法确认，系统需要先核对本次操作状态。"
+        "来源检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。"
     )
     assert raw_summary not in json.dumps(payload, ensure_ascii=False)
 
@@ -3876,7 +3876,7 @@ def test_v2_runtime_display_preserves_safe_top_level_runtime_values() -> None:
         "stage": "source_result",
         "summary": (
             "第 1 轮来源检索受阻："
-            "来源检索结果暂时无法确认，系统需要先核对本次操作状态。"
+            "来源检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。"
         ),
         "state": "running",
         "roundNo": 1,

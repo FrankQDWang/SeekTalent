@@ -47,7 +47,7 @@ from seektalent.resources import (
     resolve_user_path,
 )
 from seektalent.sources.liepin.reason_codes import (
-    LIEPIN_WORKER_SAFE_REASON_CODES,
+    LIEPIN_PRODUCTION_FAILURE_REASON_CODES,
     public_source_problem_message,
 )
 from seektalent.text_inputs import read_optional_inline_or_file_text, read_required_inline_or_file_text
@@ -1944,7 +1944,7 @@ def _workbench_action_ok(payload: Mapping[str, object]) -> bool:
 
 def _workbench_action_reason(payload: Mapping[str, object]) -> str:
     reason = payload.get("safeReasonCode") or payload.get("safe_reason_code")
-    if isinstance(reason, str) and reason in LIEPIN_WORKER_SAFE_REASON_CODES:
+    if isinstance(reason, str) and reason in LIEPIN_PRODUCTION_FAILURE_REASON_CODES:
         return reason
     return "liepin_opencli_status_unavailable"
 

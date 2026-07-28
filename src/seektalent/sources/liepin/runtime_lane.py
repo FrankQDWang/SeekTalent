@@ -37,7 +37,9 @@ from seektalent.providers.liepin.filter_compiler import LiepinSourceQueryIntent
 from seektalent.providers.liepin.source_compiler import LiepinCompiledQuery, compile_liepin_source_query_intents
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerPartialSearchError
-from seektalent.sources.liepin.reason_codes import LIEPIN_WORKER_SAFE_REASON_CODES
+from seektalent.sources.liepin.reason_codes import (
+    public_source_problem_code,
+)
 from seektalent.sources.liepin.context import RuntimeLiepinContext, RuntimeLiepinContextInput
 from seektalent.sources.liepin.context import normalize_runtime_liepin_context
 from seektalent.source_contracts import (
@@ -206,9 +208,8 @@ async def run_liepin_source_lane(
         if search_request.provider_context.get("liepin_fetch_strategy") == "detail_backed_resume_search":
             _assert_detail_backed_liepin_search_result(search_result)
     except LiepinWorkerPartialSearchError as error:
-        stop_reason_code = runtime_safe_reason_code_from_worker_failure_code(
+        stop_reason_code = runtime_reason_code_from_worker_failure_code(
             error.code,
-            cards_collected=error.cards_collected > 0,
         )
         if search_request.provider_context.get("liepin_fetch_strategy") == "detail_backed_resume_search":
             _assert_detail_backed_liepin_search_result(error.partial_search_result)
@@ -225,7 +226,7 @@ async def run_liepin_source_lane(
             stop_reason_code=stop_reason_code,
         )
     except LiepinWorkerModeError as error:
-        reason_code = runtime_safe_reason_code_from_worker_failure_code(error.code)
+        reason_code = runtime_reason_code_from_worker_failure_code(error.code)
         blocked_result = _blocked_card_result(
             runtime_run_id=runtime_run_id,
             source_plan_id=source_plan_id,
@@ -846,7 +847,8 @@ def _blocked_card_result(
 
 
 def _safe_worker_error_summary(error: LiepinWorkerModeError, *, reason_code: str) -> str:
-    summary = f"{type(error).__name__}: {reason_code}"
+    public_reason = public_source_problem_code(reason_code) or "source_unknown"
+    summary = f"{type(error).__name__}: {public_reason}"
     message = str(error).strip()
     if message.startswith("Liepin ") and len(message) <= 160:
         summary = f"{summary}; {message}"
@@ -1372,25 +1374,11 @@ def _liepin_max_pages_for(*, max_cards: int, page_size: int) -> int:
     return max(1, math.ceil(max_cards / normalized_page_size))
 
 
-def runtime_safe_reason_code_from_worker_failure_code(
+def runtime_reason_code_from_worker_failure_code(
     failure_code: object,
-    *,
-    cards_collected: bool = False,
 ) -> str:
-    value = str(getattr(failure_code, "value", failure_code or ""))
-    if value in LIEPIN_WORKER_SAFE_REASON_CODES:
-        return value
-    if value in {"blocked_login_required", "login_expired", "connection_safety_expired"}:
-        return "blocked_login_required"
-    if value in {"blocked_permission_required", "verification_required", "risk_control"}:
-        return "blocked_compliance"
-    if value in {"blocked_backend_unavailable", "provider_connection_locked"}:
-        return "blocked_backend_unavailable"
-    if value in {"partial_timeout", "page_timeout"}:
-        return "partial_timeout" if cards_collected else "failed_provider_error"
-    if value in {"failed_provider_error", "failed_malformed_output", "selector_drift", "extraction_failure"}:
-        return "failed_provider_error"
-    return "failed_provider_error"
+    value = str(getattr(failure_code, "value", failure_code or "")).strip()
+    return value or "failed_internal_error"
 
 
 def _assert_detail_backed_liepin_search_result(search_result: SearchResult) -> None:

@@ -12,7 +12,9 @@ from seektalent.providers.liepin.worker_contracts import (
     OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
     SessionStatus,
 )
-from seektalent.source_contracts.liepin_reason_codes import LIEPIN_WORKER_SAFE_REASON_CODES
+from seektalent.sources.liepin.reason_codes import (
+    LIEPIN_PRODUCTION_FAILURE_REASON_CODES,
+)
 from seektalent_ui.liepin_account_binding import (
     bind_observed_liepin_account,
     ensure_workbench_liepin_provider_connection,
@@ -48,7 +50,7 @@ RUNTIME_SOURCE_REASON_CODES = (
             "runtime_failed",
         }
     )
-    | LIEPIN_WORKER_SAFE_REASON_CODES
+    | LIEPIN_PRODUCTION_FAILURE_REASON_CODES
 )
 
 

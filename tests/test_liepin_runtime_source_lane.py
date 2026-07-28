@@ -32,7 +32,7 @@ from seektalent.sources.liepin.runtime_lane import (
     run_liepin_logical_query_bundle,
     run_liepin_source_lane,
     run_liepin_first_page_expansion,
-    runtime_safe_reason_code_from_worker_failure_code,
+    runtime_reason_code_from_worker_failure_code,
 )
 
 from seektalent.providers.liepin.worker_contracts import LiepinResumeSearchResponse, LiepinWorkerPartialSearchError
@@ -2339,7 +2339,7 @@ def test_pi_failure_codes_preserve_opencli_safe_reason_codes() -> None:
         "liepin_opencli_daemon_stale",
         "liepin_opencli_removed_config",
     ):
-        assert runtime_safe_reason_code_from_worker_failure_code(reason_code) == reason_code
+        assert runtime_reason_code_from_worker_failure_code(reason_code) == reason_code
 
 
 @pytest.mark.parametrize(
@@ -2347,7 +2347,10 @@ def test_pi_failure_codes_preserve_opencli_safe_reason_codes() -> None:
     ["liepin_opencli_removed_config"],
 )
 def test_opencli_configuration_failures_have_one_canonical_public_problem(reason_code: str) -> None:
-    assert LIEPIN_FAILURE_POLICIES[reason_code].public_problem_code == "source_browser_backend_incompatible"
+    assert (
+        LIEPIN_FAILURE_POLICIES[reason_code].public_problem_code
+        == "source_removed_cleanup_config"
+    )
 
 
 @pytest.mark.parametrize(
@@ -2861,10 +2864,11 @@ def test_liepin_runtime_lane_normalizes_blocked_worker_error_codes() -> None:
     )
 
     assert result.status == "blocked"
-    assert result.blocked_reason_code == "blocked_compliance"
-    assert result.stop_reason_code == "blocked_compliance"
+    assert result.blocked_reason_code == "risk_control"
+    assert result.stop_reason_code == "risk_control"
     payload = repr(result.to_public_payload())
     assert "risk_control" not in payload
+    assert "source_risk_or_verification_required" in payload
     assert "secret-token" not in payload
 
 
@@ -2904,7 +2908,7 @@ def test_liepin_runtime_lane_records_safe_worker_exception_summary() -> None:
     assert result.status == "blocked"
     assert result.blocked_reason_code == "failed_provider_error"
     assert result.safe_error_summary == (
-        "LiepinWorkerModeError: failed_provider_error; Liepin OpenCLI resume search blocked."
+        "LiepinWorkerModeError: source_provider_failed; Liepin OpenCLI resume search blocked."
     )
 
 
@@ -2953,8 +2957,8 @@ def test_liepin_runtime_lane_preserves_partial_worker_cards_with_safe_reason() -
                 raw_candidate_count=3,
             )
             raise LiepinWorkerPartialSearchError(
-                "page_timeout raw transport text",
-                code="page_timeout",
+                "partial_timeout raw transport text",
+                code="partial_timeout",
                 partial_search_result=partial,
                 cards_collected=1,
             )
@@ -2983,26 +2987,23 @@ def test_liepin_runtime_lane_preserves_partial_worker_cards_with_safe_reason() -
     assert result.events[0].event_type == "source_lane_partial"
     payload = repr(result.to_public_payload())
     assert "source_browser_timeout" in payload
-    assert "page_timeout" not in payload
+    assert "partial_timeout" not in payload
     assert "raw transport text" not in payload
 
 
 def test_worker_failure_codes_map_to_runtime_safe_reason_codes() -> None:
-    assert runtime_safe_reason_code_from_worker_failure_code("login_expired") == "blocked_login_required"
-    assert runtime_safe_reason_code_from_worker_failure_code("verification_required") == "blocked_compliance"
-    assert runtime_safe_reason_code_from_worker_failure_code("risk_control") == "blocked_compliance"
-    assert runtime_safe_reason_code_from_worker_failure_code("provider_connection_locked") == "blocked_backend_unavailable"
-    assert runtime_safe_reason_code_from_worker_failure_code("page_timeout") == "failed_provider_error"
-    assert (
-        runtime_safe_reason_code_from_worker_failure_code("page_timeout", cards_collected=True)
-        == "partial_timeout"
-    )
-    assert runtime_safe_reason_code_from_worker_failure_code("selector_drift") == "failed_provider_error"
-    assert runtime_safe_reason_code_from_worker_failure_code("extraction_failure") == "failed_provider_error"
-    assert runtime_safe_reason_code_from_worker_failure_code("blocked_backend_unavailable") == "blocked_backend_unavailable"
-    assert runtime_safe_reason_code_from_worker_failure_code("blocked_permission_required") == "blocked_compliance"
-    assert runtime_safe_reason_code_from_worker_failure_code("partial_timeout", cards_collected=True) == "partial_timeout"
-    assert runtime_safe_reason_code_from_worker_failure_code("unknown") == "failed_provider_error"
+    for reason_code in (
+        "blocked_backend_unavailable",
+        "partial_timeout",
+        "risk_control",
+        "verification_required",
+    ):
+        assert (
+            runtime_reason_code_from_worker_failure_code(reason_code)
+            == reason_code
+        )
+    assert runtime_reason_code_from_worker_failure_code("unknown") == "unknown"
+    assert runtime_reason_code_from_worker_failure_code("") == "failed_internal_error"
 
 
 def test_liepin_runtime_lane_builds_live_store_for_opencli(monkeypatch, tmp_path) -> None:

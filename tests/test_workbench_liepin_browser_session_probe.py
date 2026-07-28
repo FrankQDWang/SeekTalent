@@ -207,10 +207,11 @@ def _assert_runtime_start(payload: dict, source_kinds: list[str]) -> None:
     assert runtime_job["sourceKinds"] == source_kinds
 
 
-def test_removed_opencli_config_uses_canonical_incompatible_warning_message() -> None:
+def test_removed_opencli_config_uses_canonical_cleanup_warning_message() -> None:
     assert (
         liepin_start_probe_warning_message("liepin_opencli_removed_config")
-        == "猎聘浏览器运行组件版本或能力不兼容，请更新应用并重新启用浏览器扩展后重试。"
+        == "检测到已移除的旧即时回收/cleanup 配置，请删除旧配置后重试；"
+        "标签页正常回收仅由 60 秒空闲到期负责。"
     )
 
 

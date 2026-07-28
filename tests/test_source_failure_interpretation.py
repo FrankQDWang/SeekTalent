@@ -4,14 +4,11 @@ from pathlib import Path
 
 import pytest
 
-from seektalent.source_contracts.liepin_reason_codes import (
-    LIEPIN_WORKER_SAFE_REASON_CODES,
-)
 from seektalent.source_contracts.safe_serialization import sanitize_reason_code
 from seektalent.sources.liepin.reason_codes import (
     LIEPIN_FAILURE_POLICIES,
+    LIEPIN_PRODUCTION_FAILURE_REASON_CODES,
     PUBLIC_SOURCE_PROBLEMS,
-    interpret_liepin_failure,
     public_source_problem_code,
     public_source_problem_message,
 )
@@ -20,9 +17,11 @@ from seektalent.sources.liepin.reason_codes import (
 ROOT = Path(__file__).resolve().parents[1]
 
 
-def test_every_liepin_worker_reason_has_exactly_one_canonical_policy_entry() -> None:
-    assert LIEPIN_WORKER_SAFE_REASON_CODES <= LIEPIN_FAILURE_POLICIES.keys()
-    assert len(LIEPIN_FAILURE_POLICIES) == len(set(LIEPIN_FAILURE_POLICIES))
+def test_canonical_inventory_is_the_policy_keyset() -> None:
+    assert (
+        LIEPIN_PRODUCTION_FAILURE_REASON_CODES
+        == LIEPIN_FAILURE_POLICIES.keys()
+    )
 
 
 def test_every_public_problem_is_registered_and_has_an_explicit_message_boundary() -> None:
@@ -46,126 +45,19 @@ def test_every_public_problem_is_registered_and_has_an_explicit_message_boundary
     } == {
         "job_lease_expired",
         "relay_pending_worker",
+        "source_cleanup_pending",
         "source_filter_applied",
     }
 
 
-@pytest.mark.parametrize(
-    (
-        "internal_reason",
-        "public_problem_code",
-        "source_operation_disposition",
-        "user_action_code",
-    ),
-    [
-        ("liepin_host_tab_missing", "source_browser_host_required", "user_action_required", "open_liepin_host"),
-        ("liepin_opencli_login_required", "source_login_required", "user_action_required", "log_in_to_liepin"),
-        ("liepin_browser_account_mismatch", "source_account_mismatch", "incompatible", None),
-        (
-            "liepin_opencli_identity_intercept",
-            "source_identity_confirmation_required",
-            "user_action_required",
-            "complete_identity_check",
-        ),
-        (
-            "liepin_opencli_risk_page",
-            "source_risk_or_verification_required",
-            "user_action_required",
-            "complete_liepin_risk_check",
-        ),
-        (
-            "liepin_opencli_unknown_modal",
-            "source_browser_interaction_required",
-            "user_action_required",
-            "resolve_liepin_modal",
-        ),
-        (
-            "liepin_opencli_extension_disconnected",
-            "source_browser_extension_disconnected",
-            "failed",
-            None,
-        ),
-        (
-            "liepin_opencli_bridge_protocol_mismatch",
-            "source_browser_backend_incompatible",
-            "incompatible",
-            None,
-        ),
-        (
-            "liepin_opencli_bridge_integrity_failed",
-            "source_browser_installation_invalid",
-            "incompatible",
-            None,
-        ),
-        ("liepin_opencli_daemon_not_running", "source_browser_backend_unavailable", "failed", None),
-        ("liepin_opencli_timeout", "source_browser_timeout", "failed", None),
-        ("liepin_opencli_search_not_ready", "source_browser_timeout", "failed", None),
-        ("liepin_opencli_stale_ref", "source_browser_reference_stale", "failed", None),
-        ("liepin_opencli_filter_unapplied", "source_filter_unavailable", "incompatible", None),
-        ("liepin_opencli_budget_exhausted", "source_budget_exhausted", "partial", None),
-        ("liepin_opencli_forbidden_command", "source_browser_policy_blocked", "incompatible", None),
-        ("liepin_opencli_selector_not_found", "source_provider_failed", "failed", None),
-        ("cancelled_by_user", "source_cancelled", "cancelled", None),
-    ],
-)
-def test_representative_liepin_failures_have_stable_interpretations(
-    internal_reason: str,
-    public_problem_code: str,
-    source_operation_disposition: str,
-    user_action_code: str | None,
-) -> None:
-    interpretation = interpret_liepin_failure(
-        internal_reason,
-        operation="search",
-        affected_scope_ref="scope-ref",
-    )
-
-    assert interpretation.internal_reason == internal_reason
-    assert interpretation.public_problem_code == public_problem_code
-    assert interpretation.source_operation_disposition == source_operation_disposition
-    assert (
-        interpretation.user_action.code if interpretation.user_action is not None else None
-    ) == user_action_code
-
-
-def test_partial_timeout_preserves_partial_result_semantics() -> None:
-    interpretation = interpret_liepin_failure(
-        "liepin_opencli_timeout",
-        operation="search",
-        cards_collected=True,
-    )
-
-    assert interpretation.public_problem_code == "source_browser_timeout"
-    assert interpretation.source_operation_disposition == "partial"
-    assert interpretation.source_lane_reason_code == "partial_timeout"
-
-
-def test_transport_unknown_requires_reconciliation_without_authorizing_retry() -> None:
-    interpretation = interpret_liepin_failure(
-        "new_private_transport_reason",
-        operation="search",
-        effect_unknown=True,
-    )
-
-    assert interpretation.public_problem_code == "source_unknown"
-    assert interpretation.source_operation_disposition == "reconciliation_unknown"
-    assert not hasattr(interpretation, "retry_posture")
-    assert not hasattr(interpretation, "safe_retry")
-
-
 def test_unknown_internal_reason_fails_closed_without_leaking_raw_reason() -> None:
     internal_reason = "liepin_private_selector_dump_x9"
-    interpretation = interpret_liepin_failure(internal_reason, operation="search")
+    public_problem = public_source_problem_code(internal_reason)
+    message = public_source_problem_message(public_problem, source_label="猎聘")
 
-    assert interpretation.internal_reason == internal_reason
-    assert interpretation.public_problem_code == "source_unknown"
-    assert interpretation.source_lane_reason_code == "failed_internal_error"
-    assert interpretation.user_action is None
-    assert public_source_problem_code(internal_reason) == "source_unknown"
-    assert internal_reason not in public_source_problem_message(
-        interpretation.public_problem_code,
-        source_label="猎聘",
-    )
+    assert public_problem == "source_unknown"
+    assert message is not None
+    assert internal_reason not in message
 
 
 @pytest.mark.parametrize(
@@ -175,6 +67,8 @@ def test_unknown_internal_reason_fails_closed_without_leaking_raw_reason() -> No
         ("source_age_filter_unsupported", "source_filter_unsupported"),
         ("source_location_filter_unsupported", "source_filter_unsupported"),
         ("liepin_opencli_filter_unapplied", "source_filter_unavailable"),
+        ("liepin_opencli_filter_option_unavailable", "source_filter_unavailable"),
+        ("liepin_opencli_filter_clear_failed", "source_filter_unavailable"),
     ],
 )
 def test_filter_unavailable_and_unsupported_remain_distinct(
@@ -247,7 +141,7 @@ def test_search_readiness_never_reports_browser_bridge_unavailable(
         ),
         ("liepin_opencli_filter_unapplied", "source_filter_unavailable"),
         ("source_filter_unsupported", "source_filter_unsupported"),
-        ("liepin_opencli_budget_exhausted", "source_budget_exhausted"),
+        ("partial_budget_exhausted", "source_budget_exhausted"),
         ("new_private_failure_reason", "source_unknown"),
     ],
 )
@@ -317,12 +211,23 @@ def test_internal_reason_projects_consistently_through_all_user_surfaces(
         assert internal_reason not in repr(workbench_payload)
 
 
-def test_production_consumers_do_not_depend_on_removed_duplicate_maps() -> None:
+def test_production_consumers_do_not_depend_on_removed_duplicate_maps_or_scaffolding() -> None:
     forbidden = {
+        "FailureInterpretation",
+        "interpret_liepin_failure",
         "LIEPIN_PUBLIC_EVENT_REASON_MAP",
         "LIEPIN_SOURCE_LANE_REASON_CODE_MAP",
+        "LIEPIN_WORKER_SAFE_REASON_CODES",
     }
     for path in (ROOT / "src").rglob("*.py"):
         source = path.read_text(encoding="utf-8")
         for symbol in forbidden:
             assert symbol not in source, f"{path.relative_to(ROOT)} still uses {symbol}"
+
+    policy_source = (
+        ROOT / "src/seektalent/sources/liepin/reason_codes.py"
+    ).read_text(encoding="utf-8")
+    assert "SourceOperationDisposition" not in policy_source
+    assert "source_operation_disposition" not in policy_source
+    assert "source_lane_reason_code" not in policy_source
+    assert "effect_unknown" not in policy_source

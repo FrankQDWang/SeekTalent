@@ -470,7 +470,7 @@ def test_source_result_public_event_preserves_liepin_stale_reference_failure() -
     "reason_code",
     ["liepin_opencli_removed_config"],
 )
-def test_source_result_public_event_maps_liepin_opencli_backend_incompatible_reasons(reason_code: str) -> None:
+def test_source_result_public_event_maps_removed_cleanup_config(reason_code: str) -> None:
     from seektalent.source_adapters import public_source_reason_code
 
     event = make_runtime_public_event(
@@ -483,7 +483,7 @@ def test_source_result_public_event_maps_liepin_opencli_backend_incompatible_rea
         safe_reason_code=public_source_reason_code(reason_code),
     )
 
-    assert event["safeReasonCode"] == "source_browser_backend_incompatible"
+    assert event["safeReasonCode"] == "source_removed_cleanup_config"
 
 
 def test_source_result_public_event_maps_liepin_results_readiness_to_timeout() -> None:

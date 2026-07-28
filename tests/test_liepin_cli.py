@@ -46,7 +46,8 @@ def test_workbench_reason_message_covers_search_and_results_readiness() -> None:
     )
     assert (
         cli._workbench_reason_message("liepin_opencli_removed_config")
-        == "猎聘浏览器运行组件版本或能力不兼容，请更新应用并重新启用浏览器扩展后重试。"
+        == "检测到已移除的旧即时回收/cleanup 配置，请删除旧配置后重试；"
+        "标签页正常回收仅由 60 秒空闲到期负责。"
     )
 
 

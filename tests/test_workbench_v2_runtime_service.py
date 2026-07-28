@@ -1159,12 +1159,12 @@ def test_runtime_service_lists_public_progress_events_as_user_readable_payloads(
         (
             "Bearer private-token",
             "source_unknown",
-            "猎聘检索结果暂时无法确认，系统需要先核对本次操作状态。",
+            "猎聘检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。",
         ),
         (
             "unknown_private_reason",
             "source_unknown",
-            "猎聘检索结果暂时无法确认，系统需要先核对本次操作状态。",
+            "猎聘检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。",
         ),
     ],
 )
@@ -1403,11 +1403,11 @@ def test_runtime_service_distinguishes_search_and_run_failure_summaries(tmp_path
     [
         (
             "runtime_search_failed",
-            "第 1 轮检索失败：猎聘检索结果暂时无法确认，系统需要先核对本次操作状态。",
+            "第 1 轮检索失败：猎聘检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。",
         ),
         (
             "runtime_run_failed",
-            "招聘流程失败：猎聘检索结果暂时无法确认，系统需要先核对本次操作状态。",
+            "招聘流程失败：猎聘检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。",
         ),
     ],
 )
