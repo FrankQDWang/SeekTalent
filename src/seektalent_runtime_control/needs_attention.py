@@ -1540,6 +1540,24 @@ def _require_checkpoint_binding(
     action_row: sqlite3.Row,
     checkpoint: RuntimeCheckpoint,
 ) -> None:
+    archived = conn.execute(
+        """
+        SELECT original_checkpoint_id, checkpoint_hash, candidate_truth_hash
+        FROM runtime_control_action_checkpoint_evidence
+        WHERE action_id = ? AND runtime_run_id = ?
+        """,
+        (action_row["action_id"], action_row["runtime_run_id"]),
+    ).fetchone()
+    if archived is not None:
+        if (
+            archived["checkpoint_hash"] != action_row["checkpoint_hash"]
+            or archived["candidate_truth_hash"]
+            != action_row["candidate_truth_hash"]
+        ):
+            raise RuntimeControlError(
+                "runtime_needs_attention_checkpoint_mismatch"
+            )
+        return
     if (
         _checkpoint_hash(checkpoint) != action_row["checkpoint_hash"]
         or _candidate_truth_hash(checkpoint)

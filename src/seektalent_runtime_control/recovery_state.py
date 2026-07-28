@@ -23,6 +23,10 @@ class RecoveryStateAssembler:
         self.store = store
 
     def assemble(self, checkpoint: RuntimeCheckpoint) -> RunState:
+        from seektalent_runtime_control.store import (
+            _checkpoint_durable_owners_match,
+        )
+
         if checkpoint.schema_version != RUNTIME_CHECKPOINT_SCHEMA_V2:
             raise RuntimeControlError("runtime_checkpoint_v1_requires_migration")
         run = self.store.get_run(checkpoint.runtime_run_id)
@@ -73,6 +77,10 @@ class RecoveryStateAssembler:
                 or truth_row["payload_hash"] != checkpoint.candidate_truth_hash
             ):
                 raise RuntimeControlError("runtime_checkpoint_candidate_truth_mismatch")
+            if not _checkpoint_durable_owners_match(conn, checkpoint):
+                raise RuntimeControlError(
+                    "runtime_checkpoint_durable_owner_mismatch"
+                )
             records = conn.execute(
                 """
                 SELECT *
@@ -95,19 +103,25 @@ class RecoveryStateAssembler:
                 """
                 SELECT *
                 FROM runtime_control_round_states
-                WHERE runtime_run_id = ?
+                WHERE runtime_run_id = ? AND round_no <= ?
                 ORDER BY round_no
                 """,
-                (checkpoint.runtime_run_id,),
+                (
+                    checkpoint.runtime_run_id,
+                    checkpoint.durable_refs["roundLedgerHighWatermark"],
+                ),
             ).fetchall()
             finalization_rows = conn.execute(
                 """
                 SELECT *
                 FROM runtime_control_candidate_finalization_revisions
-                WHERE runtime_run_id = ?
+                WHERE runtime_run_id = ? AND revision <= ?
                 ORDER BY revision
                 """,
-                (checkpoint.runtime_run_id,),
+                (
+                    checkpoint.runtime_run_id,
+                    checkpoint.durable_refs["finalizationRevision"],
+                ),
             ).fetchall()
 
         candidate_store = {

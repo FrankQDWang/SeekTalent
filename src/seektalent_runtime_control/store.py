@@ -2545,6 +2545,7 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
         created_at: str,
         artifact_manifest_ref: str | None = None,
         pending_commands: list[dict[str, object]] | None = None,
+        continuation_cursor: dict[str, object] | None = None,
     ) -> RuntimeCheckpoint:
         if projection.schema_version != RUNTIME_CHECKPOINT_SCHEMA_V2:
             raise RuntimeControlError("runtime_checkpoint_schema_unsupported")
@@ -2593,25 +2594,50 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
                     checkpoint_id=checkpoint_id,
                     created_at=created_at,
                 )
+                detail_owner = _validated_detail_claim_owner(
+                    conn,
+                    runtime_run_id=runtime_run_id,
+                )
+                if (
+                    detail_owner[0] != detail_claim_revision
+                    or detail_owner[1] != detail_claim_hash
+                ):
+                    raise RuntimeControlError(
+                        "runtime_checkpoint_detail_claim_binding_invalid"
+                    )
+                source_result_count, source_result_hash = (
+                    _validated_source_result_owner(
+                        conn,
+                        runtime_run_id=runtime_run_id,
+                    )
+                )
+                round_high_watermark, round_ledger_hash = (
+                    _validated_round_owner(
+                        conn,
+                        runtime_run_id=runtime_run_id,
+                        candidate_truth_revision=truth_revision,
+                    )
+                )
+                finalization_revision, finalization_ledger_hash = (
+                    _validated_finalization_owner(
+                        conn,
+                        runtime_run_id=runtime_run_id,
+                    )
+                )
                 state_revision = int(run_row["state_revision"]) + 1
                 durable_refs: dict[str, object] = {
                     "candidateTruth": f"runtime-candidate-truth://{runtime_run_id}/{truth_revision}",
                     "detailClaims": f"runtime-detail-claims://{runtime_run_id}/{detail_claim_revision}",
-                    "roundLedgerHighWatermark": _mapping_int_max(
-                        projection.round_states,
-                        key="round_no",
-                        default=(
-                            round_no
-                            if safe_boundary == "after_round_controller"
-                            and round_no is not None
-                            else 0
-                        ),
-                    ),
-                    "sourceResultCount": len(projection.source_lane_results),
-                    "finalizationRevision": _mapping_int_max(
-                        projection.finalization_revisions,
-                        key="revision",
-                        default=0,
+                    "roundLedgerHighWatermark": round_high_watermark,
+                    "roundLedgerHash": round_ledger_hash,
+                    "sourceResultCount": source_result_count,
+                    "sourceResultHash": source_result_hash,
+                    "finalizationRevision": finalization_revision,
+                    "finalizationLedgerHash": finalization_ledger_hash,
+                    "continuationCursor": _checkpoint_continuation_cursor(
+                        safe_boundary=safe_boundary,
+                        round_high_watermark=round_high_watermark,
+                        supplied=continuation_cursor,
                     ),
                 }
                 checkpoint = RuntimeCheckpoint(
@@ -2833,6 +2859,84 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
                             "runtime_checkpoint_compaction_source_missing"
                         )
                     source = _checkpoint_from_row(latest)
+                    if source.schema_version == RUNTIME_CHECKPOINT_SCHEMA_V1:
+                        _upgrade_legacy_checkpoint_in_transaction(
+                            conn,
+                            source,
+                        )
+                    action_rows = conn.execute(
+                        """
+                        SELECT *
+                        FROM runtime_control_user_actions
+                        WHERE runtime_run_id = ?
+                        ORDER BY created_at, action_id
+                        """,
+                        (runtime_run_id,),
+                    ).fetchall()
+                    for action in action_rows:
+                        action_checkpoint_row = conn.execute(
+                            """
+                            SELECT *
+                            FROM runtime_control_checkpoints
+                            WHERE runtime_run_id = ? AND checkpoint_id = ?
+                            """,
+                            (runtime_run_id, action["checkpoint_id"]),
+                        ).fetchone()
+                        if action_checkpoint_row is None:
+                            raise RuntimeControlError(
+                                "runtime_checkpoint_compaction_action_source_missing"
+                            )
+                        action_checkpoint = _checkpoint_from_row(
+                            action_checkpoint_row
+                        )
+                        conn.execute(
+                            """
+                            INSERT INTO runtime_control_action_checkpoint_evidence (
+                                action_id, runtime_run_id,
+                                original_checkpoint_id, evidence_json,
+                                checkpoint_hash, candidate_truth_hash,
+                                archived_at
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(action_id) DO NOTHING
+                            """,
+                            (
+                                action["action_id"],
+                                runtime_run_id,
+                                action_checkpoint.checkpoint_id,
+                                _json(
+                                    {
+                                        "schemaVersion": (
+                                            action_checkpoint.schema_version
+                                        ),
+                                        "stage": action_checkpoint.stage,
+                                        "safeBoundary": (
+                                            action_checkpoint.safe_boundary
+                                        ),
+                                        "stateRevision": (
+                                            action_checkpoint.state_revision
+                                        ),
+                                    }
+                                ),
+                                action["checkpoint_hash"],
+                                action["candidate_truth_hash"],
+                                source.created_at,
+                            ),
+                        )
+                    conn.execute(
+                        """
+                        UPDATE runtime_control_candidate_finalization_revisions
+                        SET source_checkpoint_id = ?
+                        WHERE runtime_run_id = ?
+                        """,
+                        (manifest_id, runtime_run_id),
+                    )
+                    finalization_revision, finalization_ledger_hash = (
+                        _validated_finalization_owner(
+                            conn,
+                            runtime_run_id=runtime_run_id,
+                        )
+                    )
                     empty_control_hash = sha256(b"{}").hexdigest()
                     manifest = source.model_copy(
                         update={
@@ -2851,22 +2955,50 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
                             "durable_refs": {
                                 **source.durable_refs,
                                 "terminalStatus": run_row["status"],
-                                "finalizationRevision": source.durable_refs.get(
-                                    "finalizationRevision", 0
+                                "finalizationRevision": finalization_revision,
+                                "finalizationLedgerHash": (
+                                    finalization_ledger_hash
                                 ),
+                                "continuationCursor": {
+                                    "nextPhase": "complete",
+                                    "completedRounds": source.durable_refs.get(
+                                        "roundLedgerHighWatermark",
+                                        0,
+                                    ),
+                                    "stopReason": "terminal_manifest",
+                                },
                             },
+                            "schema_version": RUNTIME_CHECKPOINT_SCHEMA_V2,
                         }
                     )
+                    if action_rows:
+                        trigger_statements = {
+                            trigger_name: next(
+                                statement
+                                for statement in _needs_attention.NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS
+                                if f"CREATE TRIGGER {trigger_name}" in statement
+                            )
+                            for trigger_name in (
+                                "runtime_user_actions_immutable_binding",
+                                "runtime_user_actions_one_way_resolution",
+                            )
+                        }
+                        for trigger_name in trigger_statements:
+                            conn.execute(f"DROP TRIGGER {trigger_name}")
+                        conn.execute(
+                            """
+                            UPDATE runtime_control_user_actions
+                            SET checkpoint_id = ?
+                            WHERE runtime_run_id = ?
+                            """,
+                            (manifest_id, runtime_run_id),
+                        )
+                        for statement in trigger_statements.values():
+                            conn.execute(statement)
                     conn.execute(
                         """
                         DELETE FROM runtime_control_checkpoints
                         WHERE runtime_run_id = ?
-                          AND NOT EXISTS (
-                            SELECT 1
-                            FROM runtime_control_user_actions AS action
-                            WHERE action.checkpoint_id =
-                                  runtime_control_checkpoints.checkpoint_id
-                          )
                         """,
                         (runtime_run_id,),
                     )
@@ -2887,6 +3019,106 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
                         """,
                         (manifest_id,),
                     ).fetchone()
+                else:
+                    action_rows = conn.execute(
+                        """
+                        SELECT *
+                        FROM runtime_control_user_actions
+                        WHERE runtime_run_id = ? AND checkpoint_id <> ?
+                        ORDER BY created_at, action_id
+                        """,
+                        (runtime_run_id, manifest_id),
+                    ).fetchall()
+                    for action in action_rows:
+                        action_checkpoint_row = conn.execute(
+                            """
+                            SELECT *
+                            FROM runtime_control_checkpoints
+                            WHERE runtime_run_id = ? AND checkpoint_id = ?
+                            """,
+                            (runtime_run_id, action["checkpoint_id"]),
+                        ).fetchone()
+                        if action_checkpoint_row is None:
+                            raise RuntimeControlError(
+                                "runtime_checkpoint_compaction_action_source_missing"
+                            )
+                        action_checkpoint = _checkpoint_from_row(
+                            action_checkpoint_row
+                        )
+                        conn.execute(
+                            """
+                            INSERT INTO runtime_control_action_checkpoint_evidence (
+                                action_id, runtime_run_id,
+                                original_checkpoint_id, evidence_json,
+                                checkpoint_hash, candidate_truth_hash,
+                                archived_at
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(action_id) DO NOTHING
+                            """,
+                            (
+                                action["action_id"],
+                                runtime_run_id,
+                                action_checkpoint.checkpoint_id,
+                                _json(
+                                    {
+                                        "schemaVersion": (
+                                            action_checkpoint.schema_version
+                                        ),
+                                        "stage": action_checkpoint.stage,
+                                        "safeBoundary": (
+                                            action_checkpoint.safe_boundary
+                                        ),
+                                        "stateRevision": (
+                                            action_checkpoint.state_revision
+                                        ),
+                                    }
+                                ),
+                                action["checkpoint_hash"],
+                                action["candidate_truth_hash"],
+                                existing["created_at"],
+                            ),
+                        )
+                    if action_rows:
+                        trigger_statements = {
+                            trigger_name: next(
+                                statement
+                                for statement in _needs_attention.NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS
+                                if f"CREATE TRIGGER {trigger_name}" in statement
+                            )
+                            for trigger_name in (
+                                "runtime_user_actions_immutable_binding",
+                                "runtime_user_actions_one_way_resolution",
+                            )
+                        }
+                        for trigger_name in trigger_statements:
+                            conn.execute(f"DROP TRIGGER {trigger_name}")
+                        conn.execute(
+                            """
+                            UPDATE runtime_control_user_actions
+                            SET checkpoint_id = ?
+                            WHERE runtime_run_id = ?
+                              AND checkpoint_id <> ?
+                            """,
+                            (manifest_id, runtime_run_id, manifest_id),
+                        )
+                        for statement in trigger_statements.values():
+                            conn.execute(statement)
+                    conn.execute(
+                        """
+                        DELETE FROM runtime_control_checkpoints
+                        WHERE runtime_run_id = ? AND checkpoint_id <> ?
+                        """,
+                        (runtime_run_id, manifest_id),
+                    )
+                    conn.execute(
+                        """
+                        UPDATE runtime_control_candidate_finalization_revisions
+                        SET source_checkpoint_id = ?
+                        WHERE runtime_run_id = ?
+                        """,
+                        (manifest_id, runtime_run_id),
+                    )
                 count, size = _checkpoint_count_and_bytes(
                     conn,
                     runtime_run_id=runtime_run_id,
@@ -2911,11 +3143,18 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
                 FROM runtime_control_runs AS run
                 WHERE run.status IN ('cancelled', 'completed', 'failed')
                   AND run.latest_checkpoint_id IS NOT NULL
-                  AND NOT EXISTS (
-                    SELECT 1
-                    FROM runtime_control_checkpoints AS checkpoint
-                    WHERE checkpoint.runtime_run_id = run.runtime_run_id
-                      AND checkpoint.is_final_manifest = 1
+                  AND (
+                    (
+                      SELECT COUNT(*)
+                      FROM runtime_control_checkpoints AS checkpoint
+                      WHERE checkpoint.runtime_run_id = run.runtime_run_id
+                    ) <> 1
+                    OR NOT EXISTS (
+                      SELECT 1
+                      FROM runtime_control_checkpoints AS checkpoint
+                      WHERE checkpoint.runtime_run_id = run.runtime_run_id
+                        AND checkpoint.is_final_manifest = 1
+                    )
                   )
                 ORDER BY run.completed_at, run.runtime_run_id
                 """
@@ -4141,6 +4380,16 @@ def _create_schema(conn: sqlite3.Connection) -> None:
           PRIMARY KEY(runtime_run_id, round_no)
         );
 
+        CREATE TABLE IF NOT EXISTS runtime_control_action_checkpoint_evidence (
+          action_id TEXT PRIMARY KEY,
+          runtime_run_id TEXT NOT NULL,
+          original_checkpoint_id TEXT NOT NULL,
+          evidence_json TEXT NOT NULL,
+          checkpoint_hash TEXT NOT NULL,
+          candidate_truth_hash TEXT NOT NULL,
+          archived_at TEXT NOT NULL
+        );
+
         CREATE TABLE IF NOT EXISTS runtime_control_projection_marks (
           runtime_run_id TEXT NOT NULL,
           target_kind TEXT NOT NULL,
@@ -4418,16 +4667,47 @@ def _migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
           ON run.runtime_run_id = checkpoint.runtime_run_id
          AND run.latest_checkpoint_id = checkpoint.checkpoint_id
         WHERE checkpoint.schema_version = ?
-          AND NOT EXISTS (
-            SELECT 1
-            FROM runtime_control_user_actions AS action
-            WHERE action.checkpoint_id = checkpoint.checkpoint_id
-          )
         ORDER BY checkpoint.runtime_run_id
         """,
         (RUNTIME_CHECKPOINT_SCHEMA_V1,),
     ).fetchall()
     for row in latest_rows:
+        action_rows = conn.execute(
+            """
+            SELECT *
+            FROM runtime_control_user_actions
+            WHERE runtime_run_id = ? AND checkpoint_id = ?
+            """,
+            (row["runtime_run_id"], row["checkpoint_id"]),
+        ).fetchall()
+        for action in action_rows:
+            conn.execute(
+                """
+                INSERT INTO runtime_control_action_checkpoint_evidence (
+                    action_id, runtime_run_id, original_checkpoint_id,
+                    evidence_json, checkpoint_hash, candidate_truth_hash,
+                    archived_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(action_id) DO NOTHING
+                """,
+                (
+                    action["action_id"],
+                    row["runtime_run_id"],
+                    row["checkpoint_id"],
+                    _json(
+                        {
+                            "schemaVersion": RUNTIME_CHECKPOINT_SCHEMA_V1,
+                            "stage": row["stage"],
+                            "safeBoundary": row["safe_boundary"],
+                            "stateRevision": int(row["state_revision"]),
+                        }
+                    ),
+                    action["checkpoint_hash"],
+                    action["candidate_truth_hash"],
+                    row["created_at"],
+                ),
+            )
         run_state = _strict_json_object(row["run_state_json"])
         projection = legacy_checkpoint_projection(run_state)
         truth_revision, truth_hash = _sync_candidate_truth_v2(
@@ -4458,20 +4738,22 @@ def _migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
             checkpoint_id=row["checkpoint_id"],
             created_at=row["created_at"],
         )
-        finalization_revision = _mapping_int_max(
-            projection.finalization_revisions,
-            key="revision",
-            default=0,
+        source_result_count, source_result_hash = (
+            _validated_source_result_owner(
+                conn,
+                runtime_run_id=row["runtime_run_id"],
+            )
         )
-        round_high_watermark = _mapping_int_max(
-            projection.round_states,
-            key="round_no",
-            default=(
-                int(row["round_no"])
-                if row["safe_boundary"] == "after_round_controller"
-                and isinstance(row["round_no"], int)
-                else 0
-            ),
+        round_high_watermark, round_ledger_hash = _validated_round_owner(
+            conn,
+            runtime_run_id=row["runtime_run_id"],
+            candidate_truth_revision=truth_revision,
+        )
+        finalization_revision, finalization_ledger_hash = (
+            _validated_finalization_owner(
+                conn,
+                runtime_run_id=row["runtime_run_id"],
+            )
         )
         durable_refs = {
             "candidateTruth": (
@@ -4483,8 +4765,16 @@ def _migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
                 f"{detail_revision}"
             ),
             "roundLedgerHighWatermark": round_high_watermark,
-            "sourceResultCount": len(projection.source_lane_results),
+            "roundLedgerHash": round_ledger_hash,
+            "sourceResultCount": source_result_count,
+            "sourceResultHash": source_result_hash,
             "finalizationRevision": finalization_revision,
+            "finalizationLedgerHash": finalization_ledger_hash,
+            "continuationCursor": _checkpoint_continuation_cursor(
+                safe_boundary=row["safe_boundary"],
+                round_high_watermark=round_high_watermark,
+                supplied=None,
+            ),
         }
         conn.execute(
             """
@@ -4576,6 +4866,21 @@ def _upgrade_legacy_checkpoint_in_transaction(
         checkpoint_id=checkpoint.checkpoint_id,
         created_at=checkpoint.created_at,
     )
+    source_result_count, source_result_hash = _validated_source_result_owner(
+        conn,
+        runtime_run_id=checkpoint.runtime_run_id,
+    )
+    round_high_watermark, round_ledger_hash = _validated_round_owner(
+        conn,
+        runtime_run_id=checkpoint.runtime_run_id,
+        candidate_truth_revision=truth_revision,
+    )
+    finalization_revision, finalization_ledger_hash = (
+        _validated_finalization_owner(
+            conn,
+            runtime_run_id=checkpoint.runtime_run_id,
+        )
+    )
     durable_refs: dict[str, object] = {
         "candidateTruth": (
             f"runtime-candidate-truth://{checkpoint.runtime_run_id}/{truth_revision}"
@@ -4583,21 +4888,16 @@ def _upgrade_legacy_checkpoint_in_transaction(
         "detailClaims": (
             f"runtime-detail-claims://{checkpoint.runtime_run_id}/{detail_revision}"
         ),
-        "roundLedgerHighWatermark": _mapping_int_max(
-            projection.round_states,
-            key="round_no",
-            default=(
-                checkpoint.round_no
-                if checkpoint.safe_boundary == "after_round_controller"
-                and checkpoint.round_no is not None
-                else 0
-            ),
-        ),
-        "sourceResultCount": len(projection.source_lane_results),
-        "finalizationRevision": _mapping_int_max(
-            projection.finalization_revisions,
-            key="revision",
-            default=0,
+        "roundLedgerHighWatermark": round_high_watermark,
+        "roundLedgerHash": round_ledger_hash,
+        "sourceResultCount": source_result_count,
+        "sourceResultHash": source_result_hash,
+        "finalizationRevision": finalization_revision,
+        "finalizationLedgerHash": finalization_ledger_hash,
+        "continuationCursor": _checkpoint_continuation_cursor(
+            safe_boundary=checkpoint.safe_boundary,
+            round_high_watermark=round_high_watermark,
+            supplied=None,
         ),
     }
     upgraded = checkpoint.model_copy(
@@ -4981,6 +5281,271 @@ def _recoverable_checkpoint_from_run_row(
     return checkpoint
 
 
+def _checkpoint_continuation_cursor(
+    *,
+    safe_boundary: str,
+    round_high_watermark: int,
+    supplied: dict[str, object] | None,
+) -> dict[str, object]:
+    next_phase = {
+        "after_source_result_commit": "rounds",
+        "after_round_controller": "rounds",
+        "before_finalization": "finalization",
+        "after_finalization_commit": "complete",
+        "entering_pause": "rounds",
+        "entering_needs_attention": "rounds",
+    }.get(safe_boundary)
+    if next_phase is None:
+        return {}
+    cursor = dict(supplied or {})
+    cursor.setdefault("nextPhase", next_phase)
+    cursor.setdefault("completedRounds", round_high_watermark)
+    cursor.setdefault("stopReason", "max_rounds_reached")
+    completed_rounds = cursor.get("completedRounds")
+    if (
+        cursor.get("nextPhase") != next_phase
+        or not isinstance(completed_rounds, int)
+        or isinstance(completed_rounds, bool)
+        or completed_rounds != round_high_watermark
+        or not isinstance(cursor.get("stopReason"), str)
+    ):
+        raise RuntimeControlError(
+            "runtime_checkpoint_continuation_cursor_invalid"
+        )
+    return cursor
+
+
+def _validated_detail_claim_owner(
+    conn: sqlite3.Connection,
+    *,
+    runtime_run_id: str,
+) -> tuple[int, str | None]:
+    state = conn.execute(
+        """
+        SELECT revision, payload_hash
+        FROM runtime_control_detail_claim_state
+        WHERE runtime_run_id = ?
+        """,
+        (runtime_run_id,),
+    ).fetchone()
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM runtime_control_detail_claims
+        WHERE runtime_run_id = ?
+        ORDER BY provider_candidate_key_hash
+        """,
+        (runtime_run_id,),
+    ).fetchall()
+    if state is None:
+        if rows:
+            raise RuntimeControlError("runtime_checkpoint_durable_owner_mismatch")
+        return 0, None
+    revision = int(state["revision"])
+    claims: dict[str, object] = {}
+    for row in rows:
+        claim = {
+            "status": row["status"],
+            "browser_open_attempt_count": int(
+                row["browser_open_attempt_count"]
+            ),
+            "last_safe_reason_code": row["last_safe_reason_code"],
+        }
+        if (
+            int(row["revision"]) != revision
+            or row["payload_hash"]
+            != sha256(_json(claim).encode("utf-8")).hexdigest()
+        ):
+            raise RuntimeControlError("runtime_checkpoint_durable_owner_mismatch")
+        claims[str(row["provider_candidate_key_hash"])] = claim
+    payload_hash = detail_claim_hash(claims)
+    if state["payload_hash"] != payload_hash:
+        raise RuntimeControlError("runtime_checkpoint_durable_owner_mismatch")
+    return revision, payload_hash
+
+
+def _validated_source_result_owner(
+    conn: sqlite3.Connection,
+    *,
+    runtime_run_id: str,
+) -> tuple[int, str]:
+    row = conn.execute(
+        """
+        SELECT source_lane_results_json
+        FROM runtime_control_candidate_truth_state
+        WHERE runtime_run_id = ?
+        """,
+        (runtime_run_id,),
+    ).fetchone()
+    if row is None:
+        raise RuntimeControlError("runtime_checkpoint_durable_owner_mismatch")
+    try:
+        results = _strict_json_object_list(row["source_lane_results_json"])
+    except (json.JSONDecodeError, TypeError, ValueError) as exc:
+        raise RuntimeControlError(
+            "runtime_checkpoint_durable_owner_mismatch"
+        ) from exc
+    return (
+        len(results),
+        sha256(_json(results).encode("utf-8")).hexdigest(),
+    )
+
+
+def _validated_round_owner(
+    conn: sqlite3.Connection,
+    *,
+    runtime_run_id: str,
+    candidate_truth_revision: int,
+) -> tuple[int, str]:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM runtime_control_round_states
+        WHERE runtime_run_id = ?
+        ORDER BY round_no
+        """,
+        (runtime_run_id,),
+    ).fetchall()
+    ledger: list[dict[str, object]] = []
+    expected_round_no = 1
+    for row in rows:
+        round_no = int(row["round_no"])
+        try:
+            state = _strict_json_object(row["state_json"])
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise RuntimeControlError(
+                "runtime_checkpoint_durable_owner_mismatch"
+            ) from exc
+        truth_revision = int(row["candidate_truth_revision"])
+        payload_hash = sha256(_json(state).encode("utf-8")).hexdigest()
+        if (
+            round_no != expected_round_no
+            or state.get("round_no") != round_no
+            or row["payload_hash"] != payload_hash
+            or truth_revision > candidate_truth_revision
+        ):
+            raise RuntimeControlError("runtime_checkpoint_durable_owner_mismatch")
+        ledger.append(
+            {
+                "roundNo": round_no,
+                "payloadHash": payload_hash,
+                "candidateTruthRevision": truth_revision,
+            }
+        )
+        expected_round_no += 1
+    return (
+        len(rows),
+        sha256(_json(ledger).encode("utf-8")).hexdigest(),
+    )
+
+
+def _validated_finalization_owner(
+    conn: sqlite3.Connection,
+    *,
+    runtime_run_id: str,
+) -> tuple[int, str]:
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM runtime_control_candidate_finalization_revisions
+        WHERE runtime_run_id = ?
+        ORDER BY revision
+        """,
+        (runtime_run_id,),
+    ).fetchall()
+    ledger: list[dict[str, object]] = []
+    expected_revision = 1
+    for row in rows:
+        revision = int(row["revision"])
+        try:
+            candidate_ids = _strict_json_string_list(
+                row["candidate_identity_ids_json"]
+            )
+            coverage = _strict_json_object(row["coverage_summary_json"])
+        except (json.JSONDecodeError, TypeError, ValueError) as exc:
+            raise RuntimeControlError(
+                "runtime_checkpoint_durable_owner_mismatch"
+            ) from exc
+        payload = {
+            "revision": revision,
+            "reason_code": row["reason_code"],
+            "candidate_identity_ids": candidate_ids,
+            "coverage_summary": coverage,
+        }
+        payload_hash = sha256(_json(payload).encode("utf-8")).hexdigest()
+        if (
+            revision != expected_revision
+            or row["payload_hash"] != payload_hash
+        ):
+            raise RuntimeControlError("runtime_checkpoint_durable_owner_mismatch")
+        ledger.append(
+            {
+                "revision": revision,
+                "payloadHash": payload_hash,
+                "sourceCheckpointId": row["source_checkpoint_id"],
+            }
+        )
+        expected_revision += 1
+    return (
+        len(rows),
+        sha256(_json(ledger).encode("utf-8")).hexdigest(),
+    )
+
+
+def _checkpoint_durable_owners_match(
+    conn: sqlite3.Connection,
+    checkpoint: RuntimeCheckpoint,
+) -> bool:
+    try:
+        detail_revision, current_detail_hash = _validated_detail_claim_owner(
+            conn,
+            runtime_run_id=checkpoint.runtime_run_id,
+        )
+        source_count, source_hash = _validated_source_result_owner(
+            conn,
+            runtime_run_id=checkpoint.runtime_run_id,
+        )
+        round_high_watermark, round_hash = _validated_round_owner(
+            conn,
+            runtime_run_id=checkpoint.runtime_run_id,
+            candidate_truth_revision=checkpoint.candidate_truth_revision,
+        )
+        finalization_revision, finalization_hash = (
+            _validated_finalization_owner(
+                conn,
+                runtime_run_id=checkpoint.runtime_run_id,
+            )
+        )
+    except (RuntimeControlError, TypeError, ValueError):
+        return False
+    return (
+        detail_revision >= checkpoint.detail_claim_revision
+        and (
+            (
+                checkpoint.detail_claim_revision == 0
+                and checkpoint.detail_claim_hash is None
+            )
+            or (
+                checkpoint.detail_claim_revision > 0
+                and checkpoint.detail_claim_hash is not None
+                and (
+                    detail_revision > checkpoint.detail_claim_revision
+                    or current_detail_hash == checkpoint.detail_claim_hash
+                )
+            )
+        )
+        and checkpoint.durable_refs.get("sourceResultCount") == source_count
+        and checkpoint.durable_refs.get("sourceResultHash") == source_hash
+        and checkpoint.durable_refs.get("roundLedgerHighWatermark")
+        == round_high_watermark
+        and checkpoint.durable_refs.get("roundLedgerHash") == round_hash
+        and checkpoint.durable_refs.get("finalizationRevision")
+        == finalization_revision
+        and checkpoint.durable_refs.get("finalizationLedgerHash")
+        == finalization_hash
+    )
+
+
 def _candidate_truth_matches_checkpoint(
     conn: sqlite3.Connection,
     checkpoint: RuntimeCheckpoint,
@@ -5001,22 +5566,7 @@ def _candidate_truth_matches_checkpoint(
             or truth_row["payload_hash"] != checkpoint.candidate_truth_hash
         ):
             return False
-        detail_row = conn.execute(
-            """
-            SELECT revision, payload_hash
-            FROM runtime_control_detail_claim_state
-            WHERE runtime_run_id = ?
-            """,
-            (checkpoint.runtime_run_id,),
-        ).fetchone()
-        if checkpoint.detail_claim_revision == 0:
-            if detail_row is not None or checkpoint.detail_claim_hash is not None:
-                return False
-        elif (
-            detail_row is None
-            or int(detail_row["revision"]) != checkpoint.detail_claim_revision
-            or detail_row["payload_hash"] != checkpoint.detail_claim_hash
-        ):
+        if not _checkpoint_durable_owners_match(conn, checkpoint):
             return False
         expected_finalization_revision = checkpoint.durable_refs.get(
             "finalizationRevision", 0
@@ -5047,8 +5597,6 @@ def _candidate_truth_matches_checkpoint(
                     != expected_finalization_revision
                     or any(
                         not _candidate_finalization_row_has_strict_shapes(row)
-                        or row["source_checkpoint_id"]
-                        != checkpoint.checkpoint_id
                         for row in finalization_rows
                     )
                 ):
@@ -6996,13 +7544,7 @@ def _sync_finalization_revisions_v2(
                 coverage_summary_json, source_checkpoint_id, payload_hash, created_at
             )
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(runtime_run_id, revision) DO UPDATE SET
-                reason_code = excluded.reason_code,
-                candidate_identity_ids_json = excluded.candidate_identity_ids_json,
-                coverage_summary_json = excluded.coverage_summary_json,
-                source_checkpoint_id = excluded.source_checkpoint_id,
-                payload_hash = excluded.payload_hash,
-                created_at = excluded.created_at
+            ON CONFLICT(runtime_run_id, revision) DO NOTHING
             """,
             (
                 revision.runtime_run_id,
@@ -7015,6 +7557,18 @@ def _sync_finalization_revisions_v2(
                 revision.created_at,
             ),
         )
+        stored = conn.execute(
+            """
+            SELECT payload_hash
+            FROM runtime_control_candidate_finalization_revisions
+            WHERE runtime_run_id = ? AND revision = ?
+            """,
+            (revision.runtime_run_id, revision.revision),
+        ).fetchone()
+        if stored is None or stored["payload_hash"] != revision.payload_hash:
+            raise RuntimeControlError(
+                "runtime_finalization_revision_conflict"
+            )
 
 
 def _sync_candidate_truth_from_checkpoint(conn: sqlite3.Connection, checkpoint: RuntimeCheckpoint) -> None:

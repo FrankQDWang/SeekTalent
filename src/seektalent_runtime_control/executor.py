@@ -293,6 +293,9 @@ class WorkflowRuntimeExecutor:
                 detail_claim_revision=detail_claim_revision,
                 detail_claim_hash=detail_claim_payload_hash,
                 created_at=self.now(),
+                continuation_cursor=_string_key_dict(
+                    getattr(artifacts, "continuation_cursor", None)
+                ),
             )
             self.store.append_executor_event(
                 _event(

@@ -1331,10 +1331,7 @@ def test_rejected_round_persists_terminal_receipts_before_exit(tmp_path) -> None
             ("cts", "failed", True),
             ("liepin", "blocked", False),
         ]
-        assert checkpoint_receipts[-1] == [
-            ("cts", "failed", True),
-            ("liepin", "blocked", False),
-        ]
+        assert checkpoint_receipts == []
         assert json.loads((tracer.run_dir / "runtime" / "query_execution_ledger.json").read_text()) == [
             receipt.model_dump(mode="json") for receipt in run_state.retrieval_state.query_execution_ledger
         ]

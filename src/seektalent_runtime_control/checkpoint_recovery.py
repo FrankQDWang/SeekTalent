@@ -63,10 +63,33 @@ def _before_source_dispatch_is_valid(
 
 
 def _runtime_candidate_checkpoint_is_valid(
-    checkpoint: RuntimeCheckpoint,
-    context: RuntimeCheckpointValidationContext,
+    _checkpoint: RuntimeCheckpoint,
+    _context: RuntimeCheckpointValidationContext,
 ) -> bool:
-    return _checkpoint_matches_run(checkpoint, context) and context.candidate_truth_valid
+    return False
+
+
+def _cursor_matches(
+    checkpoint: RuntimeCheckpoint,
+    *,
+    next_phase: str,
+) -> bool:
+    raw_cursor = checkpoint.durable_refs.get("continuationCursor")
+    cursor = (
+        {
+            key: value
+            for key, value in raw_cursor.items()
+            if isinstance(key, str)
+        }
+        if isinstance(raw_cursor, dict)
+        else None
+    )
+    return (
+        cursor is not None
+        and cursor.get("nextPhase") == next_phase
+        and cursor.get("completedRounds")
+        == checkpoint.durable_refs.get("roundLedgerHighWatermark")
+    )
 
 
 def _after_round_controller_is_valid(
@@ -83,18 +106,48 @@ def _after_round_controller_is_valid(
             == checkpoint.round_no
         )
         and context.candidate_truth_valid
+        and _cursor_matches(checkpoint, next_phase="rounds")
+    )
+
+
+def _before_finalization_is_valid(
+    checkpoint: RuntimeCheckpoint,
+    context: RuntimeCheckpointValidationContext,
+) -> bool:
+    return (
+        _checkpoint_matches_run(checkpoint, context)
+        and context.candidate_truth_valid
+        and _cursor_matches(checkpoint, next_phase="finalization")
+    )
+
+
+def _after_finalization_is_valid(
+    _checkpoint: RuntimeCheckpoint,
+    _context: RuntimeCheckpointValidationContext,
+) -> bool:
+    return False
+
+
+def _paused_boundary_is_valid(
+    checkpoint: RuntimeCheckpoint,
+    context: RuntimeCheckpointValidationContext,
+) -> bool:
+    return (
+        _checkpoint_matches_run(checkpoint, context)
+        and context.candidate_truth_valid
+        and _cursor_matches(checkpoint, next_phase="rounds")
     )
 
 
 SAFE_BOUNDARY_REGISTRY: dict[str, SafeBoundaryValidator] = {
     "before_source_dispatch": _before_source_dispatch_is_valid,
     "runtime_candidate_checkpoint": _runtime_candidate_checkpoint_is_valid,
-    "after_source_result_commit": _runtime_candidate_checkpoint_is_valid,
+    "after_source_result_commit": _after_round_controller_is_valid,
     "after_round_controller": _after_round_controller_is_valid,
-    "before_finalization": _runtime_candidate_checkpoint_is_valid,
-    "after_finalization_commit": _runtime_candidate_checkpoint_is_valid,
-    "entering_pause": _runtime_candidate_checkpoint_is_valid,
-    "entering_needs_attention": _runtime_candidate_checkpoint_is_valid,
+    "before_finalization": _before_finalization_is_valid,
+    "after_finalization_commit": _after_finalization_is_valid,
+    "entering_pause": _paused_boundary_is_valid,
+    "entering_needs_attention": _paused_boundary_is_valid,
 }
 
 

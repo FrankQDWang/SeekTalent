@@ -15,7 +15,7 @@ from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_runtime_control.worker import RuntimeExecutionWorker
 
 
-def test_resume_reuses_same_runtime_run_with_new_attempt_and_checkpoint_context(tmp_path) -> None:
+def test_resume_fails_closed_for_legacy_checkpoint_without_continuation_state(tmp_path) -> None:
     store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
     store.initialize()
     approved = _approved_requirement()
@@ -120,21 +120,28 @@ def test_resume_reuses_same_runtime_run_with_new_attempt_and_checkpoint_context(
         heartbeat_interval_seconds=0.01,
     )
 
-    result = asyncio.run(worker.run_once(runtime_run_id=run.runtime_run_id))
+    with pytest.raises(RuntimeControlError) as exc_info:
+        asyncio.run(worker.run_once(runtime_run_id=run.runtime_run_id))
 
     assert resume.command_type == "resume"
-    assert result is not None
-    assert result.runtime_run_id == run.runtime_run_id
-    assert result.status == "completed"
-    assert runtime.received["resume_checkpoint"]["checkpoint_id"] == "checkpoint-pause-1"
-    assert runtime.received["resume_run_state"] == {"round": 2, "cursor": "after-controller"}
+    assert (
+        exc_info.value.reason_code
+        == "runtime_checkpoint_safe_boundary_invalid"
+    )
+    assert runtime.received == {}
+    failed = store.get_run(run.runtime_run_id)
+    assert failed.status == "failed"
+    assert (
+        failed.stop_reason_code
+        == "runtime_checkpoint_safe_boundary_invalid"
+    )
     leases = _executor_leases(store)
     assert [(lease["executor_id"], lease["attempt_no"], lease["status"]) for lease in leases] == [
         ("executor-pause", 1, "released"),
-        ("executor-resume", 2, "released"),
+        ("executor-resume", 2, "failed"),
     ]
     events = store.list_events(runtime_run_id=run.runtime_run_id, after_seq=0, limit=30).events
-    assert "runtime_resumed" in [event.event_type for event in events]
+    assert "runtime_resume_failed" in [event.event_type for event in events]
 
 
 @pytest.mark.parametrize(
