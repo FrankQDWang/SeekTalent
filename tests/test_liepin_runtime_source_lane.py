@@ -2866,10 +2866,74 @@ def test_liepin_runtime_lane_normalizes_blocked_worker_error_codes() -> None:
     assert result.status == "blocked"
     assert result.blocked_reason_code == "risk_control"
     assert result.stop_reason_code == "risk_control"
+    assert result.retryable is False
     payload = repr(result.to_public_payload())
     assert "risk_control" not in payload
     assert "source_risk_or_verification_required" in payload
     assert "secret-token" not in payload
+
+
+@pytest.mark.parametrize(
+    ("reason_code", "expected_public_problem"),
+    [
+        ("provider_connection_locked", "source_unknown"),
+        ("page_timeout", "source_unknown"),
+        ("selector_drift", "source_unknown"),
+        ("extraction_failure", "source_unknown"),
+        ("future_worker_failure", "source_unknown"),
+        (
+            "liepin_opencli_fill_verification_failed",
+            "source_provider_failed",
+        ),
+        ("requirement_sheet_missing", "source_provider_failed"),
+    ],
+)
+def test_liepin_runtime_lane_preserves_legacy_retryable_metadata(
+    reason_code: str,
+    expected_public_problem: str,
+) -> None:
+    class FailedWorker(FakeWorker):
+        async def search(
+            self,
+            request: SearchRequest,
+            *,
+            round_no: int,
+            trace_id: str,
+            provider_account_hash: str | None = None,
+        ) -> SearchResult:
+            del request, round_no, trace_id, provider_account_hash
+            raise LiepinWorkerModeError(
+                "private worker failure",
+                code=reason_code,
+            )
+
+    request = RuntimeSourceLaneRequest(
+        source="liepin",
+        lane_mode="card",
+        job_title="Backend Engineer",
+        jd="FastAPI retrieval",
+        notes=None,
+        requirement_sheet=_requirement_sheet(),
+        runtime_run_id="runtime-run-1",
+        source_lane_run_id="lane-run-1",
+        source_query_terms=("FastAPI", "ranking"),
+        source_context={"provider_account_hash": "acct_hash_123"},
+    )
+
+    result = asyncio.run(
+        run_liepin_source_lane(
+            settings=make_settings(),
+            request=request,
+            worker_client=FailedWorker(),
+        )
+    )
+
+    assert result.blocked_reason_code == reason_code
+    assert result.retryable is True
+    public_payload = result.to_public_payload()
+    assert public_payload["retryable"] is True
+    assert reason_code not in repr(public_payload)
+    assert expected_public_problem in repr(public_payload)
 
 
 def test_liepin_runtime_lane_records_safe_worker_exception_summary() -> None:

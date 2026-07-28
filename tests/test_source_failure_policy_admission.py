@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import re
 
 import pytest
 
@@ -19,6 +20,11 @@ ROOT = Path(__file__).resolve().parents[1]
 LIEPIN_PRODUCTION_PATHS = (
     ROOT / "src/seektalent/providers/liepin",
     ROOT / "src/seektalent/sources/liepin",
+)
+LIEPIN_TYPESCRIPT_BROWSER_HELPER = (
+    ROOT
+    / "src/seektalent/providers/liepin/opencli_extensions"
+    / "seektalent_opencli_browser.ts"
 )
 TYPED_FAILURE_CALLS = {
     "LiepinTransition",
@@ -102,11 +108,58 @@ def _typed_production_failure_causes() -> set[str]:
     return causes
 
 
+def _typescript_browser_helper_failure_causes() -> set[str]:
+    source = LIEPIN_TYPESCRIPT_BROWSER_HELPER.read_text(encoding="utf-8")
+    return {
+        match.group(1)
+        for match in re.finditer(
+            r'\bsafeReasonCode\s*:\s*"([^"]+)"',
+            source,
+        )
+        if match.group(1).startswith("liepin_")
+    }
+
+
 def test_typed_production_failure_causes_are_in_the_canonical_policy() -> None:
     production_causes = _typed_production_failure_causes()
 
     assert REVIEWED_REACHABLE_FAILURE_CAUSES <= production_causes
     assert production_causes <= LIEPIN_FAILURE_POLICIES.keys()
+
+
+def test_typescript_browser_helper_failure_causes_are_in_the_canonical_policy() -> None:
+    production_causes = _typescript_browser_helper_failure_causes()
+
+    assert "liepin_opencli_budget_exhausted" in production_causes
+    assert "configured" not in production_causes
+    assert production_causes <= LIEPIN_FAILURE_POLICIES.keys()
+    budget_policy = LIEPIN_FAILURE_POLICIES[
+        "liepin_opencli_budget_exhausted"
+    ]
+    assert budget_policy.public_problem_code == "source_budget_exhausted"
+    assert budget_policy.legacy_lane_retryable_metadata is False
+
+
+def test_runtime_lane_does_not_define_a_second_large_reason_inventory() -> None:
+    path = ROOT / "src/seektalent/sources/liepin/runtime_lane.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        if node.value is None:
+            continue
+        reason_literals = {
+            item.value
+            for item in ast.walk(node.value)
+            if isinstance(item, ast.Constant)
+            and isinstance(item.value, str)
+            and (
+                item.value.startswith("liepin_")
+                or item.value in LIEPIN_FAILURE_POLICIES
+            )
+        }
+        assert len(reason_literals) < 10
 
 
 @pytest.mark.parametrize(

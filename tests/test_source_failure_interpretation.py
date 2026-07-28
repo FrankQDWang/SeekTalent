@@ -87,6 +87,7 @@ def test_filter_unavailable_and_unsupported_remain_distinct(
         ("failed_provider_error", "source_provider_failed"),
         ("partial_timeout", "source_browser_timeout"),
         ("partial_budget_exhausted", "source_budget_exhausted"),
+        ("liepin_opencli_budget_exhausted", "source_budget_exhausted"),
         ("cancelled_by_user", "source_cancelled"),
         ("failed_internal_error", "source_unknown"),
     ],
@@ -142,6 +143,7 @@ def test_search_readiness_never_reports_browser_bridge_unavailable(
         ("liepin_opencli_filter_unapplied", "source_filter_unavailable"),
         ("source_filter_unsupported", "source_filter_unsupported"),
         ("partial_budget_exhausted", "source_budget_exhausted"),
+        ("liepin_opencli_budget_exhausted", "source_budget_exhausted"),
         ("new_private_failure_reason", "source_unknown"),
     ],
 )

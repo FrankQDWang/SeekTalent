@@ -22,6 +22,7 @@ class LiepinFailurePolicy:
     internal_reason: str
     public_problem_code: str
     user_action_code: UserActionCode | None = None
+    legacy_lane_retryable_metadata: bool = True
 
 
 def _problem(
@@ -158,11 +159,13 @@ def _policy(
     public_problem_code: str,
     *,
     user_action_code: UserActionCode | None = None,
+    legacy_lane_retryable_metadata: bool = True,
 ) -> LiepinFailurePolicy:
     return LiepinFailurePolicy(
         internal_reason=internal_reason,
         public_problem_code=public_problem_code,
         user_action_code=user_action_code,
+        legacy_lane_retryable_metadata=legacy_lane_retryable_metadata,
     )
 
 
@@ -171,8 +174,13 @@ _LIEPIN_FAILURE_POLICY_ENTRIES = (
         "liepin_host_tab_missing",
         "source_browser_host_required",
         user_action_code="open_liepin_host",
+        legacy_lane_retryable_metadata=False,
     ),
-    _policy("liepin_host_window_ambiguous", "source_browser_window_ambiguous"),
+    _policy(
+        "liepin_host_window_ambiguous",
+        "source_browser_window_ambiguous",
+        legacy_lane_retryable_metadata=False,
+    ),
     _policy(
         "liepin_connection_not_connected",
         "source_login_required",
@@ -185,93 +193,240 @@ _LIEPIN_FAILURE_POLICY_ENTRIES = (
     ),
     _policy("liepin_browser_probe_unavailable", "source_browser_backend_unavailable"),
     _policy("liepin_browser_account_mismatch", "source_account_mismatch"),
-    _policy("liepin_opencli_backend_disabled", "source_browser_backend_unavailable"),
-    _policy("liepin_opencli_command_missing", "source_browser_installation_invalid"),
+    _policy(
+        "liepin_opencli_backend_disabled",
+        "source_browser_backend_unavailable",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_command_missing",
+        "source_browser_installation_invalid",
+        legacy_lane_retryable_metadata=False,
+    ),
     _policy(
         "liepin_opencli_extension_disconnected",
         "source_browser_extension_disconnected",
+        legacy_lane_retryable_metadata=False,
     ),
     _policy(
         "liepin_opencli_bridge_build_mismatch",
         "source_browser_backend_incompatible",
+        legacy_lane_retryable_metadata=False,
     ),
     _policy(
         "liepin_opencli_bridge_capability_missing",
         "source_browser_backend_incompatible",
+        legacy_lane_retryable_metadata=False,
     ),
     _policy(
         "liepin_opencli_bridge_integrity_failed",
         "source_browser_installation_invalid",
+        legacy_lane_retryable_metadata=False,
     ),
     _policy(
         "liepin_opencli_bridge_protocol_mismatch",
         "source_browser_backend_incompatible",
+        legacy_lane_retryable_metadata=False,
     ),
     _policy(
         "liepin_opencli_bridge_wrong_implementation",
         "source_browser_backend_incompatible",
+        legacy_lane_retryable_metadata=False,
     ),
-    _policy("liepin_opencli_daemon_not_running", "source_browser_backend_unavailable"),
-    _policy("liepin_opencli_daemon_stale", "source_browser_backend_unavailable"),
-    _policy("liepin_opencli_status_unavailable", "source_browser_backend_unavailable"),
-    _policy("liepin_opencli_bootstrap_failed", "source_browser_installation_invalid"),
+    _policy(
+        "liepin_opencli_daemon_not_running",
+        "source_browser_backend_unavailable",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_daemon_stale",
+        "source_browser_backend_unavailable",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_status_unavailable",
+        "source_browser_backend_unavailable",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_bootstrap_failed",
+        "source_browser_installation_invalid",
+        legacy_lane_retryable_metadata=False,
+    ),
     _policy("liepin_verify_session_gate_missing", "source_runtime_unavailable"),
-    _policy("liepin_opencli_forbidden_command", "source_browser_policy_blocked"),
-    _policy("liepin_opencli_forbidden_text", "source_browser_policy_blocked"),
-    _policy("liepin_opencli_host_blocked", "source_browser_policy_blocked"),
-    _policy("liepin_opencli_start_url_blocked", "source_browser_policy_blocked"),
-    _policy("liepin_opencli_window_policy_blocked", "source_browser_policy_blocked"),
-    _policy("liepin_opencli_timeout", "source_browser_timeout"),
-    _policy("liepin_opencli_detail_not_opened", "source_browser_timeout"),
-    _policy("liepin_opencli_detail_open_retry_exhausted", "source_browser_timeout"),
+    _policy(
+        "liepin_opencli_forbidden_command",
+        "source_browser_policy_blocked",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_forbidden_text",
+        "source_browser_policy_blocked",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_host_blocked",
+        "source_browser_policy_blocked",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_start_url_blocked",
+        "source_browser_policy_blocked",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_window_policy_blocked",
+        "source_browser_policy_blocked",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_budget_exhausted",
+        "source_budget_exhausted",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_timeout",
+        "source_browser_timeout",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_detail_not_opened",
+        "source_browser_timeout",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_detail_open_retry_exhausted",
+        "source_browser_timeout",
+        legacy_lane_retryable_metadata=False,
+    ),
     _policy(
         "liepin_opencli_login_required",
         "source_login_required",
         user_action_code="log_in_to_liepin",
+        legacy_lane_retryable_metadata=False,
     ),
     _policy(
         "liepin_opencli_identity_intercept",
         "source_identity_confirmation_required",
         user_action_code="complete_identity_check",
+        legacy_lane_retryable_metadata=False,
     ),
     _policy(
         "liepin_opencli_risk_page",
         "source_risk_or_verification_required",
         user_action_code="complete_liepin_risk_check",
+        legacy_lane_retryable_metadata=False,
     ),
     _policy(
         "liepin_opencli_unknown_modal",
         "source_browser_interaction_required",
         user_action_code="resolve_liepin_modal",
+        legacy_lane_retryable_metadata=False,
     ),
-    _policy("liepin_opencli_config_invalid", "source_configuration_invalid"),
-    _policy("liepin_opencli_removed_config", "source_removed_cleanup_config"),
+    _policy(
+        "liepin_opencli_config_invalid",
+        "source_configuration_invalid",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_removed_config",
+        "source_removed_cleanup_config",
+        legacy_lane_retryable_metadata=False,
+    ),
     _policy("liepin_protected_artifact_root_missing", "source_configuration_invalid"),
-    _policy("liepin_opencli_helper_empty_output", "source_provider_failed"),
-    _policy("liepin_opencli_helper_invalid_input", "source_provider_failed"),
-    _policy("liepin_opencli_helper_invalid_output", "source_provider_failed"),
-    _policy("liepin_opencli_helper_output_too_large", "source_provider_failed"),
-    _policy("liepin_opencli_malformed_state", "source_provider_failed"),
-    _policy("liepin_opencli_lease_malformed", "source_provider_failed"),
-    _policy("liepin_opencli_owned_marker_malformed", "source_provider_failed"),
-    _policy("liepin_opencli_tab_response_malformed", "source_provider_failed"),
+    _policy(
+        "liepin_opencli_helper_empty_output",
+        "source_provider_failed",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_helper_invalid_input",
+        "source_provider_failed",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_helper_invalid_output",
+        "source_provider_failed",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_helper_output_too_large",
+        "source_provider_failed",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_malformed_state",
+        "source_provider_failed",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_lease_malformed",
+        "source_provider_failed",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_owned_marker_malformed",
+        "source_provider_failed",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_tab_response_malformed",
+        "source_provider_failed",
+        legacy_lane_retryable_metadata=False,
+    ),
     _policy("liepin_opencli_fill_verification_failed", "source_provider_failed"),
     _policy("liepin_opencli_filter_option_unavailable", "source_filter_unavailable"),
     _policy("liepin_opencli_filter_clear_failed", "source_filter_unavailable"),
-    _policy("liepin_opencli_filter_unapplied", "source_filter_unavailable"),
-    _policy("liepin_opencli_search_input_unapplied", "source_browser_timeout"),
-    _policy("liepin_opencli_search_not_ready", "source_browser_timeout"),
-    _policy("liepin_opencli_results_not_ready", "source_browser_timeout"),
+    _policy(
+        "liepin_opencli_filter_unapplied",
+        "source_filter_unavailable",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_search_input_unapplied",
+        "source_browser_timeout",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_search_not_ready",
+        "source_browser_timeout",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_results_not_ready",
+        "source_browser_timeout",
+        legacy_lane_retryable_metadata=False,
+    ),
     _policy("liepin_opencli_search_restore_failed", "source_partial"),
-    _policy("liepin_opencli_stale_ref", "source_browser_reference_stale"),
-    _policy("liepin_opencli_stale_control_fence", "source_browser_reference_stale"),
+    _policy(
+        "liepin_opencli_stale_ref",
+        "source_browser_reference_stale",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_stale_control_fence",
+        "source_browser_reference_stale",
+        legacy_lane_retryable_metadata=False,
+    ),
     _policy(
         "liepin_opencli_candidate_identity_mismatch",
         "source_browser_reference_stale",
     ),
-    _policy("liepin_opencli_selector_not_found", "source_provider_failed"),
-    _policy("liepin_opencli_selector_ambiguous", "source_provider_failed"),
-    _policy("liepin_opencli_target_not_found", "source_provider_failed"),
+    _policy(
+        "liepin_opencli_selector_not_found",
+        "source_provider_failed",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_selector_ambiguous",
+        "source_provider_failed",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_target_not_found",
+        "source_provider_failed",
+        legacy_lane_retryable_metadata=False,
+    ),
     _policy("liepin_opencli_terminal_state", "source_provider_failed"),
     _policy("liepin_opencli_card_extract_failed", "source_provider_failed"),
     _policy("liepin_owned_tab_missing", "source_browser_reference_stale"),
@@ -289,6 +444,7 @@ _LIEPIN_FAILURE_POLICY_ENTRIES = (
         "blocked_login_required",
         "source_login_required",
         user_action_code="log_in_to_liepin",
+        legacy_lane_retryable_metadata=False,
     ),
     _policy(
         "blocked_compliance",
@@ -299,6 +455,7 @@ _LIEPIN_FAILURE_POLICY_ENTRIES = (
         "connection_safety_expired",
         "source_login_required",
         user_action_code="log_in_to_liepin",
+        legacy_lane_retryable_metadata=False,
     ),
     _policy("failed_internal_error", "source_unknown"),
     _policy("failed_provider_error", "source_provider_failed"),
@@ -316,6 +473,7 @@ _LIEPIN_FAILURE_POLICY_ENTRIES = (
         "risk_control",
         "source_risk_or_verification_required",
         user_action_code="complete_liepin_risk_check",
+        legacy_lane_retryable_metadata=False,
     ),
     _policy("runtime_failed", "source_provider_failed"),
     _policy("source_age_filter_unsupported", "source_filter_unsupported"),
@@ -325,6 +483,7 @@ _LIEPIN_FAILURE_POLICY_ENTRIES = (
         "verification_required",
         "source_risk_or_verification_required",
         user_action_code="complete_liepin_risk_check",
+        legacy_lane_retryable_metadata=False,
     ),
 )
 LIEPIN_FAILURE_POLICIES = {
@@ -369,6 +528,17 @@ def public_source_problem_message(
     return problem.message_template.format(source_label=label)
 
 
+def legacy_lane_retryable_metadata(internal_reason: object) -> bool:
+    """Return legacy lane metadata without granting retry authority."""
+    text = str(
+        getattr(internal_reason, "value", internal_reason or "")
+    ).strip()
+    policy = LIEPIN_FAILURE_POLICIES.get(text)
+    if policy is None:
+        return True
+    return policy.legacy_lane_retryable_metadata
+
+
 def user_action_for_liepin_failure(
     internal_reason: object,
     *,
@@ -400,6 +570,7 @@ __all__ = [
     "LIEPIN_PRODUCTION_FAILURE_REASON_CODES",
     "PUBLIC_SOURCE_PROBLEMS",
     "PUBLIC_SOURCE_REASON_CODES",
+    "legacy_lane_retryable_metadata",
     "public_source_problem_code",
     "public_source_problem_message",
     "user_action_for_liepin_failure",

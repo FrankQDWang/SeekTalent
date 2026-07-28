@@ -38,6 +38,7 @@ from seektalent.providers.liepin.source_compiler import LiepinCompiledQuery, com
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerPartialSearchError
 from seektalent.sources.liepin.reason_codes import (
+    legacy_lane_retryable_metadata,
     public_source_problem_code,
 )
 from seektalent.sources.liepin.context import RuntimeLiepinContext, RuntimeLiepinContextInput
@@ -827,7 +828,7 @@ def _blocked_card_result(
         query_started=query_started,
         blocked_reason_code=reason_code,
         stop_reason_code=reason_code,
-        retryable=reason_code in {"blocked_backend_unavailable", "failed_provider_error"},
+        retryable=legacy_lane_retryable_metadata(reason_code),
         safe_error_summary=safe_error_summary,
         events=(
             RuntimeSourceLaneEvent(
