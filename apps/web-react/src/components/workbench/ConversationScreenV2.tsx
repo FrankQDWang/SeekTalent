@@ -17,8 +17,10 @@ type ConversationScreenV2Props = {
   onRequirementAction?:
     | ((payload: WorkbenchV2RequirementActionRequest) => Promise<void> | void)
     | undefined;
+  onRuntimeRecovery?: (() => Promise<void> | void) | undefined;
   onSubmitMessage?: ((message: string) => Promise<void> | void) | undefined;
   optimisticEvents?: readonly WorkbenchV2TranscriptEvent[] | undefined;
+  runtimeRecoveryPending?: boolean;
   submittingMessage?: boolean;
   view: WorkbenchV2ConversationView;
 };
@@ -37,8 +39,10 @@ export function ConversationScreenV2({
   actionErrorMessage = null,
   applyingRequirementAction = false,
   onRequirementAction,
+  onRuntimeRecovery,
   onSubmitMessage,
   optimisticEvents = [],
+  runtimeRecoveryPending = false,
   submittingMessage = false,
   view,
 }: ConversationScreenV2Props) {
@@ -81,8 +85,10 @@ export function ConversationScreenV2({
         events={transcriptEvents}
         onRequirementAction={onRequirementAction}
         onRequirementSupplementTextChange={setRequirementSupplementText}
+        onRuntimeRecovery={onRuntimeRecovery}
         requirementActionPending={applyingRequirementAction}
         requirementSupplementText={requirementSupplementText}
+        runtimeRecoveryPending={runtimeRecoveryPending}
       />
       <MessageComposer
         disabled={onSubmitMessage === undefined || submittingMessage}

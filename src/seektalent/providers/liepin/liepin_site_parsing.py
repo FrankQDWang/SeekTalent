@@ -222,7 +222,7 @@ def classify_liepin_state(*, url: str, text: str) -> str | None:
     if _is_liepin_recruiter_search_surface(url):
         return None
     if _is_forbidden_liepin_url(url) and not _is_allowed_liepin_resume_detail_url(url):
-        return "liepin_opencli_unknown_modal"
+        return "liepin_opencli_search_not_ready"
     return None
 
 

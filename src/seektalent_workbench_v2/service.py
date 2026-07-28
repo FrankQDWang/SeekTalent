@@ -14,6 +14,11 @@ from uuid import uuid4
 
 from anyio import to_thread
 from seektalent.models import RequirementSheet
+from seektalent.providers.liepin.client import LiepinWorkerModeError
+from seektalent.sources.liepin.reason_codes import (
+    public_liepin_failure_cause_code,
+    public_source_problem_code,
+)
 from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.requirements import (
     RequirementDraft,
@@ -45,8 +50,13 @@ from seektalent_workbench_v2.runtime_display import (
     runtime_progress_visible_summary as display_runtime_progress_visible_summary,
     runtime_result_summary,
 )
+from seektalent_workbench_v2.runtime_service import WorkbenchV2RuntimeRecoveryResult
 from seektalent_workbench_v2.store import WorkbenchV2Store
-from seektalent_workbench_v2.views import conversation_events_to_view, conversation_list_to_view, conversation_record_to_view
+from seektalent_workbench_v2.views import (
+    conversation_events_to_view,
+    conversation_list_to_view,
+    conversation_record_to_view,
+)
 
 
 WorkbenchV2RequirementAction = Literal["set_selected", "add_other", "confirm"]
@@ -143,7 +153,9 @@ class WorkbenchV2RequirementRuntime(Protocol):
 
     def get_results(self, runtime_run_id: str) -> Mapping[str, object]: ...
 
-    def list_progress_events(self, runtime_run_id: str, *, after_seq: int, limit: int = 200) -> Sequence[Mapping[str, object]]: ...
+    def list_progress_events(
+        self, runtime_run_id: str, *, after_seq: int, limit: int = 200
+    ) -> Sequence[Mapping[str, object]]: ...
 
     def list_candidate_summaries(self, runtime_run_id: str, *, limit: int = 20) -> Sequence[Mapping[str, object]]: ...
 
@@ -156,6 +168,13 @@ class WorkbenchV2RequirementRuntime(Protocol):
         *,
         idempotency_key: str,
     ) -> Mapping[str, object]: ...
+
+    async def recheck_liepin_and_continue(
+        self,
+        runtime_run_id: str,
+        *,
+        idempotency_key: str,
+    ) -> WorkbenchV2RuntimeRecoveryResult: ...
 
 
 class WorkbenchV2Service:
@@ -432,6 +451,171 @@ class WorkbenchV2Service:
             return self.get_conversation(conversation_id)
 
         raise ValueError("workbench_v2_requirement_action_invalid")
+
+    async def recheck_and_continue(
+        self,
+        conversation_id: str,
+        *,
+        idempotency_key: str,
+    ) -> WorkbenchV2ConversationView:
+        scope = "runtime-recheck"
+        status_key = _dedupe_key(
+            scope=scope,
+            idempotency_key=idempotency_key,
+            suffix="status",
+        )
+        record = self.store.get_conversation(conversation_id)
+        if any(event.dedupe_key == status_key for event in record.events):
+            return self.get_conversation(conversation_id)
+        runtime_run_id = record.conversation.runtime_run_id
+        if runtime_run_id is None or _latest_recovery_cause(record.events) is None:
+            raise ValueError("workbench_v2_runtime_recheck_unavailable")
+        try:
+            result = await self.runtime_service.recheck_liepin_and_continue(
+                runtime_run_id,
+                idempotency_key=idempotency_key,
+            )
+        except LiepinWorkerModeError as exc:
+            cause = public_liepin_failure_cause_code(exc.code)
+            if cause is None:
+                self._append_service_error(
+                    conversation_id,
+                    code="workbench_v2_runtime_recheck_failed",
+                    message="重新检查失败，请稍后重试。",
+                    scope=scope,
+                    idempotency_key=idempotency_key,
+                )
+                return self.get_conversation(conversation_id)
+            payload = normalize_runtime_progress_payload(
+                {
+                    "runtimeRunId": runtime_run_id,
+                    "status": "blocked",
+                    "stage": "source_result",
+                    "state": record.conversation.runtime_state,
+                    "sourceKind": "liepin",
+                    "safeReasonCode": public_source_problem_code(cause),
+                    "failureCauseCode": cause,
+                }
+            )
+            self.store.append_event(
+                conversation_id,
+                WorkbenchV2TranscriptEventInput(
+                    type="runtime_progress",
+                    role="runtime",
+                    payload=payload,
+                    dedupe_key=status_key,
+                ),
+            )
+            return self.get_conversation(conversation_id)
+        except SERVICE_BOUNDARY_ERRORS:
+            self._append_service_error(
+                conversation_id,
+                code="workbench_v2_runtime_recheck_failed",
+                message="重新检查失败，请稍后重试。",
+                scope=scope,
+                idempotency_key=idempotency_key,
+            )
+            return self.get_conversation(conversation_id)
+
+        run = result.runtime_run
+        if result.outcome == "run_still_active":
+            runtime_state = _runtime_state_from_run_status(run.status)
+            self.store.set_runtime(
+                conversation_id,
+                runtime_run_id=run.runtime_run_id,
+                runtime_state=runtime_state,
+            )
+            self.store.append_event(
+                conversation_id,
+                WorkbenchV2TranscriptEventInput(
+                    type="assistant_status",
+                    role="assistant",
+                    payload={
+                        "summary": "当前尝试正在收尾，请稍后重新检查。",
+                        "recoveryState": "waiting_for_terminal",
+                        "recoveryOutcome": "run_still_active",
+                        "runtimeRunId": run.runtime_run_id,
+                    },
+                    dedupe_key=status_key,
+                ),
+            )
+            return self.get_conversation(conversation_id)
+
+        if result.outcome == "readiness_blocked":
+            cause = public_liepin_failure_cause_code(result.failure_cause_code)
+            if cause is None:
+                self._append_service_error(
+                    conversation_id,
+                    code="workbench_v2_runtime_recheck_failed",
+                    message="重新检查失败，请稍后重试。",
+                    scope=scope,
+                    idempotency_key=idempotency_key,
+                )
+                return self.get_conversation(conversation_id)
+            payload = normalize_runtime_progress_payload(
+                {
+                    "runtimeRunId": runtime_run_id,
+                    "status": "blocked",
+                    "stage": "source_result",
+                    "state": record.conversation.runtime_state,
+                    "sourceKind": "liepin",
+                    "safeReasonCode": public_source_problem_code(cause),
+                    "failureCauseCode": cause,
+                }
+            )
+            self.store.append_event(
+                conversation_id,
+                WorkbenchV2TranscriptEventInput(
+                    type="runtime_progress",
+                    role="runtime",
+                    payload=payload,
+                    dedupe_key=status_key,
+                ),
+            )
+            return self.get_conversation(conversation_id)
+
+        if result.outcome != "started_new_attempt":
+            raise RuntimeError("workbench_v2_runtime_recovery_result_invalid")
+
+        next_runtime_run_id = run.runtime_run_id
+        runtime_state = _runtime_state_from_run_status(run.status)
+        self.store.set_runtime(
+            conversation_id,
+            runtime_run_id=next_runtime_run_id,
+            runtime_state=runtime_state,
+        )
+        self.store.append_event(
+            conversation_id,
+            WorkbenchV2TranscriptEventInput(
+                type="assistant_status",
+                role="assistant",
+                payload={
+                    "summary": "环境检查已通过，已从当前任务继续检索。",
+                    "recoveryState": "ready",
+                    "recoveryOutcome": "started_new_attempt",
+                    "runtimeRunId": next_runtime_run_id,
+                },
+                dedupe_key=status_key,
+            ),
+        )
+        self.store.append_event(
+            conversation_id,
+            WorkbenchV2TranscriptEventInput(
+                type="runtime_progress",
+                role="runtime",
+                payload={
+                    "state": runtime_state,
+                    "runtimeRunId": next_runtime_run_id,
+                    "summary": "招聘流程已排队，等待开始。",
+                },
+                dedupe_key=_dedupe_key(
+                    scope=scope,
+                    idempotency_key=idempotency_key,
+                    suffix="runtime-progress",
+                ),
+            ),
+        )
+        return self.get_conversation(conversation_id)
 
     async def _append_user_and_run_agent(
         self,
@@ -880,7 +1064,8 @@ class WorkbenchV2Service:
                     base_draft=draft,
                     base_requirement_sheet=requirement_sheet,
                     text=patch.otherNotes,
-                    idempotency_key=idempotency_key or f"workbench-v2-requirement-amend:{conversation_id}:{action_digest}",
+                    idempotency_key=idempotency_key
+                    or f"workbench-v2-requirement-amend:{conversation_id}:{action_digest}",
                 )
             except SERVICE_BOUNDARY_ERRORS as exc:
                 raise ValueError("workbench_v2_requirement_amendment_failed") from exc
@@ -1052,7 +1237,9 @@ class WorkbenchV2Service:
                 type="assistant_status",
                 role="assistant",
                 payload=payload,
-                dedupe_key=_dedupe_key(scope=scope, idempotency_key=idempotency_key, suffix="post-confirm-runtime-input"),
+                dedupe_key=_dedupe_key(
+                    scope=scope, idempotency_key=idempotency_key, suffix="post-confirm-runtime-input"
+                ),
             ),
         )
         return runtime_submission.assistant_override
@@ -1566,8 +1753,7 @@ class WorkbenchV2Service:
                     role="runtime",
                     payload=payload,
                     dedupe_key=(
-                        "workbench-v2-service:runtime-event:"
-                        f"{runtime_run_id}:{runtime_event_seq}:runtime-progress"
+                        f"workbench-v2-service:runtime-event:{runtime_run_id}:{runtime_event_seq}:runtime-progress"
                     ),
                 ),
             )
@@ -1604,8 +1790,7 @@ class WorkbenchV2Service:
                     role="runtime",
                     payload=payload,
                     dedupe_key=(
-                        "workbench-v2-service:runtime-refresh:"
-                        f"{runtime_run_id}:{payload_digest}:runtime-results"
+                        f"workbench-v2-service:runtime-refresh:{runtime_run_id}:{payload_digest}:runtime-results"
                     ),
                 ),
             )
@@ -1613,8 +1798,7 @@ class WorkbenchV2Service:
             conversation_id,
             text=_runtime_final_assistant_reply(payload),
             dedupe_key=(
-                "workbench-v2-service:runtime-refresh:"
-                f"{runtime_run_id}:{payload_digest}:assistant-final-summary"
+                f"workbench-v2-service:runtime-refresh:{runtime_run_id}:{payload_digest}:assistant-final-summary"
             ),
         )
 
@@ -1792,6 +1976,18 @@ def _latest_runtime_progress_payload(events: Sequence[WorkbenchV2TranscriptEvent
     for event in reversed(events):
         if event.type == "runtime_progress":
             return dict(event.payload)
+    return None
+
+
+def _latest_recovery_cause(events: Sequence[WorkbenchV2TranscriptEvent]) -> str | None:
+    for event in reversed(events):
+        if event.type == "assistant_status" and event.payload.get("recoveryState") == "ready":
+            return None
+        if event.type != "runtime_progress":
+            continue
+        cause = public_liepin_failure_cause_code(event.payload.get("failureCauseCode"))
+        if cause is not None:
+            return cause
     return None
 
 

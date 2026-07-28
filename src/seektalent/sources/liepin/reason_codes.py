@@ -25,6 +25,13 @@ class LiepinFailurePolicy:
     legacy_lane_retryable_metadata: bool = True
 
 
+@dataclass(frozen=True, slots=True)
+class LiepinRecoveryGuidance:
+    failure_cause_code: str
+    reason: str
+    action: str
+
+
 def _problem(
     code: str,
     message_template: str | None,
@@ -111,6 +118,10 @@ PUBLIC_SOURCE_PROBLEMS = {
         _problem(
             "source_browser_interaction_required",
             "{source_label}需要人工完成页面操作后才能继续检索。",
+        ),
+        _problem(
+            "source_browser_page_not_operable",
+            "{source_label}页面当前不可操作，请切换到 Chrome 查看并处理。",
         ),
         _problem(
             "source_budget_exhausted",
@@ -319,8 +330,7 @@ _LIEPIN_FAILURE_POLICY_ENTRIES = (
     ),
     _policy(
         "liepin_opencli_unknown_modal",
-        "source_browser_interaction_required",
-        user_action_code="resolve_liepin_modal",
+        "source_browser_page_not_operable",
         legacy_lane_retryable_metadata=False,
     ),
     _policy(
@@ -389,7 +399,7 @@ _LIEPIN_FAILURE_POLICY_ENTRIES = (
     ),
     _policy(
         "liepin_opencli_search_not_ready",
-        "source_browser_timeout",
+        "source_browser_page_not_operable",
         legacy_lane_retryable_metadata=False,
     ),
     _policy(
@@ -491,6 +501,99 @@ LIEPIN_FAILURE_POLICIES = {
 }
 LIEPIN_PRODUCTION_FAILURE_REASON_CODES = frozenset(LIEPIN_FAILURE_POLICIES)
 
+_RECOVERY_GUIDANCE_ENTRIES = (
+    LiepinRecoveryGuidance(
+        failure_cause_code="liepin_opencli_daemon_not_running",
+        reason="SeekTalent 自有的 WTSCLI runtime/daemon 当前不可用。",
+        action="请启动当前 SeekTalent 自有的 WTSCLI 服务。",
+    ),
+    LiepinRecoveryGuidance(
+        failure_cause_code="liepin_opencli_daemon_stale",
+        reason="当前 WTSCLI runtime/daemon 未返回有效的当前构建状态。",
+        action="请重新启动当前 SeekTalent 自有的 WTSCLI 服务。",
+    ),
+    LiepinRecoveryGuidance(
+        failure_cause_code="liepin_opencli_status_unavailable",
+        reason="当前无法确认 WTSCLI runtime/daemon 的有效状态。",
+        action="请重新启动当前 SeekTalent 自有的 WTSCLI 服务。",
+    ),
+    LiepinRecoveryGuidance(
+        failure_cause_code="liepin_opencli_bootstrap_failed",
+        reason="当前 SeekTalent 内置的 WTSCLI runtime 无法启动。",
+        action="请重新打开当前 SeekTalent 应用。",
+    ),
+    LiepinRecoveryGuidance(
+        failure_cause_code="liepin_opencli_command_missing",
+        reason="当前 SeekTalent 安装中缺少可用的 WTSCLI runtime。",
+        action="请重新安装当前 SeekTalent 安装包。",
+    ),
+    LiepinRecoveryGuidance(
+        failure_cause_code="liepin_opencli_extension_disconnected",
+        reason="Chrome 中的 WTSCLI 扩展未连接；猎聘登录状态尚无法验证。",
+        action="请在 Chrome 的 chrome://extensions 中启用或重新加载 WTSCLI 扩展。",
+    ),
+    *(
+        LiepinRecoveryGuidance(
+            failure_cause_code=code,
+            reason="WTSCLI runtime 与 Chrome 扩展的 exact build 或协议不匹配。",
+            action="请在 Chrome 的 chrome://extensions 中重新加载 WTSCLI 扩展。",
+        )
+        for code in (
+            "liepin_opencli_bridge_build_mismatch",
+            "liepin_opencli_bridge_capability_missing",
+            "liepin_opencli_bridge_protocol_mismatch",
+            "liepin_opencli_bridge_wrong_implementation",
+        )
+    ),
+    LiepinRecoveryGuidance(
+        failure_cause_code="liepin_opencli_bridge_integrity_failed",
+        reason="当前 SeekTalent 安装中的 WTSCLI runtime 或扩展文件不完整。",
+        action="请重新安装当前 SeekTalent 安装包。",
+    ),
+    LiepinRecoveryGuidance(
+        failure_cause_code="liepin_host_tab_missing",
+        reason="Chrome 中没有可用的猎聘 host tab。",
+        action="请在 Chrome 中打开任意 https://h.liepin.com/ 页面并保持该页面打开。",
+    ),
+    LiepinRecoveryGuidance(
+        failure_cause_code="liepin_opencli_login_required",
+        reason="Chrome 中的猎聘会话尚未登录。",
+        action="请切换到 Chrome 并完成猎聘登录。",
+    ),
+    LiepinRecoveryGuidance(
+        failure_cause_code="liepin_browser_login_required",
+        reason="Chrome 中的猎聘会话尚未登录。",
+        action="请切换到 Chrome 并完成猎聘登录。",
+    ),
+    LiepinRecoveryGuidance(
+        failure_cause_code="liepin_opencli_identity_intercept",
+        reason="猎聘正在等待选择招聘身份或企业。",
+        action="请切换到 Chrome 并完成招聘身份或企业选择。",
+    ),
+    LiepinRecoveryGuidance(
+        failure_cause_code="liepin_opencli_risk_page",
+        reason="猎聘页面已明确显示验证码、安全验证或风险提示。",
+        action="请切换到 Chrome 并人工完成页面验证。",
+    ),
+    LiepinRecoveryGuidance(
+        failure_cause_code="liepin_opencli_search_not_ready",
+        reason="猎聘页面当前不可操作，尚无法进入可用的搜索页。",
+        action="请切换到 Chrome 查看并处理当前猎聘页面。",
+    ),
+    LiepinRecoveryGuidance(
+        failure_cause_code="liepin_opencli_unknown_modal",
+        reason="猎聘页面当前不可操作，具体原因尚无法确认。",
+        action="请切换到 Chrome 查看并处理当前猎聘页面。",
+    ),
+)
+LIEPIN_RECOVERY_GUIDANCE = {
+    guidance.failure_cause_code: guidance
+    for guidance in _RECOVERY_GUIDANCE_ENTRIES
+}
+
+if len(LIEPIN_RECOVERY_GUIDANCE) != len(_RECOVERY_GUIDANCE_ENTRIES):
+    raise RuntimeError("liepin_recovery_guidance_duplicate")
+
 if len(LIEPIN_FAILURE_POLICIES) != len(_LIEPIN_FAILURE_POLICY_ENTRIES):
     raise RuntimeError("liepin_failure_policy_registry_duplicate")
 if not {
@@ -557,6 +660,16 @@ def user_action_for_liepin_failure(
     )
 
 
+def public_liepin_failure_cause_code(reason_code: object) -> str | None:
+    text = str(getattr(reason_code, "value", reason_code or "")).strip()
+    return text if text in LIEPIN_RECOVERY_GUIDANCE else None
+
+
+def liepin_recovery_guidance(reason_code: object) -> LiepinRecoveryGuidance | None:
+    code = public_liepin_failure_cause_code(reason_code)
+    return LIEPIN_RECOVERY_GUIDANCE.get(code) if code is not None else None
+
+
 LIEPIN_BACKEND_MODE_BY_WORKER_MODE = {
     "disabled": "blocked",
     "opencli": "opencli",
@@ -568,9 +681,13 @@ __all__ = [
     "LIEPIN_BACKEND_MODE_BY_WORKER_MODE",
     "LIEPIN_FAILURE_POLICIES",
     "LIEPIN_PRODUCTION_FAILURE_REASON_CODES",
+    "LIEPIN_RECOVERY_GUIDANCE",
+    "LiepinRecoveryGuidance",
     "PUBLIC_SOURCE_PROBLEMS",
     "PUBLIC_SOURCE_REASON_CODES",
     "legacy_lane_retryable_metadata",
+    "liepin_recovery_guidance",
+    "public_liepin_failure_cause_code",
     "public_source_problem_code",
     "public_source_problem_message",
     "user_action_for_liepin_failure",

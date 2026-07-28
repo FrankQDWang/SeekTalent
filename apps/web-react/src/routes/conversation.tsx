@@ -21,6 +21,7 @@ import {
 import {
   useApplyWorkbenchV2RequirementAction,
   useCreateWorkbenchV2Conversation,
+  useRecheckWorkbenchV2Runtime,
   useSubmitWorkbenchV2Message,
   useWorkbenchV2CandidateDetail,
   useWorkbenchV2Conversation,
@@ -196,6 +197,7 @@ function ExistingWorkbenchV2ConversationFlow({
   const submitMessageMutation = useSubmitWorkbenchV2Message(conversationId);
   const requirementActionMutation =
     useApplyWorkbenchV2RequirementAction(conversationId);
+  const runtimeRecoveryMutation = useRecheckWorkbenchV2Runtime(conversationId);
   const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(
     null,
   );
@@ -302,6 +304,18 @@ function ExistingWorkbenchV2ConversationFlow({
     }
   };
 
+  const onRuntimeRecovery = async () => {
+    setActionErrorMessage(null);
+    try {
+      await runtimeRecoveryMutation.mutateAsync({
+        idempotencyKey: createIdempotencyKey(),
+      });
+    } catch (error) {
+      setActionErrorMessage(safeWorkbenchV2ErrorMessage(error));
+      throw error;
+    }
+  };
+
   if (query.isPending) {
     return (
       <ConversationShell
@@ -343,8 +357,10 @@ function ExistingWorkbenchV2ConversationFlow({
             actionErrorMessage={actionErrorMessage}
             applyingRequirementAction={requirementActionMutation.isPending}
             onRequirementAction={onRequirementAction}
+            onRuntimeRecovery={onRuntimeRecovery}
             onSubmitMessage={onSubmitMessage}
             optimisticEvents={optimisticEvents}
+            runtimeRecoveryPending={runtimeRecoveryMutation.isPending}
             submittingMessage={submitMessageMutation.isPending}
             view={view}
           />

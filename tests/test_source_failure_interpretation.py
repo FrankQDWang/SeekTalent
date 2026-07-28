@@ -112,7 +112,11 @@ def test_search_readiness_never_reports_browser_bridge_unavailable(
     public_problem = public_source_problem_code(internal_reason)
     message = public_source_problem_message(public_problem, source_label="猎聘")
 
-    assert public_problem == "source_browser_timeout"
+    assert public_problem == (
+        "source_browser_page_not_operable"
+        if internal_reason == "liepin_opencli_search_not_ready"
+        else "source_browser_timeout"
+    )
     assert message is not None
     assert "浏览器桥" not in message
 
@@ -130,7 +134,7 @@ def test_search_readiness_never_reports_browser_bridge_unavailable(
             "liepin_opencli_daemon_not_running",
             "source_browser_backend_unavailable",
         ),
-        ("liepin_opencli_search_not_ready", "source_browser_timeout"),
+        ("liepin_opencli_search_not_ready", "source_browser_page_not_operable"),
         ("liepin_opencli_stale_ref", "source_browser_reference_stale"),
         (
             "liepin_opencli_risk_page",
@@ -138,7 +142,7 @@ def test_search_readiness_never_reports_browser_bridge_unavailable(
         ),
         (
             "liepin_opencli_unknown_modal",
-            "source_browser_interaction_required",
+            "source_browser_page_not_operable",
         ),
         ("liepin_opencli_filter_unapplied", "source_filter_unavailable"),
         ("source_filter_unsupported", "source_filter_unsupported"),
@@ -155,6 +159,9 @@ def test_internal_reason_projects_consistently_through_all_user_surfaces(
     from seektalent.progress import ProgressEvent
     from seektalent.runtime.public_events import make_runtime_public_event
     from seektalent.source_adapters import public_source_reason_code
+    from seektalent.sources.liepin.reason_codes import (
+        public_liepin_failure_cause_code,
+    )
     from seektalent_runtime_control.events import normalize_progress_event
     from seektalent_ui.event_routes import _drop_broad_runtime_fields
     from seektalent_ui.workbench_response import source_runtime_warning_message
@@ -209,7 +216,13 @@ def test_internal_reason_projects_consistently_through_all_user_surfaces(
         {"safeReasonCode": internal_reason}
     ) == {"safeReasonCode": expected_public_problem}
     if internal_reason != expected_public_problem:
-        assert internal_reason not in repr(control_event.payload)
+        payload_without_cause = dict(control_event.payload)
+        failure_cause = payload_without_cause.pop("failureCauseCode", None)
+        assert internal_reason not in repr(payload_without_cause)
+        if public_liepin_failure_cause_code(internal_reason) is not None:
+            assert failure_cause == internal_reason
+        else:
+            assert failure_cause is None
         assert internal_reason not in repr(workbench_payload)
 
 

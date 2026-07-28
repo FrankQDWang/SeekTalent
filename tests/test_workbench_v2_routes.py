@@ -36,6 +36,7 @@ class FakeWorkbenchV2Service:
         self.create_calls: list[tuple[str, str | None]] = []
         self.submit_calls: list[tuple[str, str, str | None]] = []
         self.requirement_action_calls: list[dict[str, object]] = []
+        self.recheck_calls: list[tuple[str, str]] = []
         self.get_calls: list[str] = []
         self.event_calls: list[tuple[str, int, int]] = []
         self.detail_calls: list[tuple[str, str]] = []
@@ -174,6 +175,24 @@ class FakeWorkbenchV2Service:
             title="Existing conversation",
             event_id=f"agentv2_event_{action}",
             user_text=action,
+        )
+
+    async def recheck_and_continue(
+        self,
+        conversation_id: str,
+        *,
+        idempotency_key: str,
+    ) -> WorkbenchV2ConversationView:
+        self.recheck_calls.append((conversation_id, idempotency_key))
+        if conversation_id == "missing":
+            raise KeyError(conversation_id)
+        if idempotency_key == "unavailable":
+            raise ValueError("workbench_v2_runtime_recheck_unavailable")
+        return _conversation_view(
+            conversation_id=conversation_id,
+            title="Existing conversation",
+            event_id="agentv2_event_recheck",
+            user_text="rechecked",
         )
 
 
@@ -566,21 +585,69 @@ def test_openapi_declares_v2_error_responses(tmp_path: Path) -> None:
     action_responses = paths[
         "/api/agent/workbench/v2/conversations/{conversation_id}/requirement-actions"
     ]["post"]["responses"]
+    recheck_responses = paths["/api/agent/workbench/v2/conversations/{conversation_id}/runtime/recheck"]["post"][
+        "responses"
+    ]
 
     assert {"201", "400", "409", "503"}.issubset(create_responses)
     assert {"404"}.issubset(get_responses)
     assert {"404"}.issubset(event_responses)
     assert {"404"}.issubset(submit_responses)
     assert {"400", "404", "409", "503"}.issubset(action_responses)
+    assert {"400", "404", "409", "503"}.issubset(recheck_responses)
     assert create_responses["400"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
     assert create_responses["409"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
     assert create_responses["503"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
     assert action_responses["400"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
     assert action_responses["409"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
     assert action_responses["503"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
+    assert recheck_responses["400"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
     assert "reasonCode" in get_responses["404"]["content"]["application/json"]["schema"]["properties"]["detail"][
         "properties"
     ]
+
+
+def test_runtime_recheck_uses_same_conversation_and_requires_idempotency_key(
+    tmp_path: Path,
+) -> None:
+    client, fake = _client(tmp_path)
+
+    response = client.post(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/runtime/recheck",
+        json={"idempotencyKey": " recheck-1 "},
+    )
+    invalid = client.post(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/runtime/recheck",
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["conversation"]["conversationId"] == (
+        "agentv2_existing"
+    )
+    assert fake.recheck_calls == [("agentv2_existing", "recheck-1")]
+    assert invalid.status_code == 400
+
+
+def test_runtime_recheck_maps_missing_and_unavailable_conversations(
+    tmp_path: Path,
+) -> None:
+    client, _fake = _client(tmp_path)
+
+    missing = client.post(
+        "/api/agent/workbench/v2/conversations/missing/runtime/recheck",
+        json={"idempotencyKey": "recheck-1"},
+    )
+    unavailable = client.post(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/runtime/recheck",
+        json={"idempotencyKey": "unavailable"},
+    )
+
+    assert missing.status_code == 404
+    assert unavailable.status_code == 400
+    assert unavailable.json()["reasonCode"] == (
+        "workbench_v2_runtime_recheck_unavailable"
+    )
 
 
 def _client(tmp_path: Path) -> tuple[TestClient, FakeWorkbenchV2Service]:

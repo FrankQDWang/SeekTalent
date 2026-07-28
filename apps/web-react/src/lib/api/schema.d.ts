@@ -1270,6 +1270,23 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  "/api/agent/workbench/v2/conversations/{conversation_id}/runtime/recheck": {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Recheck And Continue */
+    post: operations["recheck_and_continue_api_agent_workbench_v2_conversations__conversation_id__runtime_recheck_post"];
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   "/api/workbench/events": {
     parameters: {
       query?: never;
@@ -5126,6 +5143,11 @@ export interface components {
       /** Idempotencykey */
       idempotencyKey?: string | null;
     };
+    /** WorkbenchV2RuntimeRecheckRequest */
+    WorkbenchV2RuntimeRecheckRequest: {
+      /** Idempotencykey */
+      idempotencyKey: string;
+    };
     /** WorkbenchV2RuntimeView */
     WorkbenchV2RuntimeView: {
       /**
@@ -8453,6 +8475,73 @@ export interface operations {
     requestBody: {
       content: {
         "application/json": components["schemas"]["WorkbenchV2RequirementActionRequest"];
+      };
+    };
+    responses: {
+      /** @description Successful Response */
+      200: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["WorkbenchV2ConversationView"];
+        };
+      };
+      /** @description Bad Request */
+      400: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Workbench v2 conversation not found. */
+      404: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": {
+            detail: {
+              /** @enum {string} */
+              reasonCode: "workbench_v2_conversation_not_found";
+            };
+          };
+        };
+      };
+      /** @description Conflict */
+      409: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+      /** @description Service Unavailable */
+      503: {
+        headers: {
+          [name: string]: unknown;
+        };
+        content: {
+          "application/json": components["schemas"]["ProblemDetails"];
+        };
+      };
+    };
+  };
+  recheck_and_continue_api_agent_workbench_v2_conversations__conversation_id__runtime_recheck_post: {
+    parameters: {
+      query?: never;
+      header?: never;
+      path: {
+        conversation_id: string;
+      };
+      cookie?: never;
+    };
+    requestBody: {
+      content: {
+        "application/json": components["schemas"]["WorkbenchV2RuntimeRecheckRequest"];
       };
     };
     responses: {

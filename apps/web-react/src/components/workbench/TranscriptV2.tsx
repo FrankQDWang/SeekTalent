@@ -14,6 +14,8 @@ type TranscriptV2Props = {
     | ((payload: WorkbenchV2RequirementActionRequest) => Promise<void> | void)
     | undefined;
   onRequirementSupplementTextChange?: ((text: string) => void) | undefined;
+  onRuntimeRecovery?: (() => Promise<void> | void) | undefined;
+  runtimeRecoveryPending?: boolean;
 };
 
 export function TranscriptV2({
@@ -22,6 +24,8 @@ export function TranscriptV2({
   requirementSupplementText,
   onRequirementAction,
   onRequirementSupplementTextChange,
+  onRuntimeRecovery,
+  runtimeRecoveryPending = false,
 }: TranscriptV2Props) {
   const transcriptRef = useRef<HTMLElement | null>(null);
   const shouldStickToBottomRef = useRef(true);
@@ -31,6 +35,7 @@ export function TranscriptV2({
   );
   const requirementFormRenderState =
     requirementFormRenderStateFor(orderedEvents);
+  const recoveryEventId = latestRecoveryEventId(orderedEvents);
   const latestAutoScrollEventId =
     latestAutoScrollEvent(orderedEvents)?.eventId ?? null;
 
@@ -80,8 +85,11 @@ export function TranscriptV2({
           key={event.eventId}
           onRequirementAction={onRequirementAction}
           onRequirementSupplementTextChange={onRequirementSupplementTextChange}
+          onRuntimeRecovery={onRuntimeRecovery}
+          recoveryVisible={event.eventId === recoveryEventId}
           requirementActionPending={requirementActionPending}
           requirementSupplementText={requirementSupplementText}
+          runtimeRecoveryPending={runtimeRecoveryPending}
         />
       ))}
     </section>
@@ -93,8 +101,11 @@ function TranscriptV2Event({
   requirementFormRenderState,
   onRequirementAction,
   onRequirementSupplementTextChange,
+  onRuntimeRecovery,
+  recoveryVisible,
   requirementActionPending,
   requirementSupplementText,
+  runtimeRecoveryPending,
 }: {
   event: WorkbenchV2TranscriptEvent;
   requirementFormRenderState: RequirementFormRenderState | null;
@@ -103,7 +114,10 @@ function TranscriptV2Event({
     | ((payload: WorkbenchV2RequirementActionRequest) => Promise<void> | void)
     | undefined;
   onRequirementSupplementTextChange: ((text: string) => void) | undefined;
+  onRuntimeRecovery: (() => Promise<void> | void) | undefined;
+  recoveryVisible: boolean;
   requirementSupplementText: string | undefined;
+  runtimeRecoveryPending: boolean;
 }) {
   if (
     event.type === "requirement_form" ||
@@ -154,6 +168,9 @@ function TranscriptV2Event({
       content={content}
       event={event}
       label={eventLabel(event)}
+      onRuntimeRecovery={onRuntimeRecovery}
+      recovery={recoveryVisible ? eventRecovery(event) : null}
+      runtimeRecoveryPending={runtimeRecoveryPending}
     />
   );
 }
@@ -162,10 +179,16 @@ function TranscriptV2ActivityEvent({
   content,
   event,
   label,
+  onRuntimeRecovery,
+  recovery,
+  runtimeRecoveryPending,
 }: {
   content: string;
   event: WorkbenchV2TranscriptEvent;
   label: string;
+  onRuntimeRecovery: (() => Promise<void> | void) | undefined;
+  recovery: RuntimeRecovery | null;
+  runtimeRecoveryPending: boolean;
 }) {
   return (
     <article
@@ -178,6 +201,26 @@ function TranscriptV2ActivityEvent({
       <div className="transcript-v2__event-body">
         <span>{label}</span>
         <p>{content}</p>
+        {recovery !== null ? (
+          <div className="transcript-v2__recovery">
+            <strong>{recovery.reason}</strong>
+            <p>{recovery.action}</p>
+            <button
+              disabled={
+                onRuntimeRecovery === undefined || runtimeRecoveryPending
+              }
+              onClick={() => {
+                if (onRuntimeRecovery === undefined) return;
+                void Promise.resolve()
+                  .then(onRuntimeRecovery)
+                  .catch(() => undefined);
+              }}
+              type="button"
+            >
+              {runtimeRecoveryPending ? "正在重新检查…" : recovery.actionLabel}
+            </button>
+          </div>
+        ) : null}
       </div>
     </article>
   );
@@ -187,6 +230,54 @@ type RequirementFormRenderState = {
   anchorEventId: string;
   displayEvent: WorkbenchV2TranscriptEvent;
 };
+
+type RuntimeRecovery = {
+  reason: string;
+  action: string;
+  actionLabel: string;
+};
+
+function latestRecoveryEventId(
+  orderedEvents: readonly WorkbenchV2TranscriptEvent[],
+): string | null {
+  for (let index = orderedEvents.length - 1; index >= 0; index -= 1) {
+    const event = orderedEvents[index];
+    if (event === undefined) {
+      continue;
+    }
+    if (
+      event.type === "assistant_status" &&
+      readString(event.payload, "recoveryState") === "ready" &&
+      readString(event.payload, "recoveryOutcome") === "started_new_attempt"
+    ) {
+      return null;
+    }
+    if (eventRecovery(event) !== null) {
+      return event.eventId;
+    }
+  }
+  return null;
+}
+
+function eventRecovery(
+  event: WorkbenchV2TranscriptEvent,
+): RuntimeRecovery | null {
+  if (event.type !== "runtime_progress") {
+    return null;
+  }
+  const value = event.payload["recovery"];
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return null;
+  }
+  const recovery = value as Record<string, unknown>;
+  const reason = readString(recovery, "reason");
+  const action = readString(recovery, "action");
+  const actionLabel = readString(recovery, "actionLabel");
+  if (reason === null || action === null || actionLabel === null) {
+    return null;
+  }
+  return { reason, action, actionLabel };
+}
 
 function requirementFormRenderStateFor(
   orderedEvents: readonly WorkbenchV2TranscriptEvent[],

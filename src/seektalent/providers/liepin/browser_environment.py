@@ -46,6 +46,7 @@ class BrowserBridgeEnvironmentStatus:
     action: str
     extension_dir: Path
     bridge_build_id: str | None = None
+    bridge_failure_reason: str | None = None
 
     def to_public_dict(self) -> dict[str, object]:
         return {
@@ -336,6 +337,7 @@ def _status_failure(
             "Chrome 仍在运行旧的 WTSCLI extension worker/build。",
             "请在 chrome://extensions 中点击 WTSCLI 的“重新加载”；若仍失败，请完全退出并重启 Chrome，然后重新运行环境检查。",
             extension_dir,
+            bridge_failure_reason=reason,
         )
     if component == "bridge" and reason in identity_reasons:
         return _failure(
@@ -343,6 +345,7 @@ def _status_failure(
             "正在运行的 WTSCLI 服务不是当前 SeekTalent 包内的 exact build。",
             "请只重启当前 SeekTalent 自有的 WTSCLI 服务，然后重新运行环境检查；不要停止 legacy OpenCLI。",
             extension_dir,
+            bridge_failure_reason=reason,
         )
     return _failure(
         "wtscli_daemon_stale",
@@ -359,6 +362,7 @@ def _failure(
     extension_dir: Path,
     *,
     bridge_build_id: str | None = None,
+    bridge_failure_reason: str | None = None,
 ) -> BrowserBridgeEnvironmentStatus:
     return BrowserBridgeEnvironmentStatus(
         ok=False,
@@ -368,6 +372,7 @@ def _failure(
         action=action,
         extension_dir=extension_dir,
         bridge_build_id=bridge_build_id,
+        bridge_failure_reason=bridge_failure_reason,
     )
 
 

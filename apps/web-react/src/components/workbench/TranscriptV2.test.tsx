@@ -3,6 +3,7 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -327,6 +328,126 @@ describe("TranscriptV2", () => {
 
     expect(screen.queryByText("运行结果")).not.toBeInTheDocument();
     expect(screen.queryByText("当前还没有运行结果。")).not.toBeInTheDocument();
+  });
+
+  it("keeps generic runtime status and renders the latest actionable recovery", async () => {
+    expect.hasAssertions();
+    const onRuntimeRecovery = vi.fn();
+
+    render(
+      <TranscriptV2
+        events={[
+          transcriptEvent({
+            eventId: "event_recovery",
+            step: 1,
+            type: "runtime_progress",
+            role: "runtime",
+            status: "failed",
+            payload: {
+              summary: "第 1 轮猎聘检索受阻：猎聘浏览器扩展未连接。",
+              recovery: {
+                reason:
+                  "Chrome 中的 WTSCLI 扩展未连接；猎聘登录状态尚无法验证。",
+                action:
+                  "请在 Chrome 的 chrome://extensions 中启用或重新加载 WTSCLI 扩展。",
+                actionLabel: "重新检查并继续",
+              },
+            },
+          }),
+        ]}
+        onRuntimeRecovery={onRuntimeRecovery}
+      />,
+    );
+
+    expect(
+      screen.getByText("第 1 轮猎聘检索受阻：猎聘浏览器扩展未连接。"),
+    ).toBeVisible();
+    expect(screen.getByText(/登录状态尚无法验证/)).toBeVisible();
+    expect(screen.getByText(/chrome:\/\/extensions/)).toBeVisible();
+    fireEvent.click(screen.getByRole("button", { name: "重新检查并继续" }));
+    await waitFor(() => {
+      expect(onRuntimeRecovery).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("hides stale recovery only after a new attempt actually starts", () => {
+    expect.hasAssertions();
+    const recovery = transcriptEvent({
+      eventId: "event_recovery",
+      step: 1,
+      type: "runtime_progress",
+      role: "runtime",
+      status: "failed",
+      payload: {
+        summary: "猎聘页面当前不可操作。",
+        recovery: {
+          reason: "猎聘页面当前不可操作，尚无法进入可用的搜索页。",
+          action: "请切换到 Chrome 查看并处理当前猎聘页面。",
+          actionLabel: "重新检查并继续",
+        },
+      },
+    });
+    const { rerender } = render(
+      <TranscriptV2
+        events={[recovery]}
+        onRuntimeRecovery={vi.fn()}
+        runtimeRecoveryPending
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "正在重新检查…" }),
+    ).toBeDisabled();
+
+    rerender(
+      <TranscriptV2
+        events={[
+          recovery,
+          transcriptEvent({
+            eventId: "event_ready",
+            step: 2,
+            type: "assistant_status",
+            role: "assistant",
+            payload: {
+              summary: "环境检查已通过，已从当前任务继续检索。",
+              recoveryState: "ready",
+            },
+          }),
+        ]}
+        onRuntimeRecovery={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.getByRole("button", { name: "重新检查并继续" }),
+    ).toBeVisible();
+
+    rerender(
+      <TranscriptV2
+        events={[
+          recovery,
+          transcriptEvent({
+            eventId: "event_started",
+            step: 3,
+            type: "assistant_status",
+            role: "assistant",
+            payload: {
+              summary: "环境检查已通过，已从当前任务继续检索。",
+              recoveryState: "ready",
+              recoveryOutcome: "started_new_attempt",
+            },
+          }),
+        ]}
+        onRuntimeRecovery={vi.fn()}
+      />,
+    );
+
+    expect(
+      screen.queryByRole("button", { name: "重新检查并继续" }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.getByText("环境检查已通过，已从当前任务继续检索。"),
+    ).toBeVisible();
   });
 
   it("keeps following the newest transcript event while the user is at the bottom", () => {

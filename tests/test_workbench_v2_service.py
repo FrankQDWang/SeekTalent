@@ -24,6 +24,7 @@ from seektalent_workbench_v2.models import (
     WorkbenchV2TranscriptEvent,
     WorkbenchV2TranscriptEventInput,
 )
+from seektalent_workbench_v2.runtime_service import WorkbenchV2RuntimeRecoveryResult
 from seektalent_workbench_v2.service import WorkbenchV2Service
 from seektalent_workbench_v2.store import WorkbenchV2Store
 
@@ -110,6 +111,9 @@ class FakeRuntimeService:
         self.next_round_requirement_results: list[dict[str, object]] = []
         self.amend_requirement_calls: list[dict[str, object]] = []
         self.amend_requirement_results: list[FakeRequirementExtraction] = []
+        self.recheck_calls: list[dict[str, str]] = []
+        self.recheck_errors: list[Exception] = []
+        self.recheck_results: list[WorkbenchV2RuntimeRecoveryResult] = []
 
     def extract_requirement_bundle(
         self,
@@ -285,6 +289,40 @@ class FakeRuntimeService:
             "reviewRequired": False,
         }
 
+    async def recheck_liepin_and_continue(
+        self,
+        runtime_run_id: str,
+        *,
+        idempotency_key: str,
+    ) -> WorkbenchV2RuntimeRecoveryResult:
+        self.recheck_calls.append(
+            {
+                "runtime_run_id": runtime_run_id,
+                "idempotency_key": idempotency_key,
+            }
+        )
+        if self.recheck_errors:
+            raise self.recheck_errors.pop(0)
+        if self.recheck_results:
+            return self.recheck_results.pop(0)
+        return WorkbenchV2RuntimeRecoveryResult(
+            outcome="started_new_attempt",
+            runtime_run=RuntimeRunRecord(
+                runtime_run_id="rtrun_recovered",
+                run_intent_id="runtime-recheck",
+                start_idempotency_key=idempotency_key,
+                run_kind="rerun",
+                agent_conversation_id="agentv2_recovery",
+                workbench_session_id=None,
+                approved_requirement_revision_id="reqapproved_1",
+                status="queued",
+                current_stage="queued",
+                source_ids=["liepin"],
+                created_at="2026-06-25T01:02:03.000004+00:00",
+                updated_at="2026-06-25T01:02:03.000004+00:00",
+            ),
+        )
+
     def _runtime_run(self, conversation_id: str, *, idempotency_key: str | None) -> RuntimeRunRecord:
         if self.start_errors:
             raise self.start_errors.pop(0)
@@ -350,6 +388,245 @@ class AsyncioRunRequirementRuntime(FakeRuntimeService):
 
 async def _empty_async_step() -> None:
     return None
+
+
+def test_runtime_recheck_continues_same_conversation_with_confirmed_context(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    conversation = store.create_conversation(
+        first_user_text="招聘 AI 平台工程师",
+        idempotency_key="create-recovery",
+    )
+    store.set_runtime(
+        conversation.id,
+        runtime_run_id="rtrun_1",
+        runtime_state="completed",
+    )
+    store.append_event(
+        conversation.id,
+        WorkbenchV2TranscriptEventInput(
+            type="runtime_progress",
+            role="runtime",
+            payload={
+                "runtimeRunId": "rtrun_1",
+                "status": "blocked",
+                "sourceKind": "liepin",
+                "safeReasonCode": "source_browser_extension_disconnected",
+                "failureCauseCode": "liepin_opencli_extension_disconnected",
+            },
+        ),
+    )
+    runtime = FakeRuntimeService()
+    service = WorkbenchV2Service(
+        store=store,
+        agent_loop=FakeAgentLoop(),
+        runtime_service=runtime,
+    )
+
+    view = asyncio.run(
+        service.recheck_and_continue(
+            conversation.id,
+            idempotency_key="recheck-1",
+        )
+    )
+    replay = asyncio.run(
+        service.recheck_and_continue(
+            conversation.id,
+            idempotency_key="recheck-1",
+        )
+    )
+
+    assert view.conversation.conversationId == conversation.id
+    assert view.conversation.runtimeRunId == "rtrun_recovered"
+    assert view.conversation.runtimeState == "queued"
+    assert replay == view
+    assert runtime.recheck_calls == [
+        {
+            "runtime_run_id": "rtrun_1",
+            "idempotency_key": "recheck-1",
+        }
+    ]
+    assert any(
+        event.type == "assistant_status"
+        and event.payload.get("recoveryState") == "ready"
+        and event.payload.get("recoveryOutcome") == "started_new_attempt"
+        for event in view.transcriptEvents
+    )
+
+
+def test_runtime_recheck_keeps_recovery_visible_while_original_run_is_active(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    conversation = store.create_conversation(
+        first_user_text="招聘 AI 平台工程师",
+        idempotency_key="create-recovery",
+    )
+    store.set_runtime(
+        conversation.id,
+        runtime_run_id="rtrun_1",
+        runtime_state="running",
+    )
+    store.append_event(
+        conversation.id,
+        WorkbenchV2TranscriptEventInput(
+            type="runtime_progress",
+            role="runtime",
+            payload={
+                "runtimeRunId": "rtrun_1",
+                "status": "blocked",
+                "sourceKind": "liepin",
+                "safeReasonCode": "source_browser_extension_disconnected",
+                "failureCauseCode": "liepin_opencli_extension_disconnected",
+                "recovery": {
+                    "reason": "Chrome 中的 WTSCLI 扩展未连接。",
+                    "action": "请启用或重新加载 WTSCLI 扩展。",
+                    "actionLabel": "重新检查并继续",
+                },
+            },
+        ),
+    )
+    runtime = FakeRuntimeService()
+    runtime.recheck_results.append(
+        WorkbenchV2RuntimeRecoveryResult(
+            outcome="run_still_active",
+            runtime_run=RuntimeRunRecord(
+                runtime_run_id="rtrun_1",
+                run_intent_id="primary",
+                start_idempotency_key="primary",
+                run_kind="primary",
+                agent_conversation_id=conversation.id,
+                workbench_session_id=None,
+                approved_requirement_revision_id="reqapproved_1",
+                status="running",
+                current_stage="source_lanes",
+                source_ids=["liepin"],
+                created_at="2026-06-25T01:02:03.000004+00:00",
+                updated_at="2026-06-25T01:02:03.000004+00:00",
+            ),
+        )
+    )
+    service = WorkbenchV2Service(
+        store=store,
+        agent_loop=FakeAgentLoop(),
+        runtime_service=runtime,
+    )
+
+    active_view = asyncio.run(
+        service.recheck_and_continue(
+            conversation.id,
+            idempotency_key="recheck-active",
+        )
+    )
+
+    assert active_view.conversation.runtimeRunId == "rtrun_1"
+    assert active_view.conversation.runtimeState == "running"
+    assert any(
+        event.type == "assistant_status"
+        and event.payload.get("recoveryState") == "waiting_for_terminal"
+        and event.payload.get("recoveryOutcome") == "run_still_active"
+        and event.payload.get("summary") == "当前尝试正在收尾，请稍后重新检查。"
+        for event in active_view.transcriptEvents
+    )
+    assert not any(event.payload.get("recoveryState") == "ready" for event in active_view.transcriptEvents)
+    assert any(
+        event.type == "runtime_progress" and isinstance(event.payload.get("recovery"), dict)
+        for event in active_view.transcriptEvents
+    )
+
+    recovered_view = asyncio.run(
+        service.recheck_and_continue(
+            conversation.id,
+            idempotency_key="recheck-after-terminal",
+        )
+    )
+
+    assert recovered_view.conversation.runtimeRunId == "rtrun_recovered"
+    assert runtime.recheck_calls == [
+        {
+            "runtime_run_id": "rtrun_1",
+            "idempotency_key": "recheck-active",
+        },
+        {
+            "runtime_run_id": "rtrun_1",
+            "idempotency_key": "recheck-after-terminal",
+        },
+    ]
+
+
+def test_runtime_recheck_failure_refreshes_specific_reason_without_starting_run(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    conversation = store.create_conversation(
+        first_user_text="招聘 AI 平台工程师",
+        idempotency_key="create-recovery",
+    )
+    store.set_runtime(
+        conversation.id,
+        runtime_run_id="rtrun_1",
+        runtime_state="completed",
+    )
+    store.append_event(
+        conversation.id,
+        WorkbenchV2TranscriptEventInput(
+            type="runtime_progress",
+            role="runtime",
+            payload={
+                "runtimeRunId": "rtrun_1",
+                "status": "blocked",
+                "sourceKind": "liepin",
+                "failureCauseCode": "liepin_opencli_extension_disconnected",
+            },
+        ),
+    )
+    runtime = FakeRuntimeService()
+    runtime.recheck_results.append(
+        WorkbenchV2RuntimeRecoveryResult(
+            outcome="readiness_blocked",
+            runtime_run=RuntimeRunRecord(
+                runtime_run_id="rtrun_1",
+                run_intent_id="primary",
+                start_idempotency_key="primary",
+                run_kind="primary",
+                agent_conversation_id=conversation.id,
+                workbench_session_id=None,
+                approved_requirement_revision_id="reqapproved_1",
+                status="completed",
+                current_stage="completed",
+                source_ids=["liepin"],
+                created_at="2026-06-25T01:02:03.000004+00:00",
+                updated_at="2026-06-25T01:02:03.000004+00:00",
+                completed_at="2026-06-25T01:02:03.000004+00:00",
+            ),
+            failure_cause_code="liepin_opencli_login_required",
+        )
+    )
+    service = WorkbenchV2Service(
+        store=store,
+        agent_loop=FakeAgentLoop(),
+        runtime_service=runtime,
+    )
+
+    view = asyncio.run(
+        service.recheck_and_continue(
+            conversation.id,
+            idempotency_key="recheck-login",
+        )
+    )
+
+    assert view.conversation.runtimeRunId == "rtrun_1"
+    latest = next(
+        event
+        for event in reversed(view.transcriptEvents)
+        if event.type == "runtime_progress" and event.payload.get("failureCauseCode") == "liepin_opencli_login_required"
+    )
+    assert latest.type == "runtime_progress"
+    assert latest.payload["summary"] == ("本轮猎聘检索受阻：猎聘账号需要登录后才能继续检索。")
+    assert latest.payload["failureCauseCode"] == ("liepin_opencli_login_required")
+    assert latest.payload["recovery"]["actionLabel"] == "重新检查并继续"
+    assert not any(event.payload.get("recoveryState") == "ready" for event in view.transcriptEvents)
 
 
 def test_service_does_not_import_legacy_workbench_modules() -> None:
@@ -1164,9 +1441,7 @@ def test_v2_blocked_liepin_source_result_reports_filter_failure(tmp_path: Path) 
     view = service.get_conversation(conversation_id)
     progress_events = [event for event in view.transcriptEvents if event.type == "runtime_progress"]
 
-    assert (
-        progress_events[-1].payload["summary"] == "第 1 轮猎聘检索受阻：猎聘筛选条件未成功应用，请刷新页面后重试。"
-    )
+    assert progress_events[-1].payload["summary"] == "第 1 轮猎聘检索受阻：猎聘筛选条件未成功应用，请刷新页面后重试。"
 
 
 def test_v2_blocked_liepin_source_result_uses_canonical_summary_instead_of_raw_summary(tmp_path: Path) -> None:
@@ -1190,8 +1465,7 @@ def test_v2_blocked_liepin_source_result_uses_canonical_summary_instead_of_raw_s
     progress_events = [event for event in view.transcriptEvents if event.type == "runtime_progress"]
 
     assert progress_events[-1].payload["summary"] == (
-        "第 1 轮猎聘检索受阻："
-        "猎聘检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。"
+        "第 1 轮猎聘检索受阻：猎聘检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。"
     )
 
 
@@ -3411,6 +3685,88 @@ def test_v2_runtime_display_drops_non_string_query_group_scalars(field: str, bad
 
 
 @pytest.mark.parametrize(
+    ("failure_cause", "safe_reason", "reason_fragment", "action_fragment"),
+    [
+        (
+            "liepin_opencli_daemon_not_running",
+            "source_browser_backend_unavailable",
+            "runtime/daemon",
+            "WTSCLI 服务",
+        ),
+        (
+            "liepin_opencli_extension_disconnected",
+            "source_browser_extension_disconnected",
+            "登录状态尚无法验证",
+            "chrome://extensions",
+        ),
+        (
+            "liepin_opencli_bridge_protocol_mismatch",
+            "source_browser_backend_incompatible",
+            "exact build 或协议不匹配",
+            "重新加载 WTSCLI 扩展",
+        ),
+        (
+            "liepin_host_tab_missing",
+            "source_browser_host_required",
+            "没有可用的猎聘 host tab",
+            "任意 https://h.liepin.com/",
+        ),
+        (
+            "liepin_opencli_login_required",
+            "source_login_required",
+            "尚未登录",
+            "完成猎聘登录",
+        ),
+        (
+            "liepin_opencli_identity_intercept",
+            "source_identity_confirmation_required",
+            "招聘身份或企业",
+            "完成招聘身份或企业选择",
+        ),
+        (
+            "liepin_opencli_risk_page",
+            "source_risk_or_verification_required",
+            "验证码、安全验证或风险提示",
+            "人工完成页面验证",
+        ),
+        (
+            "liepin_opencli_search_not_ready",
+            "source_browser_page_not_operable",
+            "当前不可操作",
+            "查看并处理当前猎聘页面",
+        ),
+    ],
+)
+def test_v2_runtime_display_keeps_generic_status_and_specific_recovery(
+    failure_cause: str,
+    safe_reason: str,
+    reason_fragment: str,
+    action_fragment: str,
+) -> None:
+    from seektalent_workbench_v2.runtime_display import (
+        normalize_runtime_progress_payload,
+    )
+
+    payload = normalize_runtime_progress_payload(
+        {
+            "runtimeRunId": "rtrun_1",
+            "status": "blocked",
+            "stage": "source_result",
+            "state": "completed",
+            "sourceKind": "liepin",
+            "safeReasonCode": safe_reason,
+            "failureCauseCode": failure_cause,
+        }
+    )
+
+    assert safe_reason not in payload["summary"]
+    assert payload["failureCauseCode"] == failure_cause
+    assert reason_fragment in payload["recovery"]["reason"]
+    assert action_fragment in payload["recovery"]["action"]
+    assert payload["recovery"]["actionLabel"] == "重新检查并继续"
+
+
+@pytest.mark.parametrize(
     "field",
     ["queryInstanceId", "termGroupKey", "queryRole", "laneType", "keywordQuery"],
 )
@@ -3772,8 +4128,7 @@ def test_v2_runtime_display_uses_canonical_progress_summary_for_safe_looking_run
     )
 
     assert payload["summary"] == (
-        "第 1 轮猎聘检索受阻："
-        "猎聘检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。"
+        "第 1 轮猎聘检索受阻：猎聘检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。"
     )
     assert raw_summary not in json.dumps(payload, ensure_ascii=False)
 
@@ -3833,8 +4188,7 @@ def test_v2_runtime_display_uses_canonical_reason_for_search_failure() -> None:
     )
 
     assert payload["summary"] == (
-        "第 1 轮检索失败："
-        "来源检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。"
+        "第 1 轮检索失败：来源检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。"
     )
     assert raw_summary not in json.dumps(payload, ensure_ascii=False)
 
@@ -3874,10 +4228,7 @@ def test_v2_runtime_display_preserves_safe_top_level_runtime_values() -> None:
         "runtimeEventType": "runtime_round_source_result",
         "status": "blocked",
         "stage": "source_result",
-        "summary": (
-            "第 1 轮来源检索受阻："
-            "来源检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。"
-        ),
+        "summary": ("第 1 轮来源检索受阻：来源检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。"),
         "state": "running",
         "roundNo": 1,
         "sourceId": "internal_referrals",

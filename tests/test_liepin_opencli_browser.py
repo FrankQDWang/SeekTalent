@@ -2083,7 +2083,7 @@ def test_state_classifier_blocks_login_and_risk_pages_before_next_action() -> No
         "liepin_opencli_identity_intercept"
     )
     assert classify_liepin_state(url="https://www.liepin.com/resume/detail/123", text="候选人详情") == (
-        "liepin_opencli_unknown_modal"
+        "liepin_opencli_search_not_ready"
     )
 
 
@@ -2184,7 +2184,7 @@ def test_state_classifies_against_url_reported_by_state_output() -> None:
     result = _runner(commands).state()
 
     assert result.ok is False
-    assert result.safe_reason_code == "liepin_opencli_unknown_modal"
+    assert result.safe_reason_code == "liepin_opencli_search_not_ready"
     assert commands.calls == [
         ("opencli", "browser", "seektalent-liepin", "get", "url"),
         ("opencli", "browser", "seektalent-liepin", "state"),
@@ -2202,7 +2202,7 @@ def test_state_blocks_forbidden_url_after_reading_page_text() -> None:
     result = _runner(commands).state()
 
     assert result.ok is False
-    assert result.safe_reason_code == "liepin_opencli_unknown_modal"
+    assert result.safe_reason_code == "liepin_opencli_search_not_ready"
     assert result.to_tool_payload()["observation"] == {
         "text": "raw detail resume text",
         "chars": len("raw detail resume text"),
@@ -4816,7 +4816,7 @@ def test_generic_click_still_rejects_liepin_detail_targets() -> None:
 def test_card_state_classification_still_rejects_detail_url() -> None:
     assert (
         classify_liepin_state(url="https://h.liepin.com/resume/detail?id=1", text="完整简历")
-        == "liepin_opencli_unknown_modal"
+        == "liepin_opencli_search_not_ready"
     )
 
 

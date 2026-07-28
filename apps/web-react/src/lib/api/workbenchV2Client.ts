@@ -11,6 +11,7 @@ import {
   type WorkbenchV2ConversationView,
   type WorkbenchV2MessageRequest,
   type WorkbenchV2RequirementActionRequest,
+  type WorkbenchV2RuntimeRecheckRequest,
 } from "./workbenchV2Types";
 
 const WORKBENCH_V2_CONVERSATIONS_PATH = "/api/agent/workbench/v2/conversations";
@@ -115,8 +116,23 @@ export async function applyWorkbenchV2RequirementAction(
   );
 }
 
+export async function recheckWorkbenchV2Runtime(
+  conversationId: string,
+  payload: WorkbenchV2RuntimeRecheckRequest,
+): Promise<WorkbenchV2ConversationView> {
+  return normalizeWorkbenchV2Conversation(
+    await requestJson<WorkbenchV2ConversationView>(
+      `${WORKBENCH_V2_CONVERSATIONS_PATH}/${encodeURIComponent(conversationId)}/runtime/recheck`,
+      postJsonInit(payload),
+    ),
+  );
+}
+
 function postJsonInit(
-  payload: WorkbenchV2MessageRequest | WorkbenchV2RequirementActionRequest,
+  payload:
+    | WorkbenchV2MessageRequest
+    | WorkbenchV2RequirementActionRequest
+    | WorkbenchV2RuntimeRecheckRequest,
 ): RequestInit {
   return {
     method: "POST",

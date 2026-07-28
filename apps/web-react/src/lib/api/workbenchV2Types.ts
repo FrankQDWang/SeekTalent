@@ -105,6 +105,10 @@ export type WorkbenchV2RequirementActionRequest = {
   idempotencyKey?: string | null;
 };
 
+export type WorkbenchV2RuntimeRecheckRequest = {
+  idempotencyKey: string;
+};
+
 type GeneratedWorkbenchV2StrategyGraph = Omit<
   AgentWorkbenchStrategyGraph,
   "edges" | "nodes"

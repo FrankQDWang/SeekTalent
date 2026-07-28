@@ -2360,8 +2360,13 @@ def test_opencli_configuration_failures_have_one_canonical_public_problem(reason
         "liepin_opencli_search_not_ready",
     ],
 )
-def test_opencli_search_readiness_reasons_have_timeout_public_problem(reason_code: str) -> None:
-    assert LIEPIN_FAILURE_POLICIES[reason_code].public_problem_code == "source_browser_timeout"
+def test_opencli_search_readiness_reasons_have_conservative_public_problem(reason_code: str) -> None:
+    expected = (
+        "source_browser_page_not_operable"
+        if reason_code == "liepin_opencli_search_not_ready"
+        else "source_browser_timeout"
+    )
+    assert LIEPIN_FAILURE_POLICIES[reason_code].public_problem_code == expected
 
 
 def test_opencli_results_readiness_has_timeout_public_problem() -> None:

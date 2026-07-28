@@ -33,6 +33,7 @@ WORKBENCH_V2_BAD_REQUEST_REASON_CODES = {
     "workbench_v2_requirement_item_not_found",
     "workbench_v2_requirement_sheet_required",
     "workbench_v2_runtime_input_required",
+    "workbench_v2_runtime_recheck_unavailable",
 }
 WORKBENCH_V2_PROBLEM_RESPONSES: dict[int | str, dict[str, Any]] = {
     400: {"model": ProblemDetails},
@@ -106,12 +107,23 @@ class WorkbenchV2RequirementActionRequest(RequestModel):
         return self
 
 
+class WorkbenchV2RuntimeRecheckRequest(RequestModel):
+    idempotencyKey: str = Field(min_length=1, max_length=MAX_IDEMPOTENCY_KEY_CHARS)
+
+    @field_validator("idempotencyKey", mode="before")
+    @classmethod
+    def trim_idempotency_key(cls, value: object) -> object:
+        return value.strip() if isinstance(value, str) else value
+
+
 class WorkbenchV2RouteService(Protocol):
     def list_conversations(self) -> WorkbenchV2ConversationListView | dict[str, object]: ...
 
     def get_conversation(self, conversation_id: str) -> WorkbenchV2ConversationView | dict[str, object]: ...
 
-    def get_candidate_detail(self, conversation_id: str, candidate_id: str) -> WorkbenchV2CandidateDetailView | dict[str, object]: ...
+    def get_candidate_detail(
+        self, conversation_id: str, candidate_id: str
+    ) -> WorkbenchV2CandidateDetailView | dict[str, object]: ...
 
     def list_events(
         self,
@@ -143,6 +155,13 @@ class WorkbenchV2RouteService(Protocol):
         selected: bool | None = None,
         text: str | None = None,
         idempotency_key: str | None = None,
+    ) -> WorkbenchV2ConversationView | dict[str, object]: ...
+
+    async def recheck_and_continue(
+        self,
+        conversation_id: str,
+        *,
+        idempotency_key: str,
     ) -> WorkbenchV2ConversationView | dict[str, object]: ...
 
 
@@ -258,6 +277,27 @@ async def apply_requirement_action(
             item_id=payload.itemId,
             selected=payload.selected,
             text=payload.text,
+            idempotency_key=payload.idempotencyKey,
+        )
+    except KeyError as exc:
+        raise _not_found() from exc
+    except ValueError as exc:
+        _raise_known_domain_error(exc, request)
+
+
+@router.post(
+    "/conversations/{conversation_id}/runtime/recheck",
+    response_model=WorkbenchV2ConversationView,
+    responses=WORKBENCH_V2_RESPONSES_WITH_NOT_FOUND,
+)
+async def recheck_and_continue(
+    conversation_id: str,
+    payload: WorkbenchV2RuntimeRecheckRequest,
+    request: Request,
+) -> WorkbenchV2ConversationView | dict[str, object]:
+    try:
+        return await _service(request).recheck_and_continue(
+            conversation_id,
             idempotency_key=payload.idempotencyKey,
         )
     except KeyError as exc:

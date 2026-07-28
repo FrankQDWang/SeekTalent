@@ -16,7 +16,7 @@ The current product shape is local-first:
 - DB-first local control plane for conversation turns, workflow runs, public progress, checkpoints, candidate truth, and recruiter Workbench projections
 - Bounded artifact modes: production keeps product state in SQLite; development can emit compact diagnostics; `debug_full_local` is explicit and short-lived
 - Explicit text-LLM configuration using `SEEKTALENT_TEXT_LLM_*` plus bare `*_MODEL_ID` values
-- Real Liepin integration through the local OpenCLI browser bridge
+- Real Liepin integration through the local WTSCLI browser bridge
 
 ## Quick Start
 
@@ -24,7 +24,7 @@ The current product shape is local-first:
 
 - Python `3.12+`
 - one supported LLM provider credential
-- OpenCLI Chrome extension installed and connected
+- WTSCLI Chrome extension installed and connected
 - Liepin already logged in in the local browser profile
 
 ### Install as a CLI
@@ -106,7 +106,7 @@ Installed PyPI users start the local Workbench with the packaged frontend:
 seektalent workbench
 ```
 
-The command starts the backend and serves the built React Workbench from the same loopback origin. It defaults the Workbench to Liepin through OpenCLI in the user's local browser. No extra SeekTalent env configuration is required beyond the LLM API key. SeekTalent downloads and pins its managed Node/OpenCLI runtime under `~/.seektalent/opencli-runtime` on first use when needed. The user still installs and connects the OpenCLI Chrome plugin in their own Chrome profile, and Liepin must already be logged in. If OpenCLI bootstrap, daemon, extension, or Liepin login checks fail, startup exits before launching the server and prints a `reason_code=...` diagnostic. The packaged frontend does not require pnpm, Vite, Node, OpenCLI CLI, or a repository checkout on the user's machine.
+The command starts the backend and serves the built React Workbench from the same loopback origin. Starting the Workbench, normal conversation, requirement extraction, requirement editing, and requirement confirmation do not depend on browser readiness. After requirements are confirmed, immediately before a real Liepin source starts, SeekTalent checks the paired WTSCLI runtime, Chrome extension, any `https://h.liepin.com/*` host tab, and the current Liepin session. If the source cannot start, the Workbench keeps the normal source status, adds the verified reason and one action, and offers **重新检查并继续** from the same task after the user fixes it. The Workbench may be open in any browser; the real WTSCLI and Liepin session must be ready in Chrome. The packaged frontend does not require pnpm, Vite, Node, a WTSCLI CLI, or a repository checkout on the user's machine.
 
 For source checkout development, use the repo-local OpenCLI/React launcher:
 

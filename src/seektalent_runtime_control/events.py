@@ -142,7 +142,7 @@ def _normalize_internal_progress_event(
 
 
 def _runtime_public_event_payload(event: Mapping[str, object], *, runtime_run_id: str) -> dict[str, object]:
-    return {
+    payload = {
         "schemaVersion": PUBLIC_RUNTIME_EVENT_SCHEMA_VERSION,
         "runtimeRunId": runtime_run_id,
         "eventId": _runtime_public_event_id(event, runtime_run_id=runtime_run_id),
@@ -156,6 +156,10 @@ def _runtime_public_event_payload(event: Mapping[str, object], *, runtime_run_id
         "safeReasonCode": event["safeReasonCode"],
         "createdAt": event["createdAt"],
     }
+    failure_cause_code = event.get("failureCauseCode")
+    if isinstance(failure_cause_code, str):
+        payload["failureCauseCode"] = failure_cause_code
+    return payload
 
 
 def _public_runtime_event_summary(event: Mapping[str, object]) -> str:

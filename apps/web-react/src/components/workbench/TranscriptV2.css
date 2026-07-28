@@ -131,6 +131,40 @@
   line-height: 1.5;
 }
 
+.transcript-v2__recovery {
+  align-items: start;
+  background: rgb(255 248 235);
+  border: 1px solid rgb(225 185 110);
+  border-radius: 10px;
+  display: grid;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 12px;
+}
+
+.transcript-v2__recovery strong {
+  color: var(--st-ink);
+  font-size: 14px;
+}
+
+.transcript-v2__recovery button {
+  background: var(--st-action);
+  border: 0;
+  border-radius: 8px;
+  color: white;
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 720;
+  justify-self: start;
+  padding: 8px 12px;
+}
+
+.transcript-v2__recovery button:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
 .transcript-v2__event[data-type="error"] p,
 .transcript-v2__event[data-status="failed"] p {
   color: var(--st-danger);

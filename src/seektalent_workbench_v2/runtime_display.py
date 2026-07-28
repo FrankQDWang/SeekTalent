@@ -4,6 +4,8 @@ from collections.abc import Mapping, Sequence
 
 from seektalent.public_payload_safety import public_source_identifier, public_text
 from seektalent.sources.liepin.reason_codes import (
+    liepin_recovery_guidance,
+    public_liepin_failure_cause_code,
     public_source_problem_code,
     public_source_problem_message,
 )
@@ -167,6 +169,20 @@ def normalize_runtime_progress_payload(payload: Mapping[str, object]) -> dict[st
         normalized["safeReasonCode"] = None
     elif (safe_reason_code := safe_runtime_progress_reason_code(payload.get("safeReasonCode"))) is not None:
         normalized["safeReasonCode"] = safe_reason_code
+    failure_cause_code = public_liepin_failure_cause_code(payload.get("failureCauseCode"))
+    if (
+        failure_cause_code is not None
+        and normalized.get("sourceKind") == "liepin"
+        and normalized.get("status") in {"blocked", "failed"}
+    ):
+        guidance = liepin_recovery_guidance(failure_cause_code)
+        if guidance is not None:
+            normalized["failureCauseCode"] = guidance.failure_cause_code
+            normalized["recovery"] = {
+                "reason": guidance.reason,
+                "action": guidance.action,
+                "actionLabel": "重新检查并继续",
+            }
     details = safe_runtime_progress_details(payload.get("details"), stage=normalized.get("stage"))
     if details:
         normalized["details"] = details

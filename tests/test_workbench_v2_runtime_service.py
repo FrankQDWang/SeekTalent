@@ -1,14 +1,18 @@
 from __future__ import annotations
 
+import asyncio
 import inspect
 import json
 import sqlite3
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Barrier, Lock
 from types import SimpleNamespace
 
 import pytest
 
 from seektalent.models import HardConstraintSlots, QueryTermCandidate, RequirementSheet
+from seektalent.providers.liepin.client import LiepinWorkerModeError
 from seektalent.source_references import SourceReference
 from seektalent_runtime_control.models import (
     RuntimeControlCandidateEvidence,
@@ -646,15 +650,9 @@ def test_runtime_service_candidate_detail_uses_only_canonical_resume_evidence() 
     assert detail["activeStatus"] == "Canonical Active"
     assert detail["jobStatus"] == "Canonical Job State"
     assert "sourceUrl" not in detail
-    assert detail["workExperience"] == [
-        {"title": "Canonical Work Title", "company": "Canonical Work Company"}
-    ]
-    assert detail["projectExperience"] == [
-        {"name": "Canonical Project", "role": "Canonical Project Role"}
-    ]
-    assert detail["educationExperience"] == [
-        {"school": "Canonical School", "degree": "Canonical Degree"}
-    ]
+    assert detail["workExperience"] == [{"title": "Canonical Work Title", "company": "Canonical Work Company"}]
+    assert detail["projectExperience"] == [{"name": "Canonical Project", "role": "Canonical Project Role"}]
+    assert detail["educationExperience"] == [{"school": "Canonical School", "degree": "Canonical Degree"}]
     assert detail["jobIntention"] == {
         "expectedRole": "Canonical Role",
         "expectedIndustry": "Canonical Industry",
@@ -867,6 +865,292 @@ def test_runtime_service_start_run_replays_explicit_idempotency_key(tmp_path: Pa
     assert first.runtime_run_id == "rtrun_1"
     assert second.runtime_run_id == "rtrun_1"
     assert _runtime_run_count(store) == 1
+
+
+def test_runtime_service_rechecks_then_reruns_same_conversation_and_requirements(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    runtime_run_ids = iter(["rtrun_1", "rtrun_2", "rtrun_3"])
+    readiness_calls: list[str] = []
+
+    async def readiness_probe() -> None:
+        readiness_calls.append("checked")
+
+    service = WorkbenchV2RuntimeService(
+        store=store,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        runtime_run_id_factory=lambda: next(runtime_run_ids),
+        liepin_readiness_probe=readiness_probe,
+        now=lambda: NOW,
+    )
+    first = service.start_run(
+        "agentv2_recovery",
+        WorkbenchV2RuntimeInput(
+            jobTitle="AI 平台工程师",
+            jd="需要 Python 和 Agent 工作流经验",
+            notes="杭州",
+        ),
+        _requirement_sheet(),
+    )
+    store.update_run_status(
+        runtime_run_id=first.runtime_run_id,
+        status="starting",
+        current_stage="startup",
+        updated_at=NOW,
+    )
+    store.update_run_status(
+        runtime_run_id=first.runtime_run_id,
+        status="running",
+        current_stage="source_lanes",
+        updated_at=NOW,
+    )
+    store.update_run_status(
+        runtime_run_id=first.runtime_run_id,
+        status="completed",
+        current_stage="completed",
+        completed_at=NOW,
+        updated_at=NOW,
+    )
+
+    recovered_result = asyncio.run(
+        service.recheck_liepin_and_continue(
+            first.runtime_run_id,
+            idempotency_key="recheck-1",
+        )
+    )
+    replay_result = asyncio.run(
+        service.recheck_liepin_and_continue(
+            first.runtime_run_id,
+            idempotency_key="recheck-1",
+        )
+    )
+    recovered = recovered_result.runtime_run
+    replay = replay_result.runtime_run
+
+    assert recovered_result.outcome == "started_new_attempt"
+    assert replay_result.outcome == "started_new_attempt"
+    assert recovered.runtime_run_id == "rtrun_2"
+    assert replay.runtime_run_id == recovered.runtime_run_id
+    assert recovered.run_kind == "rerun"
+    assert recovered.agent_conversation_id == "agentv2_recovery"
+    assert recovered.approved_requirement_revision_id == (first.approved_requirement_revision_id)
+    assert recovered.source_ids == ["liepin"]
+    recovered_snapshot = store.get_snapshot(runtime_run_id=recovered.runtime_run_id)
+    assert recovered_snapshot is not None
+    assert recovered_snapshot.snapshot["workflowInput"]["jdText"] == ("需要 Python 和 Agent 工作流经验")
+    assert readiness_calls == ["checked", "checked"]
+    assert _runtime_run_count(store) == 2
+
+
+def test_runtime_service_does_not_probe_or_rerun_while_original_run_is_active(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    runtime_run_ids = iter(["rtrun_1", "rtrun_2", "rtrun_3"])
+    readiness_calls: list[str] = []
+
+    async def readiness_probe() -> None:
+        readiness_calls.append("checked")
+
+    service = WorkbenchV2RuntimeService(
+        store=store,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        runtime_run_id_factory=lambda: next(runtime_run_ids),
+        liepin_readiness_probe=readiness_probe,
+        now=lambda: NOW,
+    )
+    run = service.start_run(
+        "agentv2_recovery",
+        WorkbenchV2RuntimeInput(
+            jobTitle="AI 平台工程师",
+            jd="需要 Python 和 Agent 工作流经验",
+            notes=None,
+        ),
+        _requirement_sheet(),
+    )
+
+    active_result = asyncio.run(
+        service.recheck_liepin_and_continue(
+            run.runtime_run_id,
+            idempotency_key="recheck-active",
+        )
+    )
+
+    assert active_result.outcome == "run_still_active"
+    assert active_result.runtime_run.runtime_run_id == run.runtime_run_id
+    assert readiness_calls == []
+    assert _runtime_run_count(store) == 1
+
+    store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="starting",
+        current_stage="startup",
+        updated_at=NOW,
+    )
+    store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="running",
+        current_stage="source_lanes",
+        updated_at=NOW,
+    )
+    store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="failed",
+        current_stage="source_lanes",
+        completed_at=NOW,
+        updated_at=NOW,
+    )
+
+    recovered = asyncio.run(
+        service.recheck_liepin_and_continue(
+            run.runtime_run_id,
+            idempotency_key="recheck-after-terminal",
+        )
+    )
+    replay = asyncio.run(
+        service.recheck_liepin_and_continue(
+            run.runtime_run_id,
+            idempotency_key="recheck-after-terminal",
+        )
+    )
+
+    assert recovered.outcome == "started_new_attempt"
+    assert replay.outcome == "started_new_attempt"
+    assert recovered.runtime_run.runtime_run_id == "rtrun_2"
+    assert replay.runtime_run.runtime_run_id == "rtrun_2"
+    assert readiness_calls == ["checked", "checked"]
+    assert _runtime_run_count(store) == 2
+
+
+def test_runtime_service_recheck_failure_does_not_start_browser_business_run(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+
+    async def readiness_probe() -> None:
+        raise LiepinWorkerModeError(
+            "extension unavailable",
+            code="liepin_opencli_extension_disconnected",
+        )
+
+    service = WorkbenchV2RuntimeService(
+        store=store,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        runtime_run_id_factory=lambda: "rtrun_1",
+        liepin_readiness_probe=readiness_probe,
+        now=lambda: NOW,
+    )
+    run = service.start_run(
+        "agentv2_recovery",
+        WorkbenchV2RuntimeInput(
+            jobTitle="AI 平台工程师",
+            jd="需要 Python 和 Agent 工作流经验",
+            notes=None,
+        ),
+        _requirement_sheet(),
+    )
+    store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="starting",
+        current_stage="startup",
+        updated_at=NOW,
+    )
+    store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="running",
+        current_stage="source_lanes",
+        updated_at=NOW,
+    )
+    store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="failed",
+        current_stage="source_lanes",
+        completed_at=NOW,
+        updated_at=NOW,
+    )
+
+    result = asyncio.run(
+        service.recheck_liepin_and_continue(
+            run.runtime_run_id,
+            idempotency_key="recheck-1",
+        )
+    )
+
+    assert result.outcome == "readiness_blocked"
+    assert result.runtime_run.runtime_run_id == run.runtime_run_id
+    assert result.failure_cause_code == "liepin_opencli_extension_disconnected"
+    assert _runtime_run_count(store) == 1
+
+
+def test_runtime_service_concurrent_recheck_accepts_one_persisted_attempt(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    probe_barrier = Barrier(2)
+    id_lock = Lock()
+    next_run_number = 1
+
+    def next_runtime_run_id() -> str:
+        nonlocal next_run_number
+        with id_lock:
+            runtime_run_id = f"rtrun_{next_run_number}"
+            next_run_number += 1
+            return runtime_run_id
+
+    async def readiness_probe() -> None:
+        probe_barrier.wait(timeout=5)
+
+    service = WorkbenchV2RuntimeService(
+        store=store,
+        runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
+        runtime_run_id_factory=next_runtime_run_id,
+        liepin_readiness_probe=readiness_probe,
+        now=lambda: NOW,
+    )
+    first = service.start_run(
+        "agentv2_recovery",
+        WorkbenchV2RuntimeInput(
+            jobTitle="AI 平台工程师",
+            jd="需要 Python 和 Agent 工作流经验",
+            notes="杭州",
+        ),
+        _requirement_sheet(),
+    )
+    store.update_run_status(
+        runtime_run_id=first.runtime_run_id,
+        status="starting",
+        current_stage="startup",
+        updated_at=NOW,
+    )
+    store.update_run_status(
+        runtime_run_id=first.runtime_run_id,
+        status="running",
+        current_stage="source_lanes",
+        updated_at=NOW,
+    )
+    store.update_run_status(
+        runtime_run_id=first.runtime_run_id,
+        status="completed",
+        current_stage="completed",
+        completed_at=NOW,
+        updated_at=NOW,
+    )
+
+    def recheck() -> object:
+        return asyncio.run(
+            service.recheck_liepin_and_continue(
+                first.runtime_run_id,
+                idempotency_key="same-concurrent-key",
+            )
+        )
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(lambda _index: recheck(), range(2)))
+
+    assert {result.outcome for result in results} == {"started_new_attempt"}
+    assert len({result.runtime_run.runtime_run_id for result in results}) == 1
+    assert _runtime_run_count(store) == 2
 
 
 def test_runtime_service_start_run_preserves_explicit_draft_lineage_and_selected_ids(tmp_path: Path) -> None:
@@ -1347,8 +1631,7 @@ def test_runtime_service_get_status_uses_latest_public_failure_summary(tmp_path:
     )
 
     assert service.get_status(run.runtime_run_id)["summary"] == (
-        "本轮检索失败："
-        "猎聘浏览器检索通道暂不可用，请确认本机应用和浏览器助手正常后重试。"
+        "本轮检索失败：猎聘浏览器检索通道暂不可用，请确认本机应用和浏览器助手正常后重试。"
     )
 
 
@@ -1595,9 +1878,7 @@ def test_runtime_service_maps_public_browser_extension_disconnect_reason(tmp_pat
 
     [event] = service.list_progress_events(run.runtime_run_id, after_seq=0)
 
-    assert event["summary"] == (
-        "招聘流程失败：猎聘浏览器扩展未连接，请确认扩展已启用并连接后重试。"
-    )
+    assert event["summary"] == ("招聘流程失败：猎聘浏览器扩展未连接，请确认扩展已启用并连接后重试。")
 
 
 def _service(

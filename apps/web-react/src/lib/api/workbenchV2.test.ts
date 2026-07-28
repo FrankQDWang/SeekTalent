@@ -8,6 +8,7 @@ import {
   getWorkbenchV2Conversation,
   getWorkbenchV2CandidateDetail,
   listWorkbenchV2Conversations,
+  recheckWorkbenchV2Runtime,
   submitWorkbenchV2Message,
   WorkbenchV2RequestError,
 } from "./workbenchV2Client";
@@ -518,6 +519,27 @@ describe("Workbench v2 client", () => {
       },
     );
     expect(result.transcriptEvents.map((event) => event.step)).toEqual([6, 8]);
+  });
+
+  it("rechecks runtime readiness for the same conversation", async () => {
+    const responseBody = conversationView();
+    const fetchMock = stubJsonFetch(responseBody);
+
+    const result = await recheckWorkbenchV2Runtime("agent conv/1", {
+      idempotencyKey: "recheck-1",
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      "/api/agent/workbench/v2/conversations/agent%20conv%2F1/runtime/recheck",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ idempotencyKey: "recheck-1" }),
+      },
+    );
+    expect(result.conversation.conversationId).toBe(
+      responseBody.conversation.conversationId,
+    );
   });
 
   it("throws a stable request error with Problem Details status and reason", async () => {

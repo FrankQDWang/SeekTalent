@@ -12,6 +12,9 @@ from seektalent.liepin_verify_session_gate import (
     _raise_reason,
 )
 from seektalent.providers.liepin.client import LiepinWorkerModeError
+from seektalent.providers.liepin.browser_environment import (
+    BrowserBridgeEnvironmentStatus,
+)
 from seektalent.sources.liepin.reason_codes import public_source_problem_message
 from tests.browser_bridge_bundle_fixtures import exact_browser_bridge_requirement
 from tests.settings_factory import make_settings
@@ -42,9 +45,27 @@ def _install_bounded_runtime(
     monkeypatch.setattr(gate_module, "ensure_opencli_runtime", lambda: runtime)
     monkeypatch.setattr(
         gate_module,
+        "_check_environment",
+        lambda actual: (
+            BrowserBridgeEnvironmentStatus(
+                ok=True,
+                liepin_enabled=True,
+                reason_code="wtscli_ready",
+                message="ready",
+                action="continue",
+                extension_dir=Path("/installed/chrome-extension/wtscli"),
+                bridge_build_id="bridge-build",
+            )
+            if actual is runtime
+            else None
+        ),
+    )
+    monkeypatch.setattr(
+        gate_module,
         "runtime_requirement",
         lambda actual: exact_browser_bridge_requirement() if actual is runtime else None,
     )
+
     def connect(actual: object, *, verify_timeout_seconds: float) -> _Daemon:
         connect_calls.append((actual, verify_timeout_seconds))
         assert actual is runtime
@@ -99,6 +120,72 @@ def test_production_gate_maps_direct_wtscli_failure_and_closes_transport(
     assert len(connect_calls) == 1
     assert len(probe_calls) == 1
     assert daemon.closed is True
+
+
+def test_production_gate_stops_before_verify_session_when_environment_is_not_ready(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, daemon, probe_calls, connect_calls = _install_bounded_runtime(
+        monkeypatch,
+        reason=None,
+    )
+    monkeypatch.setattr(
+        gate_module,
+        "_check_environment",
+        lambda actual: (
+            BrowserBridgeEnvironmentStatus(
+                ok=False,
+                liepin_enabled=False,
+                reason_code="wtscli_extension_not_loaded_or_disabled",
+                message="extension disconnected",
+                action="reload extension",
+                extension_dir=Path("/installed/chrome-extension/wtscli"),
+            )
+            if actual is runtime
+            else None
+        ),
+    )
+
+    with pytest.raises(LiepinWorkerModeError) as raised:
+        asyncio.run(ProductionLiepinVerifySessionGate(make_settings()).verify())
+
+    assert raised.value.code == "liepin_opencli_extension_disconnected"
+    assert connect_calls == []
+    assert probe_calls == []
+    assert daemon.closed is False
+
+
+def test_production_gate_preserves_verified_protocol_mismatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime, _daemon, probe_calls, connect_calls = _install_bounded_runtime(
+        monkeypatch,
+        reason=None,
+    )
+    monkeypatch.setattr(
+        gate_module,
+        "_check_environment",
+        lambda actual: (
+            BrowserBridgeEnvironmentStatus(
+                ok=False,
+                liepin_enabled=False,
+                reason_code="wtscli_extension_stale_worker",
+                message="protocol mismatch",
+                action="reload extension",
+                extension_dir=Path("/installed/chrome-extension/wtscli"),
+                bridge_failure_reason="opencli_bridge_protocol_mismatch",
+            )
+            if actual is runtime
+            else None
+        ),
+    )
+
+    with pytest.raises(LiepinWorkerModeError) as raised:
+        asyncio.run(ProductionLiepinVerifySessionGate(make_settings()).verify())
+
+    assert raised.value.code == "liepin_opencli_bridge_protocol_mismatch"
+    assert connect_calls == []
+    assert probe_calls == []
 
 
 def test_production_gate_has_no_source_port_or_runtime_control_side_effects() -> None:

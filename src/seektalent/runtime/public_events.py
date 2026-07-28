@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from datetime import datetime
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from seektalent.public_payload_safety import public_source_identifier, public_text
 from seektalent.sources.liepin.reason_codes import (
     PUBLIC_SOURCE_REASON_CODES as PUBLIC_SOURCE_REASON_CODES,
+    public_liepin_failure_cause_code,
     public_source_problem_code,
 )
 
@@ -81,6 +82,7 @@ class RuntimePublicEvent(TypedDict):
     counts: dict[str, int]
     details: dict[str, object]
     safeReasonCode: str | None
+    failureCauseCode: NotRequired[str]
     createdAt: str | None
 
 
@@ -109,7 +111,7 @@ def normalize_runtime_public_event(payload: Mapping[str, object]) -> RuntimePubl
     event_seq = _required_non_negative_int(payload.get("eventSeq"), "runtime_public_event_event_seq_invalid")
     round_no = _optional_non_negative_int(payload.get("roundNo"))
     source_kind = _source_kind_or_none(payload.get("sourceKind"))
-    return RuntimePublicEvent(
+    event = RuntimePublicEvent(
         schemaVersion=PUBLIC_EVENT_SCHEMA_VERSION,
         runtimeRunId=runtime_run_id,
         eventId=event_id,
@@ -123,6 +125,10 @@ def normalize_runtime_public_event(payload: Mapping[str, object]) -> RuntimePubl
         safeReasonCode=public_source_reason_code(payload.get("safeReasonCode")),
         createdAt=_public_created_at(payload.get("createdAt")),
     )
+    failure_cause_code = public_liepin_failure_cause_code(payload.get("failureCauseCode"))
+    if source_kind == "liepin" and event["status"] in {"blocked", "failed"} and failure_cause_code is not None:
+        event["failureCauseCode"] = failure_cause_code
+    return event
 
 
 def make_runtime_public_event(
@@ -156,6 +162,7 @@ def make_runtime_public_event(
             "counts": dict(counts or {}),
             "details": dict(details or {}),
             "safeReasonCode": safe_reason_code,
+            "failureCauseCode": safe_reason_code,
             "createdAt": created_at,
         }
     )

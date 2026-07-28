@@ -5,12 +5,14 @@ import {
   getWorkbenchV2CandidateDetail,
   getWorkbenchV2Conversation,
   listWorkbenchV2Conversations,
+  recheckWorkbenchV2Runtime,
   submitWorkbenchV2Message,
 } from "./workbenchV2Client";
 import type {
   WorkbenchV2ConversationView,
   WorkbenchV2MessageRequest,
   WorkbenchV2RequirementActionRequest,
+  WorkbenchV2RuntimeRecheckRequest,
 } from "./workbenchV2Types";
 import { queryKeys } from "../query/keys";
 
@@ -133,6 +135,25 @@ export function useApplyWorkbenchV2RequirementAction(conversationId: string) {
   return useMutation({
     mutationFn: (payload: WorkbenchV2RequirementActionRequest) =>
       applyWorkbenchV2RequirementAction(conversationId, payload),
+    onSuccess: async (view) => {
+      const queryKey = queryKeys.workbenchV2Conversation(
+        view.conversation.conversationId,
+      );
+      await queryClient.cancelQueries({ queryKey });
+      applyWorkbenchV2Snapshot(queryClient, queryKey, view);
+      void queryClient.invalidateQueries({
+        queryKey: queryKeys.workbenchV2Conversations,
+      });
+    },
+  });
+}
+
+export function useRecheckWorkbenchV2Runtime(conversationId: string) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: (payload: WorkbenchV2RuntimeRecheckRequest) =>
+      recheckWorkbenchV2Runtime(conversationId, payload),
     onSuccess: async (view) => {
       const queryKey = queryKeys.workbenchV2Conversation(
         view.conversation.conversationId,

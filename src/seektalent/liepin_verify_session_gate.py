@@ -12,6 +12,10 @@ from seektalent.opencli_browser.daemon_process import connect_installed_opencli_
 from seektalent.opencli_browser.lifecycle import browser_control_key
 from seektalent.opencli_launcher import BootstrapError, ensure_opencli_runtime, runtime_requirement
 from seektalent.providers.liepin.client import LiepinWorkerModeError
+from seektalent.providers.liepin.browser_environment import (
+    BrowserBridgeEnvironmentStatus,
+    check_browser_bridge_environment,
+)
 from seektalent.sources.liepin.reason_codes import public_source_problem_message
 from seektalent.wtscli_verify_session_adapter import (
     probe_wtscli_liepin_session,
@@ -45,6 +49,9 @@ def create_production_liepin_verify_session_gate(
 def _verify_session(settings: AppSettings) -> None:
     started_at = time.monotonic()
     runtime = ensure_opencli_runtime()
+    environment_status = _check_environment(runtime)
+    if not environment_status.ok:
+        _raise_reason(_environment_reason(environment_status))
     requirement = runtime_requirement(runtime)
     timeout_seconds = min(900.0, max(0.001, settings.liepin_opencli_timeout_seconds))
     deadline_at = started_at + timeout_seconds
@@ -52,10 +59,7 @@ def _verify_session(settings: AppSettings) -> None:
     if remaining <= 0:
         _raise_reason("liepin_opencli_timeout")
     profile_digest = sha256(
-        (
-            f"{requirement.bridge_build_id}\0"
-            f"{requirement.runtime_identity.state.root_dir}\0existing_profile"
-        ).encode()
+        (f"{requirement.bridge_build_id}\0{requirement.runtime_identity.state.root_dir}\0existing_profile").encode()
     ).hexdigest()
     control_key = browser_control_key(
         source_kind="liepin",
@@ -79,6 +83,37 @@ def _verify_session(settings: AppSettings) -> None:
         daemon.close()
     if reason is not None:
         _raise_reason(_normalized_boundary_reason(reason))
+
+
+def _check_environment(runtime: object) -> BrowserBridgeEnvironmentStatus:
+    bridge_manifest = getattr(runtime, "bridge_manifest", None)
+    node = getattr(runtime, "node", None)
+    if bridge_manifest is None or node is None:
+        raise BootstrapError("opencli_bridge_integrity_failed: Missing installed WTSCLI paths")
+    return check_browser_bridge_environment(
+        install_root=bridge_manifest.parent.parent,
+        node=node,
+    )
+
+
+def _environment_reason(status: BrowserBridgeEnvironmentStatus) -> str:
+    if status.bridge_failure_reason is not None:
+        return _normalized_boundary_reason(status.bridge_failure_reason)
+    aliases = {
+        "liepin_host_tab_missing": "liepin_host_tab_missing",
+        "wtscli_bundle_missing": "liepin_opencli_command_missing",
+        "wtscli_bundle_corrupt": "liepin_opencli_bridge_integrity_failed",
+        "wtscli_daemon_missing": "liepin_opencli_daemon_not_running",
+        "wtscli_daemon_stale": "liepin_opencli_daemon_stale",
+        "wtscli_daemon_wrong_owner": "liepin_opencli_daemon_stale",
+        "wtscli_extension_not_loaded_or_disabled": "liepin_opencli_extension_disconnected",
+        "wtscli_extension_stale_worker": "liepin_opencli_bridge_build_mismatch",
+        "wtscli_identity_mismatch": "liepin_opencli_bridge_build_mismatch",
+    }
+    return aliases.get(
+        status.reason_code,
+        "liepin_opencli_status_unavailable",
+    )
 
 
 def _raise_reason(reason: object) -> None:

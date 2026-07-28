@@ -1,17 +1,18 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
 from inspect import signature
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 from uuid import uuid4
 
 from seektalent.config import AppSettings
 from seektalent.candidate_quality import is_recommendation_eligible
 from seektalent.models import RequirementSheet
+from seektalent.providers.liepin.client import LiepinWorkerModeError
 from seektalent.sources.liepin.reason_codes import public_source_problem_message
 from seektalent_runtime_control.commands import RuntimeCommandService
 from seektalent_runtime_control.detail import RuntimeDetailService
@@ -75,6 +76,20 @@ class WorkbenchV2RequirementExtraction:
     requirement_sheet: RequirementSheet
 
 
+WorkbenchV2RuntimeRecoveryOutcome = Literal[
+    "run_still_active",
+    "readiness_blocked",
+    "started_new_attempt",
+]
+
+
+@dataclass(frozen=True)
+class WorkbenchV2RuntimeRecoveryResult:
+    outcome: WorkbenchV2RuntimeRecoveryOutcome
+    runtime_run: RuntimeRunRecord
+    failure_cause_code: str | None = None
+
+
 @dataclass(frozen=True)
 class _NextRoundRequirementExtractorAdapter:
     extractor: object
@@ -108,6 +123,7 @@ class WorkbenchV2RuntimeService:
         draft_revision_id_factory: Callable[[], str] | None = None,
         approved_requirement_revision_id_factory: Callable[[], str] | None = None,
         runtime_run_id_factory: Callable[[], str] | None = None,
+        liepin_readiness_probe: Callable[[], Awaitable[None]] | None = None,
         on_run_queued: Callable[[str], None] | None = None,
         now: Callable[[], str] | None = None,
     ) -> None:
@@ -123,6 +139,7 @@ class WorkbenchV2RuntimeService:
             lambda: _new_id("reqapproved")
         )
         self.runtime_run_id_factory = runtime_run_id_factory
+        self.liepin_readiness_probe = liepin_readiness_probe
         self.on_run_queued = on_run_queued
         self.now = now or _now_iso
 
@@ -221,7 +238,9 @@ class WorkbenchV2RuntimeService:
                 draft_revision_id=draft.draft_revision_id,
                 agent_conversation_id=conversation_id,
                 requirement_sheet=requirement_sheet,
-                selected_item_ids=list(selected_item_ids) if selected_item_ids is not None else _selected_item_ids(draft),
+                selected_item_ids=list(selected_item_ids)
+                if selected_item_ids is not None
+                else _selected_item_ids(draft),
                 deselected_item_ids=(
                     list(deselected_item_ids) if deselected_item_ids is not None else _deselected_item_ids(draft)
                 ),
@@ -272,6 +291,81 @@ class WorkbenchV2RuntimeService:
             selected_item_ids=selected_item_ids,
             deselected_item_ids=deselected_item_ids,
         )
+
+    async def recheck_liepin_and_continue(
+        self,
+        runtime_run_id: str,
+        *,
+        idempotency_key: str,
+    ) -> WorkbenchV2RuntimeRecoveryResult:
+        current = self.store.get_run(runtime_run_id)
+        if current.status in {
+            "queued",
+            "starting",
+            "running",
+            "pause_requested",
+            "paused",
+            "resume_requested",
+            "cancellation_requested",
+        }:
+            return WorkbenchV2RuntimeRecoveryResult(
+                outcome="run_still_active",
+                runtime_run=current,
+            )
+        if current.status == "needs_attention":
+            raise RuntimeControlError("workbench_v2_needs_attention_resume_unavailable")
+        if current.status not in {"completed", "failed"}:
+            raise RuntimeControlError("workbench_v2_runtime_not_recoverable")
+        try:
+            await self._recheck_liepin_readiness()
+        except LiepinWorkerModeError as exc:
+            return WorkbenchV2RuntimeRecoveryResult(
+                outcome="readiness_blocked",
+                runtime_run=current,
+                failure_cause_code=exc.code,
+            )
+        snapshot = self.store.get_snapshot(runtime_run_id=runtime_run_id)
+        workflow_input = snapshot.snapshot.get("workflowInput") if snapshot is not None else None
+        if not isinstance(workflow_input, Mapping):
+            raise RuntimeControlError("workbench_v2_runtime_recovery_input_missing")
+        job_title = _required_workflow_input_text(workflow_input, "jobTitle")
+        jd_text = _required_workflow_input_text(workflow_input, "jdText")
+        notes_value = workflow_input.get("notes")
+        notes = notes_value if isinstance(notes_value, str) and notes_value else None
+        approved = self.store.get_approved_requirement(current.approved_requirement_revision_id)
+        rerun_key = f"workbench-v2-runtime-recheck:{runtime_run_id}:{idempotency_key}"
+        run = self._executor().enqueue_workflow_run(
+            conversation_id=current.agent_conversation_id,
+            workbench_session_id=current.workbench_session_id,
+            approved_requirement=approved,
+            job_title=job_title,
+            jd_text=jd_text,
+            notes=notes,
+            source_ids=current.source_ids,
+            run_intent_id=rerun_key,
+            start_idempotency_key=rerun_key,
+            run_kind="rerun",
+        )
+        if run.status in {"queued", "resume_requested"} and self.on_run_queued is not None:
+            self.on_run_queued(run.runtime_run_id)
+        if run.runtime_run_id == runtime_run_id:
+            raise RuntimeControlError("workbench_v2_runtime_recovery_not_started")
+        return WorkbenchV2RuntimeRecoveryResult(
+            outcome="started_new_attempt",
+            runtime_run=run,
+        )
+
+    async def _recheck_liepin_readiness(self) -> None:
+        if self.liepin_readiness_probe is not None:
+            await self.liepin_readiness_probe()
+            return
+        if self.settings is None:
+            raise RuntimeControlError("workbench_v2_liepin_recheck_unavailable")
+        from seektalent.liepin_verify_session_gate import (
+            create_production_liepin_verify_session_gate,
+        )
+
+        await create_production_liepin_verify_session_gate(self.settings).verify()
 
     def _draft_revision_id(self, operation_key: str) -> str:
         if self._custom_draft_revision_id_factory:
@@ -336,9 +430,7 @@ class WorkbenchV2RuntimeService:
             eligible_identities.append((identity, evidence, score))
         eligible_identities.sort(key=lambda row: (-row[2], row[0].identity_id))
         candidates: list[dict[str, object]] = []
-        for index, (identity, evidence, score) in enumerate(
-            eligible_identities[: max(0, limit)], start=1
-        ):
+        for index, (identity, evidence, score) in enumerate(eligible_identities[: max(0, limit)], start=1):
             source_kinds = _candidate_source_kinds(evidence)
             headline = _candidate_headline(identity, evidence)
             display_name = _candidate_display_name(identity, evidence, fallback=f"候选人 {index}")
@@ -733,10 +825,14 @@ def _candidate_match(
     evidence: Sequence[RuntimeControlCandidateEvidence],
 ) -> dict[str, object] | None:
     match_payload = _candidate_match_payload(evidence)
-    summary = _text_from_mapping(match_payload, "reasoningSummary") or _text_from_mapping(
-        match_payload,
-        "summary",
-    ) or _clean_text(identity.summary)
+    summary = (
+        _text_from_mapping(match_payload, "reasoningSummary")
+        or _text_from_mapping(
+            match_payload,
+            "summary",
+        )
+        or _clean_text(identity.summary)
+    )
     payload: dict[str, object] = {
         "summary": summary,
         "strengths": _list_texts_from_mapping(match_payload, "strengths"),
@@ -749,22 +845,14 @@ def _candidate_match(
 
 def _candidate_match_payload(evidence: Sequence[RuntimeControlCandidateEvidence]) -> Mapping[str, object]:
     payloads = [(item, _mapping_value(item.payload.get("match"))) for item in evidence]
-    ranked_payloads = [
-        (item, payload)
-        for item, payload in payloads
-        if payload
-    ]
+    ranked_payloads = [(item, payload) for item, payload in payloads if payload]
     ranked_payloads.sort(key=lambda candidate: _match_payload_rank(candidate[0], candidate[1]))
     return _merge_payload_mappings(payload for _item, payload in ranked_payloads)
 
 
 def _candidate_wts_detail(evidence: Sequence[RuntimeControlCandidateEvidence]) -> Mapping[str, object]:
     payloads = [(item, _mapping_value(item.payload.get("wtsDetail"))) for item in evidence]
-    ranked_payloads = [
-        (item, payload)
-        for item, payload in payloads
-        if payload
-    ]
+    ranked_payloads = [(item, payload) for item, payload in payloads if payload]
     ranked_payloads.sort(key=lambda candidate: _wts_detail_payload_rank(candidate[0], candidate[1]))
     return _merge_payload_mappings(payload for _item, payload in ranked_payloads)
 
@@ -940,7 +1028,9 @@ def _candidate_detail_evidence(evidence: Sequence[RuntimeControlCandidateEvidenc
     items: list[str] = []
     for item in sorted(evidence, key=lambda item: item.evidence_id):
         source = "猎聘" if item.source_kind == "liepin" else "CTS" if item.source_kind == "cts" else item.source_kind
-        level = "detail" if item.evidence_level == "detail" else "final" if item.evidence_level == "final" else "summary"
+        level = (
+            "detail" if item.evidence_level == "detail" else "final" if item.evidence_level == "final" else "summary"
+        )
         items.append(f"来源：{source} {level} 证据")
         provider_rank = _int_from_mapping(item.payload, "providerRank")
         if provider_rank is not None:
@@ -1036,7 +1126,9 @@ def _format_experience_entry(entry: Mapping[str, object]) -> str | None:
         _clean_candidate_detail_text(_first_present_text(entry, ("company", "companyName", "org", "organization"))),
         _clean_candidate_detail_text(_first_present_text(entry, ("title", "position", "positionName", "jobTitle"))),
     ]
-    summary = _clean_candidate_detail_text(_first_present_text(entry, ("summary", "description", "workContent", "content")))
+    summary = _clean_candidate_detail_text(
+        _first_present_text(entry, ("summary", "description", "workContent", "content"))
+    )
     heading = "｜".join(part for part in parts if part)
     if heading and summary:
         return f"{heading}。工作内容：{summary}"
@@ -1359,6 +1451,16 @@ def _required_input_text(value: object) -> str:
     return text
 
 
+def _required_workflow_input_text(
+    workflow_input: Mapping[str, object],
+    key: str,
+) -> str:
+    value = workflow_input.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise RuntimeControlError("workbench_v2_runtime_recovery_input_missing")
+    return value
+
+
 def _selected_item_ids(draft: RequirementDraft) -> list[str]:
     return [
         item.item_id
@@ -1443,6 +1545,9 @@ def _progress_payload_from_runtime_event(event: object) -> dict[str, object] | N
     safe_reason_code = safe_runtime_progress_reason_code(public_payload.get("safeReasonCode"))
     if safe_reason_code is not None:
         payload["safeReasonCode"] = safe_reason_code
+    failure_cause_code = public_payload.get("failureCauseCode")
+    if isinstance(failure_cause_code, str):
+        payload["failureCauseCode"] = failure_cause_code
     return payload
 
 
