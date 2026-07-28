@@ -2345,7 +2345,6 @@ def test_pi_failure_codes_preserve_opencli_safe_reason_codes() -> None:
 @pytest.mark.parametrize(
     "reason_code",
     [
-        "liepin_opencli_search_not_ready",
         "liepin_opencli_results_not_ready",
         "liepin_opencli_removed_config",
     ],
@@ -2355,6 +2354,17 @@ def test_opencli_backend_unavailable_reasons_map_to_source_lane_backend_unavaila
         LIEPIN_SOURCE_LANE_REASON_CODE_MAP[reason_code]
         == "source_browser_backend_unavailable"
     )
+
+
+@pytest.mark.parametrize(
+    "reason_code",
+    [
+        "liepin_opencli_search_input_unapplied",
+        "liepin_opencli_search_not_ready",
+    ],
+)
+def test_opencli_search_readiness_reasons_map_to_source_lane_timeout(reason_code: str) -> None:
+    assert LIEPIN_SOURCE_LANE_REASON_CODE_MAP[reason_code] == "source_browser_timeout"
 
 
 def test_liepin_runtime_lane_uses_provider_adapter_context_and_public_payload_is_safe() -> None:

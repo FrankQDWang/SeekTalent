@@ -1995,6 +1995,7 @@ def _workbench_reason_message(reason: str) -> str:
         "liepin_opencli_lease_malformed": "WTSCLI 浏览器租约状态无效。请删除过期的 SeekTalent WTSCLI 租约文件后重试。",
         "liepin_opencli_owned_marker_malformed": "WTSCLI 浏览器受控标签页标记无效。请删除过期的 SeekTalent WTSCLI 租约文件后重试。",
         "liepin_opencli_tab_response_malformed": "WTSCLI 浏览器标签页命令返回异常。请重启 WTSCLI/Chrome 后重试。",
+        "liepin_opencli_search_input_unapplied": "猎聘搜索框未能保留关键词。请等待搜索页面加载完成后重试。",
         "liepin_opencli_search_not_ready": "猎聘搜索页面未就绪。请确认当前 Chrome 可以正常打开猎聘人才搜索页。",
         "liepin_opencli_results_not_ready": "猎聘搜索结果尚未就绪。请确认页面加载完成后重试。",
         "liepin_opencli_timeout": "WTSCLI 浏览器桥接响应超时。",

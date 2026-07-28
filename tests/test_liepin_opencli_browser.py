@@ -36,6 +36,7 @@ from seektalent.providers.liepin.liepin_site_adapter import (
     extract_liepin_search_input_ref,
 )
 from seektalent.providers.liepin.liepin_site_parsing import (
+    _fixed_readonly_eval_probe_script,
     _liepin_structured_cards_payload_probe_script,
     _safe_detail_payload_from_probe_output,
     _safe_structured_cards_from_probe_output,
@@ -263,6 +264,84 @@ def _search_query_value_probe_json(value: str) -> str:
         },
         ensure_ascii=False,
     )
+
+
+def _run_search_query_value_probe(*, query_value: str, checkbox_value: str = "on") -> dict[str, object]:
+    script = _fixed_readonly_eval_probe_script(
+        probe_name="liepin_search_query_value",
+        ref="26",
+    )
+    javascript = f"""
+const probe = {json.dumps(script)};
+const ownerDocument = {{
+  defaultView: {{
+    getComputedStyle: () => ({{ display: "block", visibility: "visible" }}),
+  }},
+}};
+const makeControl = ({{ ref, type, value, id }}) => ({{
+  ownerDocument,
+  value,
+  className: "",
+  innerText: "",
+  textContent: "",
+  parentElement: null,
+  getBoundingClientRect: () => ({{ width: 100, height: 20 }}),
+  getAttribute: (name) => ({{
+    "data-opencli-ref": ref,
+    type,
+    id,
+    placeholder: "",
+    "aria-label": "",
+    name: "",
+    value,
+  }}[name] ?? null),
+  matches: (selector) => selector.includes("input"),
+  querySelector: () => null,
+  querySelectorAll: () => [],
+}});
+const checkbox = makeControl({{
+  ref: "90",
+  type: "checkbox",
+  value: {json.dumps(checkbox_value)},
+  id: "availability",
+}});
+const queryInput = makeControl({{
+  ref: "26",
+  type: "search",
+  value: {json.dumps(query_value)},
+  id: "rc_select_1",
+}});
+const root = {{
+  ownerDocument,
+  parentElement: null,
+  querySelector: (selector) => selector.includes("input") ? queryInput : null,
+  querySelectorAll: () => [checkbox, queryInput],
+}};
+const label = {{
+  ownerDocument,
+  textContent: "包含全部关键词",
+  parentElement: root,
+  getBoundingClientRect: () => ({{ width: 100, height: 20 }}),
+  querySelectorAll: () => [],
+}};
+global.document = {{
+  ...ownerDocument,
+  querySelector: (selector) =>
+    selector === '[data-opencli-ref="26"]' ? queryInput : null,
+  querySelectorAll: (selector) =>
+    selector === "span,label,div,p" ? [label] : [checkbox, queryInput],
+}};
+process.stdout.write(String(eval(probe)));
+"""
+    completed = subprocess.run(
+        ("node", "-e", javascript),
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    payload = json.loads(completed.stdout)
+    assert isinstance(payload, dict)
+    return payload
 
 
 def _has_probe_between(calls: Sequence[tuple[str, ...]], start: int, end: int) -> bool:
@@ -2644,6 +2723,18 @@ def test_extract_liepin_search_button_ref_uses_visible_search_button() -> None:
     assert extract_liepin_search_button_ref(text) == "29"
 
 
+def test_extract_liepin_search_button_ref_uses_nested_visible_label() -> None:
+    text = (
+        "<span>包含全部关键词</span>\n"
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button>\n"
+        "  <span>搜 索</span>\n"
+        "</button>"
+    )
+
+    assert extract_liepin_search_button_ref(text) == "29"
+
+
 def test_extract_liepin_search_input_ref_falls_back_to_keyword_input_id() -> None:
     text = (
         "[316]<input type=search autocomplete=off role=combobox id=rc_select_0 />\n"
@@ -2652,6 +2743,26 @@ def test_extract_liepin_search_input_ref_falls_back_to_keyword_input_id() -> Non
     )
 
     assert extract_liepin_search_input_ref(text) == "26"
+
+
+def test_search_query_value_probe_ignores_checkbox_default_value() -> None:
+    payload = _run_search_query_value_probe(query_value="", checkbox_value="on")
+
+    assert payload == {
+        "ok": True,
+        "schema_version": "seektalent.liepin_search_query_value.v1",
+        "value": "",
+    }
+
+
+def test_search_query_value_probe_reads_exact_keyword_input() -> None:
+    payload = _run_search_query_value_probe(query_value="数据开发专家")
+
+    assert payload == {
+        "ok": True,
+        "schema_version": "seektalent.liepin_search_query_value.v1",
+        "value": "数据开发专家",
+    }
 
 
 def test_bucket_text_is_count_only() -> None:
@@ -2789,6 +2900,111 @@ def test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifact
     click_index = commands.calls.index(("opencli", "browser", "seektalent-liepin", "click", "29"))
     assert fill_index < click_index
     assert ("opencli", "browser", "seektalent-liepin", "state") not in commands.calls[fill_index + 1 : click_index]
+
+
+def test_search_liepin_cards_waits_for_complete_search_form_before_fill(tmp_path: Path) -> None:
+    partial_state = (
+        "[11]<input type=search role=combobox id=rc_select_0 />\n"
+        "[12]<input type=search role=combobox id=rc_select_2 />\n"
+        "[13]<input type=search role=combobox id=rc_select_3 />"
+    )
+    ready_state = (
+        "<span>包含全部关键词</span>\n"
+        "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+        "[29]<button><span>搜 索</span></button>"
+    )
+    result_state = (
+        "URL: https://h.liepin.com/search/getConditionItem#session\n"
+        "id=resultList\n"
+        "共 1 位人选\n"
+        "王** 男 40岁 工作14年 硕士 上海\n"
+        "求职期望：上海 数据开发专家"
+    )
+    commands = FakeCommands(
+        outputs={
+            **_current_window_open_outputs(page_id="page-1"),
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                partial_state,
+                ready_state,
+                result_state,
+                result_state,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家"): '{"filled":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "29"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "wait", "selector", "#resultList"): "{}",
+        }
+    )
+
+    envelope = _runner(commands, lease_dir=tmp_path).search_liepin_cards(
+        source_run_id="run-partial-search-form",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+    )
+
+    fill_call = ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家")
+    fill_index = commands.calls.index(fill_call)
+    state_call = ("opencli", "browser", "seektalent-liepin", "state")
+
+    assert envelope["status"] == "succeeded"
+    assert commands.calls[:fill_index].count(state_call) == 2
+    assert not any(
+        call[3:8] == ("fill", "--role", "combobox", "--nth", "0")
+        for call in commands.calls
+        if len(call) >= 8
+    )
+
+
+def test_search_liepin_cards_fails_closed_when_search_input_never_appears(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    partial_state = (
+        "[11]<input type=search role=combobox id=rc_select_0 />\n"
+        "[12]<input type=search role=combobox id=rc_select_2 />\n"
+        "[13]<input type=search role=combobox id=rc_select_3 />"
+    )
+
+    class PartialSearchFormCommands(FakeCommands):
+        def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str:
+            if tuple(argv) == ("opencli", "browser", "seektalent-liepin", "state"):
+                self.outputs[tuple(argv)] = partial_state
+            return super().run(argv, timeout=timeout, env=env)
+
+    clock = 0.0
+    delays: list[float] = []
+
+    def monotonic() -> float:
+        return clock
+
+    def sleep(seconds: float) -> None:
+        nonlocal clock
+        delays.append(seconds)
+        clock += seconds
+
+    monkeypatch.setattr("seektalent.providers.liepin.liepin_site_adapter.time.monotonic", monotonic)
+    monkeypatch.setattr("seektalent.providers.liepin.liepin_site_adapter.time.sleep", sleep)
+    commands = PartialSearchFormCommands(
+        outputs={
+            **_current_window_open_outputs(page_id="page-1"),
+        }
+    )
+
+    envelope = _runner(
+        commands,
+        lease_dir=tmp_path,
+        search_navigation_timeout_seconds=0.3,
+    ).search_liepin_cards(
+        source_run_id="run-search-form-timeout",
+        query="数据开发专家",
+        max_pages=1,
+        max_cards=10,
+    )
+
+    assert envelope["status"] == "blocked"
+    assert envelope["safe_reason_code"] == "liepin_opencli_search_not_ready"
+    assert delays == pytest.approx([0.1, 0.1, 0.1])
+    assert not any(call[3] in {"fill", "click"} for call in commands.calls if len(call) >= 4)
 
 
 def test_search_liepin_cards_ignores_add_resume_copy_without_closing_it(tmp_path: Path) -> None:

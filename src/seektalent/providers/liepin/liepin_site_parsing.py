@@ -158,14 +158,27 @@ def extract_allowed_click_refs(text: str) -> tuple[str, ...]:
 
 
 def extract_liepin_search_button_ref(text: str) -> str | None:
-    for line in text.splitlines():
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
         normalized = " ".join(line.strip().split())
         lowered = normalized.lower()
         if "<button" not in lowered and "role=button" not in lowered:
             continue
-        if any(fragment in lowered for fragment in FORBIDDEN_ACTION_TARGET_FRAGMENTS):
+        nearby_lines = [normalized]
+        if "</button>" not in lowered:
+            for item in lines[index + 1 : index + 4]:
+                normalized_item = " ".join(item.strip().split())
+                lowered_item = normalized_item.lower()
+                if "<button" in lowered_item or "role=button" in lowered_item:
+                    break
+                nearby_lines.append(normalized_item)
+                if "</button>" in lowered_item:
+                    break
+        nearby = " ".join(nearby_lines)
+        nearby_lowered = nearby.lower()
+        if any(fragment in nearby_lowered for fragment in FORBIDDEN_ACTION_TARGET_FRAGMENTS):
             continue
-        if "搜 索" not in normalized and "搜索" not in normalized and "查询" not in normalized:
+        if "搜 索" not in nearby and "搜索" not in nearby and "查询" not in nearby:
             continue
         refs = _extract_refs_from_line(line)
         if refs:
@@ -1071,7 +1084,7 @@ def _fixed_readonly_eval_probe_script(*, probe_name: str, ref: str) -> str:
     if probe_name == "liepin_city_choose_ref":
         return _liepin_city_choose_ref_probe_script(section=ref)
     if probe_name == "liepin_search_query_value":
-        return _liepin_search_query_value_probe_script()
+        return _liepin_search_query_value_probe_script(ref=ref)
     if probe_name != "liepin_detail_url_for_card":
         raise OpenCliBrowserError("liepin_opencli_forbidden_command")
     return (
@@ -1091,7 +1104,7 @@ def _fixed_readonly_eval_probe_script(*, probe_name: str, ref: str) -> str:
     )
 
 
-def _liepin_search_query_value_probe_script() -> str:
+def _liepin_search_query_value_probe_script(*, ref: str) -> str:
     return r"""
 (() => {
   const schema = "seektalent.liepin_search_query_value.v1";
@@ -1103,38 +1116,30 @@ def _liepin_search_query_value_probe_script() -> str:
     const rect = node.getBoundingClientRect();
     return rect.width > 0 && rect.height > 0;
   };
-  const read = (node) => {
-    if (!node) return "";
-    if (node.matches && node.matches("input, textarea")) {
-      return clean(node.value || node.getAttribute("value") || "");
-    }
-    return clean(node.innerText || node.textContent);
+  const textControl = (node) => {
+    if (!node || !node.matches) return false;
+    if (node.matches("textarea, [contenteditable='true']")) return true;
+    if (!node.matches("input")) return false;
+    const type = clean(node.getAttribute("type") || "text").toLowerCase();
+    return !new Set([
+      "button", "checkbox", "color", "file", "hidden", "image",
+      "radio", "range", "reset", "submit"
+    ]).has(type);
   };
-  const controls = (root) =>
-    Array.from(root ? root.querySelectorAll("input, textarea, [contenteditable='true']") : [])
-      .filter(visible);
-  const label = Array.from(document.querySelectorAll("span,label,div,p"))
-    .find((node) => clean(node.textContent).includes("包含全部关键词"));
-  if (label) {
-    let root = label;
-    for (let i = 0; i < 5 && root; i += 1) {
-      const control = controls(root).find((item) => read(item));
-      if (control) return JSON.stringify({ ok: true, schema_version: schema, value: read(control).slice(0, 200) });
-      root = root.parentElement;
-    }
-  }
-  const queryControl = controls(document).find((item) => {
-    const marker = clean([
-      item.getAttribute("placeholder"),
-      item.getAttribute("aria-label"),
-      item.getAttribute("name"),
-      item.getAttribute("id"),
-      item.className,
-    ].join(" "));
-    return /关键词|搜索|search|keyword|rc_select/i.test(marker);
-  });
-  if (queryControl) {
-    return JSON.stringify({ ok: true, schema_version: schema, value: read(queryControl).slice(0, 200) });
+  const referenced = document.querySelector('[data-opencli-ref="__REF__"]');
+  const descendant = referenced && referenced.querySelector
+    ? referenced.querySelector("input, textarea, [contenteditable='true']")
+    : null;
+  const control = textControl(referenced) ? referenced : descendant;
+  if (textControl(control) && visible(control)) {
+    const value = control.matches("input, textarea")
+      ? control.value
+      : control.innerText || control.textContent;
+    return JSON.stringify({
+      ok: true,
+      schema_version: schema,
+      value: clean(value).slice(0, 200)
+    });
   }
   return JSON.stringify({
     ok: false,
@@ -1142,7 +1147,7 @@ def _liepin_search_query_value_probe_script() -> str:
     safeReasonCode: "liepin_opencli_search_input_unapplied"
   });
 })()
-"""
+""".replace("__REF__", ref)
 
 
 def _liepin_city_choose_ref_probe_script(*, section: str) -> str:

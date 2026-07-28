@@ -182,7 +182,7 @@ def test_liepin_filter_partial_reason_is_public_safe() -> None:
     assert public_source_reason_code("source_filter_unavailable") == "source_filter_unavailable"
     assert public_source_reason_code("source_browser_backend_unavailable") == "source_browser_backend_unavailable"
     assert public_source_reason_code("liepin_opencli_filter_unapplied") == "source_filter_unavailable"
-    assert public_source_reason_code("liepin_opencli_search_input_unapplied") == "source_browser_backend_unavailable"
+    assert public_source_reason_code("liepin_opencli_search_input_unapplied") == "source_browser_timeout"
 
 
 def test_public_runtime_filter_payload_does_not_expose_browser_terms() -> None:

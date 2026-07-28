@@ -306,6 +306,15 @@ def _search_state_nonterminal(snapshot: LiepinStateSnapshot) -> bool:
     return bool(snapshot.text.strip())
 
 
+def _search_form_ready(snapshot: LiepinStateSnapshot) -> bool:
+    return (
+        snapshot.ok
+        and _search_url_ready(snapshot)
+        and extract_liepin_search_input_ref(snapshot.text) is not None
+        and extract_liepin_search_button_ref(snapshot.text) is not None
+    )
+
+
 def _search_query_matches(actual: str, expected: str) -> bool:
     return _normalized_search_query(actual) == _normalized_search_query(expected)
 
@@ -1435,24 +1444,40 @@ class LiepinSiteAdapter:
 
             def observe_search_ready() -> LiepinStateSnapshot:
                 nonlocal first_state
-                first_state = self.state()
-                events.append({"action_kind": "observe", "route_kind": "search", "ok": first_state.ok})
-                if not first_state.ok and first_state.safe_reason_code in {
-                    "liepin_opencli_risk_page",
-                    "liepin_opencli_status_unavailable",
-                }:
-                    events.append(
-                        {
-                            "action_kind": "observe_retry_after_unready",
-                            "route_kind": "search",
-                            "safe_reason_code": first_state.safe_reason_code,
-                        }
-                    )
+                deadline = time.monotonic() + self._site_config.search_navigation_timeout_seconds
+                retried_unready = False
+                while True:
                     first_state = self.state()
-                    events.append(
-                        {"action_kind": "observe_after_unready_retry", "route_kind": "search", "ok": first_state.ok}
+                    events.append({"action_kind": "observe", "route_kind": "search", "ok": first_state.ok})
+                    snapshot = replace(
+                        _snapshot_from_result(first_state),
+                        url=self._current_url_or_none(),
                     )
-                return _snapshot_from_result(first_state)
+                    if _search_form_ready(snapshot):
+                        return snapshot
+                    if not snapshot.ok:
+                        if (
+                            not retried_unready
+                            and snapshot.safe_reason_code
+                            in {
+                                "liepin_opencli_risk_page",
+                                "liepin_opencli_status_unavailable",
+                            }
+                        ):
+                            retried_unready = True
+                            events.append(
+                                {
+                                    "action_kind": "observe_retry_after_unready",
+                                    "route_kind": "search",
+                                    "safe_reason_code": snapshot.safe_reason_code,
+                                }
+                            )
+                            continue
+                        return snapshot
+                    remaining_seconds = deadline - time.monotonic()
+                    if remaining_seconds <= 0:
+                        return snapshot
+                    time.sleep(min(_SEARCH_URL_POLL_SECONDS, remaining_seconds))
 
             ready_result = self._run_liepin_transition(
                 LiepinTransition(
@@ -1469,7 +1494,7 @@ class LiepinSiteAdapter:
                     precondition=_search_url_ready,
                     action=lambda: TransitionResult(ok=True),
                     observe_post_state=observe_search_ready,
-                    postcondition=_search_state_nonterminal,
+                    postcondition=_search_form_ready,
                     safe_reason_code="liepin_opencli_search_not_ready",
                     trace_event="liepin.search.ready",
                 )
@@ -1524,9 +1549,19 @@ class LiepinSiteAdapter:
                     events=events,
                 )
             first_state_text = first_state.private_output or str(first_state.observation.get("text") or "")
-            events.append({"action_kind": "fill_search", "route_kind": "search", "chars": len(query)})
             search_input_ref = extract_liepin_search_input_ref(first_state_text)
-            fill_target = search_input_ref or "搜索"
+            search_button_ref = extract_liepin_search_button_ref(first_state_text)
+            if search_input_ref is None or search_button_ref is None:
+                return self._blocked_cards_envelope(
+                    source_run_id=source_run_id,
+                    query=query,
+                    safe_reason_code="liepin_opencli_search_not_ready",
+                    safe_run_id=safe_run_id,
+                    pages_visited=pages_visited,
+                    events=events,
+                )
+            events.append({"action_kind": "fill_search", "route_kind": "search", "chars": len(query)})
+            fill_target = search_input_ref
             fill_retry_state: OpenCliBrowserResult | None = None
             click_ready_state: OpenCliBrowserResult | None = None
 
@@ -1568,12 +1603,17 @@ class LiepinSiteAdapter:
                             fill_retry_state.observation.get("text") or ""
                         )
                         retry_input_ref = extract_liepin_search_input_ref(retry_state_text)
-                        fill_target = retry_input_ref or fill_target
+                        if retry_input_ref is None:
+                            return TransitionResult(
+                                ok=False,
+                                safe_reason_code="liepin_opencli_search_not_ready",
+                            )
+                        fill_target = retry_input_ref
                 return TransitionResult(ok=False, safe_reason_code="liepin_opencli_search_not_ready")
 
             def observe_after_fill() -> LiepinStateSnapshot:
                 nonlocal click_ready_state
-                applied_query = self._liepin_search_query_value_from_dom()
+                applied_query = self._liepin_search_query_value_from_dom(ref=fill_target)
                 if not _search_query_matches(applied_query, query):
                     events.append(
                         {
@@ -2362,8 +2402,8 @@ class LiepinSiteAdapter:
             return parsed.strip()
         return None
 
-    def _liepin_search_query_value_from_dom(self) -> str:
-        output = self._run_fixed_readonly_eval_probe(probe_name="liepin_search_query_value", ref="current")
+    def _liepin_search_query_value_from_dom(self, *, ref: str) -> str:
+        output = self._run_fixed_readonly_eval_probe(probe_name="liepin_search_query_value", ref=ref)
         try:
             payload = json.loads(output)
         except json.JSONDecodeError as exc:
@@ -2735,8 +2775,7 @@ class LiepinSiteAdapter:
     def _click_liepin_search_button(self, state_text: str) -> None:
         ref = extract_liepin_search_button_ref(state_text)
         if ref is None:
-            self.click(target="搜索")
-            return
+            raise OpenCliBrowserError("liepin_opencli_search_not_ready")
         if not _is_safe_page_id(ref):
             raise OpenCliBrowserError("liepin_opencli_forbidden_command")
         self._run_opencli_call(lambda: self._automation.click_ref(ref))
