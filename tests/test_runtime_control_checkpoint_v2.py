@@ -7,6 +7,7 @@ import sqlite3
 import pytest
 
 import seektalent_runtime_control.store as store_module
+import seektalent_runtime_control.needs_attention as needs_attention_module
 import seektalent.runtime.finalize_runtime as finalize_runtime
 import seektalent.runtime.orchestrator as orchestrator_module
 import seektalent.runtime.controller_runtime as controller_runtime
@@ -26,6 +27,7 @@ from seektalent_runtime_control.checkpoint_v2 import (
     checkpoint_projection,
 )
 from seektalent_runtime_control.errors import RuntimeControlError
+from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
 from seektalent_runtime_control.models import RuntimeCheckpoint
 from seektalent_runtime_control.checkpoint_recovery import (
     RuntimeCheckpointLoadFailure,
@@ -472,14 +474,9 @@ def test_paused_run_keeps_recoverable_v2_continuation(tmp_path) -> None:
     )
 
 
-@pytest.mark.parametrize(
-    "safe_boundary",
-    ["after_source_result_commit", "after_round_controller"],
-)
 def test_workflow_runtime_resume_does_not_replay_committed_round(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,
-    safe_boundary: str,
 ) -> None:
     state = _state_with_round_and_finalization()
     state.finalization_revisions = []
@@ -544,7 +541,7 @@ def test_workflow_runtime_resume_does_not_replay_committed_round(
                 notes=state.input_truth.notes,
                 source_kinds=(),
                 resume_checkpoint=_resume_checkpoint_payload(
-                    safe_boundary=safe_boundary,
+                    safe_boundary="after_round_controller",
                     next_phase="rounds",
                 ),
                 resume_run_state=state.model_dump(mode="json"),
@@ -555,6 +552,34 @@ def test_workflow_runtime_resume_does_not_replay_committed_round(
         "candidate_ids": ["resume-1"],
         "rounds_executed": 1,
     }
+
+
+def test_after_source_result_commit_is_not_recoverable_without_mid_round_cursor(
+    tmp_path,
+) -> None:
+    store = _seed_running_store(tmp_path)
+    checkpoint = store.write_checkpoint_v2(
+        checkpoint_id="checkpoint-source-result",
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-1",
+        attempt_no=1,
+        stage="round",
+        round_no=1,
+        safe_boundary="after_source_result_commit",
+        accepted_requirement_revision_id="approved-1",
+        source_ids=["liepin"],
+        projection=checkpoint_projection(_state_with_round_and_finalization()),
+        detail_claim_revision=0,
+        detail_claim_hash=None,
+        created_at="2026-07-28T00:00:02.000000Z",
+    )
+
+    assert store.get_latest_recoverable_checkpoint(
+        runtime_run_id="runtime_run_1"
+    ) == RuntimeCheckpointLoadFailure(
+        checkpoint_id=checkpoint.checkpoint_id,
+        reason_code="runtime_checkpoint_safe_boundary_invalid",
+    )
 
 
 def test_workflow_runtime_before_finalization_resumes_without_round_replay(
@@ -612,57 +637,86 @@ def test_workflow_runtime_before_finalization_resumes_without_round_replay(
     assert calls == {"rounds": 0, "finalization": 1}
 
 
-def test_workflow_runtime_after_finalization_fails_closed_without_replay(
+def test_executor_settles_after_finalization_commit_without_runtime_replay(
     tmp_path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    store = _seed_running_store(tmp_path)
     state = _state_with_round_and_finalization()
-    runtime = orchestrator_module.WorkflowRuntime(
-        make_settings(
-            runs_dir=str(tmp_path / "runs"),
-            mock_cts=True,
-            provider_name="cts",
-            min_rounds=1,
-            max_rounds=1,
+    checkpoint = store.write_checkpoint_v2(
+        checkpoint_id="checkpoint-finalization-committed",
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-1",
+        attempt_no=1,
+        stage="finalization",
+        round_no=None,
+        safe_boundary="after_finalization_commit",
+        accepted_requirement_revision_id="approved-1",
+        source_ids=["liepin"],
+        projection=checkpoint_projection(state),
+        detail_claim_revision=0,
+        detail_claim_hash=None,
+        created_at="2026-07-28T00:00:02.000000Z",
+        continuation_cursor={
+            "nextPhase": "complete",
+            "completedRounds": 1,
+            "stopReason": "max_rounds_reached",
+        },
+    )
+    assert store.get_latest_recoverable_checkpoint(
+        runtime_run_id="runtime_run_1"
+    ) == checkpoint
+
+    class RuntimeMustNotRun:
+        async def run_async(self, **kwargs: object) -> object:
+            raise AssertionError("committed finalization replayed")
+
+    executor = WorkflowRuntimeExecutor(
+        store=store,
+        runtime_factory=RuntimeMustNotRun,
+        now=lambda: "2026-07-28T00:00:03.000000Z",
+    )
+    with store._connect() as conn:
+        conn.execute(
+            """
+            UPDATE runtime_control_runs
+            SET status = 'resume_requested'
+            WHERE runtime_run_id = 'runtime_run_1'
+            """
+        )
+        snapshot = conn.execute(
+            """
+            SELECT snapshot_json
+            FROM runtime_control_snapshots
+            WHERE runtime_run_id = 'runtime_run_1'
+            """
+        ).fetchone()
+        snapshot_payload = json.loads(snapshot["snapshot_json"])
+        snapshot_payload["claimReason"] = "resume_requested"
+        conn.execute(
+            """
+            UPDATE runtime_control_snapshots
+            SET snapshot_json = ?
+            WHERE runtime_run_id = 'runtime_run_1'
+            """,
+            (json.dumps(snapshot_payload),),
+        )
+
+    settled = asyncio.run(
+        executor.execute_claimed_run(
+            runtime_run_id="runtime_run_1",
+            executor_id="executor-1",
+            attempt_no=1,
         )
     )
-    calls = {"rounds": 0, "finalization": 0}
-    monkeypatch.setattr(runtime, "_require_live_llm_config", lambda: None)
 
-    async def fail_rounds(**kwargs: object) -> object:
-        calls["rounds"] += 1
-        raise AssertionError("round replayed")
-
-    async def fail_finalization(**kwargs: object) -> object:
-        calls["finalization"] += 1
-        raise AssertionError("finalization replayed")
-
-    monkeypatch.setattr(runtime, "_run_rounds", fail_rounds)
-    monkeypatch.setattr(
-        finalize_runtime,
-        "run_deterministic_finalization_stage",
-        fail_finalization,
+    assert settled.status == "completed"
+    metrics = store.checkpoint_storage_metrics(
+        runtime_run_id="runtime_run_1"
     )
-
-    with pytest.raises(
-        RuntimeError,
-        match="runtime_checkpoint_safe_boundary_invalid",
-    ):
-        asyncio.run(
-            runtime.run_async(
-                job_title=state.input_truth.job_title,
-                jd=state.input_truth.jd,
-                notes=state.input_truth.notes,
-                source_kinds=(),
-                resume_checkpoint=_resume_checkpoint_payload(
-                    safe_boundary="after_finalization_commit",
-                    next_phase="complete",
-                ),
-                resume_run_state=state.model_dump(mode="json"),
-            )
-        )
-
-    assert calls == {"rounds": 0, "finalization": 0}
+    assert metrics["checkpointCount"] == 1
+    assert store.get_latest_checkpoint(
+        runtime_run_id="runtime_run_1"
+    ).is_final_manifest
 
 
 def test_source_result_commit_advances_durable_revision_without_candidate_change(
@@ -806,7 +860,7 @@ def test_terminal_compaction_is_idempotent_and_retains_one_manifest(tmp_path) ->
     assert [row[0] for row in rows] == [1]
 
 
-def test_terminal_compaction_rehomes_needs_attention_action_evidence(
+def test_terminal_compaction_archives_immutable_action_checkpoint_evidence(
     tmp_path,
 ) -> None:
     from tests.test_runtime_control_needs_attention import (
@@ -848,11 +902,79 @@ def test_terminal_compaction_rehomes_needs_attention_action_evidence(
     assert second == first
     [action] = store.list_user_actions(runtime_run_id=RUN_ID)
     assert action.action_id == ACTION_ID
-    assert action.checkpoint_id == first.manifest_checkpoint_id
+    assert action.checkpoint_id == checkpoint.checkpoint_id
+    with store._connect() as conn:
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="runtime_action_checkpoint_evidence_immutable",
+        ):
+            conn.execute(
+                """
+                UPDATE runtime_control_action_checkpoint_evidence
+                SET evidence_json = '{"valid":"shape"}'
+                WHERE action_id = ?
+                """,
+                (ACTION_ID,),
+            )
+        with pytest.raises(
+            sqlite3.IntegrityError,
+            match="runtime_action_checkpoint_evidence_delete_forbidden",
+        ):
+            conn.execute(
+                """
+                DELETE FROM runtime_control_action_checkpoint_evidence
+                WHERE action_id = ?
+                """,
+                (ACTION_ID,),
+            )
+        conn.execute(
+            """
+            DROP TRIGGER
+            runtime_action_checkpoint_evidence_update_forbidden
+            """
+        )
+        evidence = conn.execute(
+            """
+            SELECT evidence_json
+            FROM runtime_control_action_checkpoint_evidence
+            WHERE action_id = ?
+            """,
+            (ACTION_ID,),
+        ).fetchone()
+        evidence_payload = json.loads(evidence["evidence_json"])
+        evidence_payload["checkpoint"]["stage"] = "tampered_but_valid"
+        conn.execute(
+            """
+            UPDATE runtime_control_action_checkpoint_evidence
+            SET evidence_json = ?
+            WHERE action_id = ?
+            """,
+            (json.dumps(evidence_payload), ACTION_ID),
+        )
+        action_row = conn.execute(
+            """
+            SELECT *
+            FROM runtime_control_user_actions
+            WHERE action_id = ?
+            """,
+            (ACTION_ID,),
+        ).fetchone()
+        manifest = store.get_latest_checkpoint(runtime_run_id=RUN_ID)
+        assert manifest is not None
+        with pytest.raises(
+            RuntimeControlError,
+            match="runtime_needs_attention_checkpoint_mismatch",
+        ):
+            needs_attention_module._require_checkpoint_binding(
+                conn,
+                action_row,
+                manifest,
+            )
 
 
 def test_action_bound_v1_latest_migrates_and_keeps_action_verifiable(
     tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from tests.test_runtime_control_needs_attention import (
         ACTION_ID,
@@ -865,30 +987,155 @@ def test_action_bound_v1_latest_migrates_and_keeps_action_verifiable(
         _store,
     )
 
-    store = _store(tmp_path)
-    checkpoint = _checkpoint()
-    store.write_checkpoint_for_recovery(checkpoint)
-    store.commit_needs_attention(
+    template_path = tmp_path / "template"
+    template_path.mkdir()
+    template_store = _store(template_path)
+    template_checkpoint = _checkpoint()
+    template_store.write_checkpoint_for_recovery(template_checkpoint)
+    template_store.commit_needs_attention(
         runtime_run_id=RUN_ID,
         action_id=ACTION_ID,
-        admission=_entry_admission(store, checkpoint),
-        checkpoint=checkpoint,
+        admission=_entry_admission(
+            template_store,
+            template_checkpoint,
+        ),
+        checkpoint=template_checkpoint,
         envelope=_envelope(action=_action()),
-        expected_state_revision=store.get_run(RUN_ID).state_revision,
+        expected_state_revision=template_store.get_run(
+            RUN_ID
+        ).state_revision,
         entered_at=ENTERED_AT,
     )
+    with template_store._connect() as conn:
+        action_template = conn.execute(
+            """
+            SELECT *
+            FROM runtime_control_user_actions
+            WHERE action_id = ?
+            """,
+            (ACTION_ID,),
+        ).fetchone()
+
+    raw_path = tmp_path / "raw-v15"
+    raw_path.mkdir()
+    store = _store(raw_path)
+    legacy_checkpoint = _checkpoint().model_copy(deep=True)
     with store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO runtime_control_checkpoints (
+                checkpoint_id, runtime_run_id, stage, round_no,
+                safe_boundary, run_state_json, source_plan_json,
+                pending_commands_json, artifact_manifest_ref,
+                schema_version, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                legacy_checkpoint.checkpoint_id,
+                legacy_checkpoint.runtime_run_id,
+                legacy_checkpoint.stage,
+                legacy_checkpoint.round_no,
+                legacy_checkpoint.safe_boundary,
+                json.dumps(legacy_checkpoint.run_state),
+                json.dumps(legacy_checkpoint.source_plan),
+                json.dumps(legacy_checkpoint.pending_commands),
+                legacy_checkpoint.artifact_manifest_ref,
+                "runtime-control-checkpoint/v1",
+                legacy_checkpoint.created_at,
+            ),
+        )
+        action_values = dict(action_template)
+        action_values["checkpoint_hash"] = (
+            needs_attention_module._checkpoint_hash(legacy_checkpoint)
+        )
+        action_values["candidate_truth_hash"] = (
+            needs_attention_module._candidate_truth_hash(
+                legacy_checkpoint
+            )
+        )
+        columns = list(action_values)
+        conn.execute(
+            f"""
+            INSERT INTO runtime_control_user_actions (
+                {", ".join(columns)}
+            )
+            VALUES ({", ".join("?" for _ in columns)})
+            """,
+            tuple(action_values[column] for column in columns),
+        )
+        conn.execute(
+            """
+            UPDATE runtime_control_runs
+            SET latest_checkpoint_id = ?
+            WHERE runtime_run_id = ?
+            """,
+            (legacy_checkpoint.checkpoint_id, RUN_ID),
+        )
         conn.execute("PRAGMA user_version = 15")
 
     migrated = store_module.RuntimeControlStore(store.path)
+    original_migration = store_module._migrate_v15_to_v16
+
+    def interrupt_after_migration(conn: sqlite3.Connection) -> None:
+        original_migration(conn)
+        raise sqlite3.OperationalError(
+            "fault_action_v1_migration_interrupted"
+        )
+
+    monkeypatch.setattr(
+        store_module,
+        "_migrate_v15_to_v16",
+        interrupt_after_migration,
+    )
+    with pytest.raises(
+        sqlite3.OperationalError,
+        match="fault_action_v1_migration_interrupted",
+    ):
+        migrated.initialize()
+    with sqlite3.connect(store.path) as conn:
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
+        assert conn.execute(
+            """
+            SELECT schema_version
+            FROM runtime_control_checkpoints
+            WHERE checkpoint_id = ?
+            """,
+            (legacy_checkpoint.checkpoint_id,),
+        ).fetchone()[0] == "runtime-control-checkpoint/v1"
+        assert conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM runtime_control_action_checkpoint_evidence
+            """
+        ).fetchone()[0] == 0
+
+    monkeypatch.setattr(
+        store_module,
+        "_migrate_v15_to_v16",
+        original_migration,
+    )
     migrated.initialize()
     migrated.initialize()
 
     latest = migrated.get_latest_checkpoint(runtime_run_id=RUN_ID)
     assert latest is not None
     assert latest.schema_version == RUNTIME_CHECKPOINT_SCHEMA_V2
-    [action] = migrated.list_user_actions(runtime_run_id=RUN_ID)
-    assert action.action_id == ACTION_ID
+    with migrated._connect() as conn:
+        action_row = conn.execute(
+            """
+            SELECT *
+            FROM runtime_control_user_actions
+            WHERE action_id = ?
+            """,
+            (ACTION_ID,),
+        ).fetchone()
+        assert action_row["action_id"] == ACTION_ID
+        needs_attention_module._require_checkpoint_binding(
+            conn,
+            action_row,
+            latest,
+        )
 
 
 def test_startup_finishes_existing_manifest_action_compaction(
@@ -955,7 +1202,25 @@ def test_startup_finishes_existing_manifest_action_compaction(
     metrics = restarted.checkpoint_storage_metrics(runtime_run_id=RUN_ID)
     assert metrics["checkpointCount"] == 1
     [action] = restarted.list_user_actions(runtime_run_id=RUN_ID)
-    assert action.checkpoint_id == manifest_id
+    assert action.checkpoint_id == checkpoint.checkpoint_id
+    with restarted._connect() as conn:
+        action_row = conn.execute(
+            """
+            SELECT *
+            FROM runtime_control_user_actions
+            WHERE action_id = ?
+            """,
+            (ACTION_ID,),
+        ).fetchone()
+        manifest = restarted.get_latest_checkpoint(
+            runtime_run_id=RUN_ID
+        )
+        assert manifest is not None
+        needs_attention_module._require_checkpoint_binding(
+            conn,
+            action_row,
+            manifest,
+        )
 
 
 def test_finalization_revision_is_immutable_until_manifest_rehome(
@@ -1183,15 +1448,11 @@ def test_representative_twenty_candidate_run_stays_within_checkpoint_budgets(
     }
     projection = checkpoint_projection(payload)
     boundaries = [
-        boundary
+        "after_round_controller"
         for _round in range(5)
-        for boundary in (
-            "after_source_result_commit",
-            "after_round_controller",
-        )
     ] + ["before_finalization", "after_finalization_commit"]
     for index, boundary in enumerate(boundaries, start=1):
-        round_no = min((index + 1) // 2, 5) if index <= 10 else None
+        round_no = index if index <= 5 else None
         store.write_checkpoint_v2(
             checkpoint_id=f"checkpoint-budget-{index}",
             runtime_run_id="runtime_run_1",

@@ -2883,45 +2883,33 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
                             (runtime_run_id, action["checkpoint_id"]),
                         ).fetchone()
                         if action_checkpoint_row is None:
+                            archived = conn.execute(
+                                """
+                                SELECT 1
+                                FROM runtime_control_action_checkpoint_evidence
+                                WHERE action_id = ?
+                                  AND runtime_run_id = ?
+                                  AND original_checkpoint_id = ?
+                                """,
+                                (
+                                    action["action_id"],
+                                    runtime_run_id,
+                                    action["checkpoint_id"],
+                                ),
+                            ).fetchone()
+                            if archived is not None:
+                                continue
                             raise RuntimeControlError(
                                 "runtime_checkpoint_compaction_action_source_missing"
                             )
                         action_checkpoint = _checkpoint_from_row(
                             action_checkpoint_row
                         )
-                        conn.execute(
-                            """
-                            INSERT INTO runtime_control_action_checkpoint_evidence (
-                                action_id, runtime_run_id,
-                                original_checkpoint_id, evidence_json,
-                                checkpoint_hash, candidate_truth_hash,
-                                archived_at
-                            )
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                            ON CONFLICT(action_id) DO NOTHING
-                            """,
-                            (
-                                action["action_id"],
-                                runtime_run_id,
-                                action_checkpoint.checkpoint_id,
-                                _json(
-                                    {
-                                        "schemaVersion": (
-                                            action_checkpoint.schema_version
-                                        ),
-                                        "stage": action_checkpoint.stage,
-                                        "safeBoundary": (
-                                            action_checkpoint.safe_boundary
-                                        ),
-                                        "stateRevision": (
-                                            action_checkpoint.state_revision
-                                        ),
-                                    }
-                                ),
-                                action["checkpoint_hash"],
-                                action["candidate_truth_hash"],
-                                source.created_at,
-                            ),
+                        _archive_action_checkpoint_evidence(
+                            conn,
+                            action=action,
+                            checkpoint=action_checkpoint,
+                            archived_at=source.created_at,
                         )
                     conn.execute(
                         """
@@ -2972,29 +2960,10 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
                         }
                     )
                     if action_rows:
-                        trigger_statements = {
-                            trigger_name: next(
-                                statement
-                                for statement in _needs_attention.NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS
-                                if f"CREATE TRIGGER {trigger_name}" in statement
-                            )
-                            for trigger_name in (
-                                "runtime_user_actions_immutable_binding",
-                                "runtime_user_actions_one_way_resolution",
-                            )
-                        }
-                        for trigger_name in trigger_statements:
-                            conn.execute(f"DROP TRIGGER {trigger_name}")
                         conn.execute(
-                            """
-                            UPDATE runtime_control_user_actions
-                            SET checkpoint_id = ?
-                            WHERE runtime_run_id = ?
-                            """,
-                            (manifest_id, runtime_run_id),
+                            "DROP TRIGGER "
+                            "runtime_action_checkpoints_delete_forbidden"
                         )
-                        for statement in trigger_statements.values():
-                            conn.execute(statement)
                     conn.execute(
                         """
                         DELETE FROM runtime_control_checkpoints
@@ -3003,6 +2972,12 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
                         (runtime_run_id,),
                     )
                     write_checkpoint_participant(conn, manifest)
+                    if action_rows:
+                        conn.execute(
+                            _needs_attention_trigger_statement(
+                                "runtime_action_checkpoints_delete_forbidden"
+                            )
+                        )
                     conn.execute(
                         """
                         UPDATE runtime_control_runs
@@ -3039,71 +3014,39 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
                             (runtime_run_id, action["checkpoint_id"]),
                         ).fetchone()
                         if action_checkpoint_row is None:
+                            archived = conn.execute(
+                                """
+                                SELECT 1
+                                FROM runtime_control_action_checkpoint_evidence
+                                WHERE action_id = ?
+                                  AND runtime_run_id = ?
+                                  AND original_checkpoint_id = ?
+                                """,
+                                (
+                                    action["action_id"],
+                                    runtime_run_id,
+                                    action["checkpoint_id"],
+                                ),
+                            ).fetchone()
+                            if archived is not None:
+                                continue
                             raise RuntimeControlError(
                                 "runtime_checkpoint_compaction_action_source_missing"
                             )
                         action_checkpoint = _checkpoint_from_row(
                             action_checkpoint_row
                         )
-                        conn.execute(
-                            """
-                            INSERT INTO runtime_control_action_checkpoint_evidence (
-                                action_id, runtime_run_id,
-                                original_checkpoint_id, evidence_json,
-                                checkpoint_hash, candidate_truth_hash,
-                                archived_at
-                            )
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
-                            ON CONFLICT(action_id) DO NOTHING
-                            """,
-                            (
-                                action["action_id"],
-                                runtime_run_id,
-                                action_checkpoint.checkpoint_id,
-                                _json(
-                                    {
-                                        "schemaVersion": (
-                                            action_checkpoint.schema_version
-                                        ),
-                                        "stage": action_checkpoint.stage,
-                                        "safeBoundary": (
-                                            action_checkpoint.safe_boundary
-                                        ),
-                                        "stateRevision": (
-                                            action_checkpoint.state_revision
-                                        ),
-                                    }
-                                ),
-                                action["checkpoint_hash"],
-                                action["candidate_truth_hash"],
-                                existing["created_at"],
-                            ),
+                        _archive_action_checkpoint_evidence(
+                            conn,
+                            action=action,
+                            checkpoint=action_checkpoint,
+                            archived_at=str(existing["created_at"]),
                         )
                     if action_rows:
-                        trigger_statements = {
-                            trigger_name: next(
-                                statement
-                                for statement in _needs_attention.NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS
-                                if f"CREATE TRIGGER {trigger_name}" in statement
-                            )
-                            for trigger_name in (
-                                "runtime_user_actions_immutable_binding",
-                                "runtime_user_actions_one_way_resolution",
-                            )
-                        }
-                        for trigger_name in trigger_statements:
-                            conn.execute(f"DROP TRIGGER {trigger_name}")
                         conn.execute(
-                            """
-                            UPDATE runtime_control_user_actions
-                            SET checkpoint_id = ?
-                            WHERE runtime_run_id = ?
-                              AND checkpoint_id <> ?
-                            """,
-                            (manifest_id, runtime_run_id, manifest_id),
+                            "DROP TRIGGER "
+                            "runtime_action_checkpoints_delete_forbidden"
                         )
-                        for statement in trigger_statements.values():
-                            conn.execute(statement)
                     conn.execute(
                         """
                         DELETE FROM runtime_control_checkpoints
@@ -3111,6 +3054,12 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
                         """,
                         (runtime_run_id, manifest_id),
                     )
+                    if action_rows:
+                        conn.execute(
+                            _needs_attention_trigger_statement(
+                                "runtime_action_checkpoints_delete_forbidden"
+                            )
+                        )
                     conn.execute(
                         """
                         UPDATE runtime_control_candidate_finalization_revisions
@@ -4385,6 +4334,7 @@ def _create_schema(conn: sqlite3.Connection) -> None:
           runtime_run_id TEXT NOT NULL,
           original_checkpoint_id TEXT NOT NULL,
           evidence_json TEXT NOT NULL,
+          evidence_digest TEXT NOT NULL,
           checkpoint_hash TEXT NOT NULL,
           candidate_truth_hash TEXT NOT NULL,
           archived_at TEXT NOT NULL
@@ -4494,6 +4444,99 @@ def _create_schema(conn: sqlite3.Connection) -> None:
           ON runtime_control_projection_marks(runtime_run_id, target_kind, projector, status);
         CREATE INDEX IF NOT EXISTS idx_runtime_artifact_deletions_status
           ON runtime_control_artifact_deletions(status, requested_at);
+        """
+    )
+    _ensure_action_checkpoint_evidence_schema(conn)
+
+
+def _ensure_action_checkpoint_evidence_schema(
+    conn: sqlite3.Connection,
+) -> None:
+    columns = {
+        str(row[1])
+        for row in conn.execute(
+            """
+            PRAGMA table_info(
+                runtime_control_action_checkpoint_evidence
+            )
+            """
+        ).fetchall()
+    }
+    if "evidence_digest" not in columns:
+        conn.execute(
+            """
+            ALTER TABLE runtime_control_action_checkpoint_evidence
+            ADD COLUMN evidence_digest TEXT NOT NULL DEFAULT ''
+            """
+        )
+    rows = (
+        conn.execute(
+            """
+            SELECT evidence.*
+            FROM runtime_control_action_checkpoint_evidence AS evidence
+            JOIN runtime_control_user_actions AS action
+              ON action.action_id = evidence.action_id
+             AND action.runtime_run_id = evidence.runtime_run_id
+            WHERE evidence.evidence_digest = ''
+            """
+        ).fetchall()
+        if _table_exists(conn, "runtime_control_user_actions")
+        else []
+    )
+    for row in rows:
+        legacy_metadata = _strict_json_object(row["evidence_json"])
+        metadata = {
+            "schemaVersion": legacy_metadata.get("schemaVersion"),
+            "stage": legacy_metadata.get("stage"),
+            "safeBoundary": legacy_metadata.get("safeBoundary"),
+            "stateRevision": legacy_metadata.get("stateRevision"),
+        }
+        evidence = _needs_attention.action_checkpoint_evidence_payload(
+            action_id=str(row["action_id"]),
+            runtime_run_id=str(row["runtime_run_id"]),
+            original_checkpoint_id=str(row["original_checkpoint_id"]),
+            checkpoint_hash=str(row["checkpoint_hash"]),
+            candidate_truth_hash=str(row["candidate_truth_hash"]),
+            checkpoint_metadata=metadata,
+        )
+        conn.execute(
+            """
+            UPDATE runtime_control_action_checkpoint_evidence
+            SET evidence_json = ?, evidence_digest = ?
+            WHERE action_id = ?
+            """,
+            (
+                _json(evidence),
+                _needs_attention.action_checkpoint_evidence_digest(
+                    evidence
+                ),
+                row["action_id"],
+            ),
+        )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS
+        runtime_action_checkpoint_evidence_update_forbidden
+        BEFORE UPDATE ON runtime_control_action_checkpoint_evidence
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'runtime_action_checkpoint_evidence_immutable'
+          );
+        END
+        """
+    )
+    conn.execute(
+        """
+        CREATE TRIGGER IF NOT EXISTS
+        runtime_action_checkpoint_evidence_delete_forbidden
+        BEFORE DELETE ON runtime_control_action_checkpoint_evidence
+        BEGIN
+          SELECT RAISE(
+            ABORT,
+            'runtime_action_checkpoint_evidence_delete_forbidden'
+          );
+        END
         """
     )
 
@@ -4616,6 +4659,86 @@ def _migrate_v9_to_v10(conn: sqlite3.Connection) -> None:
         conn.execute(statement)
 
 
+def _needs_attention_trigger_statement(trigger_name: str) -> str:
+    return next(
+        statement
+        for statement in (
+            _needs_attention.NEEDS_ATTENTION_V15_SCHEMA_STATEMENTS
+        )
+        if f"CREATE TRIGGER {trigger_name}" in statement
+    )
+
+
+def _archive_action_checkpoint_evidence(
+    conn: sqlite3.Connection,
+    *,
+    action: sqlite3.Row,
+    checkpoint: RuntimeCheckpoint,
+    archived_at: str,
+) -> None:
+    metadata = {
+        "schemaVersion": checkpoint.schema_version,
+        "stage": checkpoint.stage,
+        "safeBoundary": checkpoint.safe_boundary,
+        "stateRevision": checkpoint.state_revision,
+    }
+    evidence = _needs_attention.action_checkpoint_evidence_payload(
+        action_id=str(action["action_id"]),
+        runtime_run_id=str(action["runtime_run_id"]),
+        original_checkpoint_id=checkpoint.checkpoint_id,
+        checkpoint_hash=str(action["checkpoint_hash"]),
+        candidate_truth_hash=str(action["candidate_truth_hash"]),
+        checkpoint_metadata=metadata,
+    )
+    values = (
+        action["action_id"],
+        action["runtime_run_id"],
+        checkpoint.checkpoint_id,
+        _json(evidence),
+        _needs_attention.action_checkpoint_evidence_digest(evidence),
+        action["checkpoint_hash"],
+        action["candidate_truth_hash"],
+        archived_at,
+    )
+    existing = conn.execute(
+        """
+        SELECT *
+        FROM runtime_control_action_checkpoint_evidence
+        WHERE action_id = ?
+        """,
+        (action["action_id"],),
+    ).fetchone()
+    if existing is None:
+        conn.execute(
+            """
+            INSERT INTO runtime_control_action_checkpoint_evidence (
+                action_id, runtime_run_id, original_checkpoint_id,
+                evidence_json, evidence_digest, checkpoint_hash,
+                candidate_truth_hash, archived_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            values,
+        )
+        return
+    if tuple(
+        existing[name]
+        for name in (
+            "action_id",
+            "runtime_run_id",
+            "original_checkpoint_id",
+            "evidence_json",
+            "evidence_digest",
+            "checkpoint_hash",
+            "candidate_truth_hash",
+            "archived_at",
+        )
+    ) != values:
+        raise RuntimeControlError(
+            "runtime_action_checkpoint_evidence_conflict"
+        )
+
+
 def _migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
     _needs_attention.validate_needs_attention_schema(conn)
     rows = conn.execute(
@@ -4681,32 +4804,11 @@ def _migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
             (row["runtime_run_id"], row["checkpoint_id"]),
         ).fetchall()
         for action in action_rows:
-            conn.execute(
-                """
-                INSERT INTO runtime_control_action_checkpoint_evidence (
-                    action_id, runtime_run_id, original_checkpoint_id,
-                    evidence_json, checkpoint_hash, candidate_truth_hash,
-                    archived_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(action_id) DO NOTHING
-                """,
-                (
-                    action["action_id"],
-                    row["runtime_run_id"],
-                    row["checkpoint_id"],
-                    _json(
-                        {
-                            "schemaVersion": RUNTIME_CHECKPOINT_SCHEMA_V1,
-                            "stage": row["stage"],
-                            "safeBoundary": row["safe_boundary"],
-                            "stateRevision": int(row["state_revision"]),
-                        }
-                    ),
-                    action["checkpoint_hash"],
-                    action["candidate_truth_hash"],
-                    row["created_at"],
-                ),
+            _archive_action_checkpoint_evidence(
+                conn,
+                action=action,
+                checkpoint=_checkpoint_from_row(row),
+                archived_at=str(row["created_at"]),
             )
         run_state = _strict_json_object(row["run_state_json"])
         projection = legacy_checkpoint_projection(run_state)
@@ -4776,6 +4878,13 @@ def _migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
                 supplied=None,
             ),
         }
+        action_checkpoint_trigger = (
+            "runtime_action_checkpoints_update_forbidden"
+        )
+        if action_rows:
+            conn.execute(
+                f"DROP TRIGGER {action_checkpoint_trigger}"
+            )
         conn.execute(
             """
             UPDATE runtime_control_checkpoints
@@ -4812,6 +4921,12 @@ def _migrate_v15_to_v16(conn: sqlite3.Connection) -> None:
                 row["checkpoint_id"],
             ),
         )
+        if action_rows:
+            conn.execute(
+                _needs_attention_trigger_statement(
+                    action_checkpoint_trigger
+                )
+            )
 
 
 def _upgrade_legacy_checkpoint_in_transaction(

@@ -236,6 +236,16 @@ class WorkflowRuntimeExecutor:
             attempt_no=attempt_no,
             claim_reason=claim_reason,
         )
+        if (
+            resume_checkpoint is not None
+            and resume_checkpoint.safe_boundary
+            == "after_finalization_commit"
+        ):
+            return self._settle_completed_run(
+                runtime_run_id=run.runtime_run_id,
+                executor_id=executor_id,
+                attempt_no=attempt_no,
+            )
         detail_claim_revision, detail_claim_payload_hash = (
             self.store.get_detail_claim_revision(runtime_run_id=run.runtime_run_id)
         )
@@ -440,10 +450,23 @@ class WorkflowRuntimeExecutor:
                 )
             raise
 
+        return self._settle_completed_run(
+            runtime_run_id=run.runtime_run_id,
+            executor_id=executor_id,
+            attempt_no=attempt_no,
+        )
+
+    def _settle_completed_run(
+        self,
+        *,
+        runtime_run_id: str,
+        executor_id: str,
+        attempt_no: int,
+    ) -> RuntimeRunRecord:
         completed_at = self.now()
         self.store.append_executor_event(
             _event(
-                runtime_run_id=run.runtime_run_id,
+                runtime_run_id=runtime_run_id,
                 event_type="runtime_run_completed",
                 stage="finalization",
                 status="completed",
@@ -457,16 +480,16 @@ class WorkflowRuntimeExecutor:
             completed_at=completed_at,
         )
         self.store.release_executor_lease(
-            runtime_run_id=run.runtime_run_id,
+            runtime_run_id=runtime_run_id,
             executor_id=executor_id,
             attempt_no=attempt_no,
             released_at=self.now(),
         )
-        if self.store.get_run(run.runtime_run_id).latest_checkpoint_id:
+        if self.store.get_run(runtime_run_id).latest_checkpoint_id:
             self.store.compact_terminal_checkpoints(
-                runtime_run_id=run.runtime_run_id
+                runtime_run_id=runtime_run_id
             )
-        return self.store.get_run(run.runtime_run_id)
+        return self.store.get_run(runtime_run_id)
 
     def _source_context(self, source_ids: Sequence[str]) -> SourceContext | None:
         if self.source_context_provider is not None:

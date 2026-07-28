@@ -1307,7 +1307,6 @@ class WorkflowRuntime:
         if not isinstance(stop_reason, str) or not stop_reason.strip():
             stop_reason = "max_rounds_reached"
         expected_phase = {
-            "after_source_result_commit": "rounds",
             "after_round_controller": "rounds",
             "before_finalization": "finalization",
             "after_finalization_commit": "complete",
@@ -3028,14 +3027,6 @@ class WorkflowRuntime:
                 "completedRounds": round_no,
                 "stopReason": "max_rounds_reached",
             }
-            self._refresh_runtime_candidate_checkpoint(
-                runtime_checkpoint_callback=runtime_checkpoint_callback,
-                tracer=tracer,
-                run_state=run_state,
-                safe_boundary="after_source_result_commit",
-                round_no=round_no,
-                continuation_cursor=continuation_cursor,
-            )
             self._refresh_runtime_candidate_checkpoint(
                 runtime_checkpoint_callback=runtime_checkpoint_callback,
                 tracer=tracer,

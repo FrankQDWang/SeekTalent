@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from hashlib import sha256
 import json
@@ -1542,17 +1542,48 @@ def _require_checkpoint_binding(
 ) -> None:
     archived = conn.execute(
         """
-        SELECT original_checkpoint_id, checkpoint_hash, candidate_truth_hash
+        SELECT *
         FROM runtime_control_action_checkpoint_evidence
         WHERE action_id = ? AND runtime_run_id = ?
         """,
         (action_row["action_id"], action_row["runtime_run_id"]),
     ).fetchone()
     if archived is not None:
+        try:
+            evidence = _strict_evidence_json(archived["evidence_json"])
+            expected = action_checkpoint_evidence_payload(
+                action_id=str(action_row["action_id"]),
+                runtime_run_id=str(action_row["runtime_run_id"]),
+                original_checkpoint_id=str(
+                    archived["original_checkpoint_id"]
+                ),
+                checkpoint_hash=str(archived["checkpoint_hash"]),
+                candidate_truth_hash=str(
+                    archived["candidate_truth_hash"]
+                ),
+                checkpoint_metadata=_strict_evidence_metadata(
+                    evidence
+                ),
+            )
+        except (json.JSONDecodeError, TypeError, ValueError):
+            raise RuntimeControlError(
+                "runtime_needs_attention_checkpoint_mismatch"
+            ) from None
         if (
-            archived["checkpoint_hash"] != action_row["checkpoint_hash"]
+            evidence != expected
+            or archived["evidence_digest"]
+            != action_checkpoint_evidence_digest(expected)
+            or archived["original_checkpoint_id"]
+            != action_row["checkpoint_id"]
+            or archived["checkpoint_hash"]
+            != action_row["checkpoint_hash"]
             or archived["candidate_truth_hash"]
             != action_row["candidate_truth_hash"]
+            or (
+                checkpoint.checkpoint_id
+                != action_row["checkpoint_id"]
+                and not checkpoint.is_final_manifest
+            )
         ):
             raise RuntimeControlError(
                 "runtime_needs_attention_checkpoint_mismatch"
@@ -1587,6 +1618,29 @@ def _checkpoint_from_action(
         """,
         (action_row["checkpoint_id"], action_row["runtime_run_id"]),
     ).fetchone()
+    if row is None:
+        evidence = conn.execute(
+            """
+            SELECT 1
+            FROM runtime_control_action_checkpoint_evidence
+            WHERE action_id = ? AND runtime_run_id = ?
+              AND original_checkpoint_id = ?
+            """,
+            (
+                action_row["action_id"],
+                action_row["runtime_run_id"],
+                action_row["checkpoint_id"],
+            ),
+        ).fetchone()
+        if evidence is not None:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM runtime_control_checkpoints
+                WHERE runtime_run_id = ? AND is_final_manifest = 1
+                """,
+                (action_row["runtime_run_id"],),
+            ).fetchone()
     if row is None:
         raise RuntimeControlError(
             "runtime_needs_attention_checkpoint_mismatch"
@@ -1641,6 +1695,57 @@ def _require_no_reconcile_first(
 def _checkpoint_hash(checkpoint: RuntimeCheckpoint) -> str:
     payload = checkpoint.model_dump(mode="json")
     return sha256(_canonical_json(payload)).hexdigest()
+
+
+def action_checkpoint_evidence_payload(
+    *,
+    action_id: str,
+    runtime_run_id: str,
+    original_checkpoint_id: str,
+    checkpoint_hash: str,
+    candidate_truth_hash: str,
+    checkpoint_metadata: Mapping[str, object],
+) -> dict[str, object]:
+    return {
+        "schemaVersion": "runtime-action-checkpoint-evidence/v1",
+        "actionId": action_id,
+        "runtimeRunId": runtime_run_id,
+        "originalCheckpointId": original_checkpoint_id,
+        "checkpointHash": checkpoint_hash,
+        "candidateTruthHash": candidate_truth_hash,
+        "checkpoint": checkpoint_metadata,
+    }
+
+
+def action_checkpoint_evidence_digest(
+    evidence: dict[str, object],
+) -> str:
+    return sha256(_canonical_json(evidence)).hexdigest()
+
+
+def _strict_evidence_json(raw: object) -> dict[str, object]:
+    if not isinstance(raw, str):
+        raise TypeError("evidence_json must be text")
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict) or any(
+        not isinstance(key, str) for key in parsed
+    ):
+        raise ValueError("evidence_json must be an object")
+    return parsed
+
+
+def _strict_evidence_metadata(
+    evidence: dict[str, object],
+) -> dict[str, object]:
+    metadata = evidence.get("checkpoint")
+    if (
+        not isinstance(metadata, dict)
+        or any(not isinstance(key, str) for key in metadata)
+        or set(metadata)
+        != {"schemaVersion", "stage", "safeBoundary", "stateRevision"}
+    ):
+        raise ValueError("checkpoint evidence metadata is invalid")
+    return {str(key): value for key, value in metadata.items()}
 
 
 def _candidate_truth_hash(checkpoint: RuntimeCheckpoint) -> str:

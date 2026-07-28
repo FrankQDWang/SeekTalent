@@ -122,9 +122,29 @@ def _before_finalization_is_valid(
 
 
 def _after_finalization_is_valid(
+    checkpoint: RuntimeCheckpoint,
+    context: RuntimeCheckpointValidationContext,
+) -> bool:
+    finalization_revision = checkpoint.durable_refs.get(
+        "finalizationRevision"
+    )
+    return (
+        _checkpoint_matches_run(checkpoint, context)
+        and checkpoint.stage == "finalization"
+        and checkpoint.round_no is None
+        and isinstance(finalization_revision, int)
+        and not isinstance(finalization_revision, bool)
+        and finalization_revision > 0
+        and context.candidate_truth_valid
+        and _cursor_matches(checkpoint, next_phase="complete")
+    )
+
+
+def _after_source_result_is_valid(
     _checkpoint: RuntimeCheckpoint,
     _context: RuntimeCheckpointValidationContext,
 ) -> bool:
+    """Fail closed until a durable mid-round continuation cursor exists."""
     return False
 
 
@@ -142,7 +162,7 @@ def _paused_boundary_is_valid(
 SAFE_BOUNDARY_REGISTRY: dict[str, SafeBoundaryValidator] = {
     "before_source_dispatch": _before_source_dispatch_is_valid,
     "runtime_candidate_checkpoint": _runtime_candidate_checkpoint_is_valid,
-    "after_source_result_commit": _after_round_controller_is_valid,
+    "after_source_result_commit": _after_source_result_is_valid,
     "after_round_controller": _after_round_controller_is_valid,
     "before_finalization": _before_finalization_is_valid,
     "after_finalization_commit": _after_finalization_is_valid,
