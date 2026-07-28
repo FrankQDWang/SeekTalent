@@ -38,7 +38,7 @@ def test_workbench_reason_message_covers_search_and_results_readiness() -> None:
     )
     assert (
         cli._workbench_reason_message("liepin_opencli_search_not_ready")
-        == "猎聘页面响应超时，请稍后重试。"
+        == "猎聘页面当前不可操作，请切换到 Chrome 查看并处理。"
     )
     assert (
         cli._workbench_reason_message("liepin_opencli_results_not_ready")
