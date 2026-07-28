@@ -212,7 +212,7 @@ def _evidence(
     )
 
 
-def test_provider_specific_reason_code_is_not_mapped_by_contract_public_payload() -> None:
+def test_provider_specific_reason_code_uses_canonical_public_problem() -> None:
     event = RuntimeSourceLaneEvent(
         schema_version="runtime_source_lane_event_v1",
         runtime_run_id="run-1",
@@ -228,10 +228,10 @@ def test_provider_specific_reason_code_is_not_mapped_by_contract_public_payload(
 
     payload = event.to_public_payload()
 
-    assert payload["safe_reason_code"] == "unknown_reason"
+    assert payload["safe_reason_code"] == "source_browser_extension_disconnected"
 
 
-def test_provider_specific_filter_reason_code_is_not_mapped_by_contract_public_payload() -> None:
+def test_provider_specific_filter_reason_code_uses_canonical_public_problem() -> None:
     event = RuntimeSourceLaneEvent(
         schema_version="runtime_source_lane_event_v1",
         runtime_run_id="run-1",
@@ -247,7 +247,7 @@ def test_provider_specific_filter_reason_code_is_not_mapped_by_contract_public_p
 
     payload = event.to_public_payload()
 
-    assert payload["safe_reason_code"] == "unknown_reason"
+    assert payload["safe_reason_code"] == "source_filter_unavailable"
 
 
 def test_apply_source_lane_result_populates_identity_store_and_canonical_selection() -> None:
@@ -621,7 +621,7 @@ def test_event_public_payload_is_finite_and_redacts_secret_like_values() -> None
         "step_name",
         "safe_metadata",
     }
-    assert payload["safe_reason_code"] == "unknown_reason"
+    assert payload["safe_reason_code"] == "source_unknown"
     assert payload["artifact_refs"] == ["artifact://protected/safe"]
     assert payload["step_name"] is None
     assert payload["safe_metadata"] == {}
@@ -767,7 +767,7 @@ def test_public_reason_codes_and_artifact_refs_are_allowlisted() -> None:
 
     payload = event.to_public_payload()
 
-    assert payload["safe_reason_code"] == "unknown_reason"
+    assert payload["safe_reason_code"] == "source_unknown"
     assert payload["artifact_refs"] == ["artifact://protected/public-summary/1"]
     assert "secret-token" not in repr(payload)
     assert "raw.html" not in repr(payload)
@@ -2043,7 +2043,7 @@ def test_full_source_lanes_failed_liepin_does_not_cancel_cts_lane(tmp_path, monk
     assert [item.resume_id for item in top_scored] == ["resume-cts"]
     assert stop_reason == "source_lanes_degraded"
     payload_text = sorted(tracer.run_dir.glob("runtime.source_lane.liepin.card.1"))[-1].read_text(encoding="utf-8")
-    assert "failed_provider_error" in payload_text
+    assert "source_provider_failed" in payload_text
     assert "13800138000" not in payload_text
 
 

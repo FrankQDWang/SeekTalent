@@ -13,7 +13,6 @@ from seektalent_ui.liepin_account_binding import (
     ensure_workbench_liepin_provider_connection,
 )
 from seektalent_ui.workbench_response import liepin_start_probe_warning_message
-from seektalent_ui.workbench_store import LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE
 
 from tests.test_workbench_api import (
     _approve_requirement_review,
@@ -208,10 +207,10 @@ def _assert_runtime_start(payload: dict, source_kinds: list[str]) -> None:
     assert runtime_job["sourceKinds"] == source_kinds
 
 
-def test_removed_opencli_config_has_specific_workbench_warning_message() -> None:
+def test_removed_opencli_config_uses_canonical_incompatible_warning_message() -> None:
     assert (
         liepin_start_probe_warning_message("liepin_opencli_removed_config")
-        != LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE
+        == "猎聘浏览器运行组件版本或能力不兼容，请更新应用并重新启用浏览器扩展后重试。"
     )
 
 
@@ -336,7 +335,7 @@ def test_start_session_blocks_only_liepin_when_browser_login_is_required(tmp_pat
         assert liepin_card["status"] == "blocked"
         assert liepin_card["authState"] == "login_required"
         assert liepin_card["warningCode"] == "source_login_required"
-        assert "本机 Chrome" in liepin_card["warningMessage"]
+        assert liepin_card["warningMessage"] == "猎聘账号需要登录后才能继续检索。"
         liepin_runtime = next(
             source
             for source in session_payload.get("runtimeSourceState", {}).get("sources", [])
@@ -513,8 +512,12 @@ def test_start_session_opencli_mode_blocks_liepin_without_bound_account(
     [
         ("missing", "liepin_opencli_filter_unapplied", "source_filter_unavailable"),
         ("missing", "liepin_opencli_search_not_ready", "source_browser_timeout"),
-        ("missing", "liepin_opencli_results_not_ready", "source_browser_backend_unavailable"),
-        ("login_required", "liepin_opencli_identity_intercept", "source_risk_or_verification_required"),
+        ("missing", "liepin_opencli_results_not_ready", "source_browser_timeout"),
+        (
+            "login_required",
+            "liepin_opencli_identity_intercept",
+            "source_identity_confirmation_required",
+        ),
     ],
 )
 def test_start_session_opencli_mode_preserves_raw_status_reason_when_not_ready(

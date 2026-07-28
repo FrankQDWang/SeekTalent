@@ -48,7 +48,7 @@ from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
 from seektalent.source_adapters.query_policy import default_source_query_policies
 from seektalent.storage.json import sha256_json
 from seektalent.source_references import SourceReference
-from seektalent.sources.liepin.reason_codes import LIEPIN_SOURCE_LANE_REASON_CODE_MAP
+from seektalent.sources.liepin.reason_codes import LIEPIN_FAILURE_POLICIES
 from tests.settings_factory import make_settings
 
 
@@ -2344,16 +2344,10 @@ def test_pi_failure_codes_preserve_opencli_safe_reason_codes() -> None:
 
 @pytest.mark.parametrize(
     "reason_code",
-    [
-        "liepin_opencli_results_not_ready",
-        "liepin_opencli_removed_config",
-    ],
+    ["liepin_opencli_removed_config"],
 )
-def test_opencli_backend_unavailable_reasons_map_to_source_lane_backend_unavailable(reason_code: str) -> None:
-    assert (
-        LIEPIN_SOURCE_LANE_REASON_CODE_MAP[reason_code]
-        == "source_browser_backend_unavailable"
-    )
+def test_opencli_configuration_failures_have_one_canonical_public_problem(reason_code: str) -> None:
+    assert LIEPIN_FAILURE_POLICIES[reason_code].public_problem_code == "source_browser_backend_incompatible"
 
 
 @pytest.mark.parametrize(
@@ -2363,8 +2357,15 @@ def test_opencli_backend_unavailable_reasons_map_to_source_lane_backend_unavaila
         "liepin_opencli_search_not_ready",
     ],
 )
-def test_opencli_search_readiness_reasons_map_to_source_lane_timeout(reason_code: str) -> None:
-    assert LIEPIN_SOURCE_LANE_REASON_CODE_MAP[reason_code] == "source_browser_timeout"
+def test_opencli_search_readiness_reasons_have_timeout_public_problem(reason_code: str) -> None:
+    assert LIEPIN_FAILURE_POLICIES[reason_code].public_problem_code == "source_browser_timeout"
+
+
+def test_opencli_results_readiness_has_timeout_public_problem() -> None:
+    assert (
+        LIEPIN_FAILURE_POLICIES["liepin_opencli_results_not_ready"].public_problem_code
+        == "source_browser_timeout"
+    )
 
 
 def test_liepin_runtime_lane_uses_provider_adapter_context_and_public_payload_is_safe() -> None:
@@ -2981,7 +2982,7 @@ def test_liepin_runtime_lane_preserves_partial_worker_cards_with_safe_reason() -
     assert list(result.candidate_store_updates) == ["partial-candidate-1"]
     assert result.events[0].event_type == "source_lane_partial"
     payload = repr(result.to_public_payload())
-    assert "partial_timeout" in payload
+    assert "source_browser_timeout" in payload
     assert "page_timeout" not in payload
     assert "raw transport text" not in payload
 

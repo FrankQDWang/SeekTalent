@@ -207,7 +207,10 @@ def _event_data(event: WorkbenchEvent) -> dict[str, object]:
 def _project_event_payload(event: WorkbenchEvent) -> WorkbenchNoteCreatedPayload | WorkbenchEventPayloadResponse:
     if event.event_name == "workbench_note_created":
         return _note_created_payload(event)
-    projected = _drop_broad_runtime_fields(event.payload)
+    projected = _drop_broad_runtime_fields(
+        event.payload,
+        publicize_source_reasons=event.source_kind is not None,
+    )
     return _event_payload_response(projected)
 
 
@@ -320,19 +323,32 @@ def _event_seq_value(value: object, *, fallback: int) -> int:
         return fallback
 
 
-def _drop_broad_runtime_fields(value: object) -> object:
+def _drop_broad_runtime_fields(
+    value: object,
+    *,
+    publicize_source_reasons: bool = True,
+) -> object:
     if isinstance(value, dict):
         result: dict[str, object] = {}
         for key, item in value.items():
             if _is_broad_runtime_field(str(key)):
                 continue
-            projected = _drop_broad_runtime_fields(item)
-            if _is_source_reason_code_field(str(key)):
+            projected = _drop_broad_runtime_fields(
+                item,
+                publicize_source_reasons=publicize_source_reasons,
+            )
+            if publicize_source_reasons and _is_source_reason_code_field(str(key)):
                 projected = _public_source_reason_value(projected)
             result[str(key)] = projected
         return result
     if isinstance(value, list):
-        return [_drop_broad_runtime_fields(item) for item in value]
+        return [
+            _drop_broad_runtime_fields(
+                item,
+                publicize_source_reasons=publicize_source_reasons,
+            )
+            for item in value
+        ]
     return value
 
 

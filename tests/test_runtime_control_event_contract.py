@@ -393,7 +393,10 @@ def test_public_runtime_progress_uses_canonical_summary_for_safe_looking_runtime
         now="2026-07-11T00:00:01Z",
     )
 
-    assert event.summary == "第 1 轮猎聘检索受阻：猎聘检索受阻，请稍后重试。"
+    assert event.summary == (
+        "第 1 轮猎聘检索受阻："
+        "猎聘检索结果暂时无法确认，系统需要先核对本次操作状态。"
+    )
     assert raw_message not in repr(event.model_dump(mode="json"))
 
 
@@ -974,6 +977,7 @@ def test_public_stage_output_v2_keeps_only_safe_logical_query_group_fields() -> 
                 "rawCandidateCount": 0,
                 "uniqueCandidateCount": 0,
                 "duplicateCandidateCount": 0,
+                "safeReasonCode": "source_unknown",
             },
         ],
     }
@@ -1275,8 +1279,8 @@ def test_public_stage_output_v2_enforces_query_group_stage_lifecycle(
     ("reason_code", "expected_reason_code"),
     [
         ("blocked_backend_unavailable", "source_browser_backend_unavailable"),
-        ("Bearer private-token", None),
-        ("unknown_private_reason", None),
+        ("Bearer private-token", "source_unknown"),
+        ("unknown_private_reason", "source_unknown"),
     ],
 )
 def test_public_stage_output_v2_maps_or_drops_top_level_safe_reason_code(
@@ -1311,19 +1315,15 @@ def test_public_stage_output_v2_maps_or_drops_top_level_safe_reason_code(
 
 def test_stage_output_reason_mapping_matches_runtime_public_event_contract() -> None:
     from seektalent.runtime import public_events as runtime_public_events
+    from seektalent.sources.liepin.reason_codes import LIEPIN_FAILURE_POLICIES
     from seektalent_runtime_control import stage_outputs
     from seektalent_workbench_v2 import runtime_display
-
-    assert stage_outputs._PUBLIC_SOURCE_REASON_CODES == runtime_public_events.PUBLIC_SOURCE_REASON_CODES
-    assert stage_outputs._PUBLIC_REASON_MAP == runtime_public_events._PUBLIC_REASON_MAP
-    assert runtime_display._PUBLIC_SOURCE_REASON_CODES == runtime_public_events.PUBLIC_SOURCE_REASON_CODES
-    assert runtime_display._PUBLIC_REASON_MAP == runtime_public_events._PUBLIC_REASON_MAP
 
     reason_codes = [
         None,
         "unknown_private_reason",
         *sorted(runtime_public_events.PUBLIC_SOURCE_REASON_CODES),
-        *sorted(runtime_public_events._PUBLIC_REASON_MAP),
+        *sorted(LIEPIN_FAILURE_POLICIES),
     ]
     assert [stage_outputs._safe_reason_code(reason) for reason in reason_codes] == [
         runtime_public_events.public_source_reason_code(reason) for reason in reason_codes

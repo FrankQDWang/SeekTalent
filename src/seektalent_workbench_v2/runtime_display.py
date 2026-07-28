@@ -3,6 +3,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from seektalent.public_payload_safety import public_source_identifier, public_text
+from seektalent.sources.liepin.reason_codes import (
+    public_source_problem_code,
+    public_source_problem_message,
+)
 
 
 COMPLETED_PROGRESS_SUMMARY = "招聘流程已完成。"
@@ -38,45 +42,6 @@ _QUERY_EXECUTION_STATUSES = {"completed", "partial", "blocked", "failed"}
 _QUERY_GROUP_LIFECYCLE_BY_STAGE = {
     "round_query": "planned",
     "feedback": "executed",
-}
-_PUBLIC_SOURCE_REASON_CODES = {
-    "job_lease_expired",
-    "relay_pending_worker",
-    "runtime_failed",
-    "source_login_required",
-    "source_account_mismatch",
-    "source_browser_timeout",
-    "source_browser_backend_unavailable",
-    "source_browser_reference_stale",
-    "source_browser_extension_disconnected",
-    "source_browser_policy_blocked",
-    "source_risk_or_verification_required",
-    "source_browser_interaction_required",
-    "source_budget_exhausted",
-    "source_filter_applied",
-    "source_filter_partial",
-    "source_filter_unavailable",
-    "source_filter_unsupported",
-    "source_filter_degraded",
-    "source_location_filter_unsupported",
-    "source_age_filter_unsupported",
-    "source_provider_failed",
-    "source_partial",
-    "source_unknown",
-}
-_PUBLIC_REASON_MAP = {
-    "blocked_backend_unavailable": "source_browser_backend_unavailable",
-    "blocked_login_required": "source_login_required",
-    "failed_provider_error": "source_provider_failed",
-    "login_required": "source_login_required",
-    "partial_timeout": "source_browser_timeout",
-    "runtime_failed": "source_provider_failed",
-    "cancelled_by_user": "source_unknown",
-    "source_location_filter_partial": "source_filter_partial",
-    "source_age_filter_unsupported": "source_filter_unavailable",
-    "source_location_filter_unsupported": "source_filter_unavailable",
-    "source_filter_unsupported": "source_filter_unavailable",
-    "source_filter_applied": "source_filter_applied",
 }
 _RUNTIME_EVENT_STATUSES = {
     "pending",
@@ -437,10 +402,10 @@ def _source_result_summary(
     counts: Mapping[str, int],
 ) -> str:
     if status == "blocked":
-        failure_reason = _failure_reason(reason, source_label=source_label, blocked=True)
+        failure_reason = _failure_reason(reason, source_label=source_label)
         return f"{round_prefix}{source_label}检索受阻：{failure_reason}"
     if status == "failed":
-        failure_reason = _failure_reason(reason, source_label=source_label, blocked=False)
+        failure_reason = _failure_reason(reason, source_label=source_label)
         return f"{round_prefix}{source_label}检索失败：{failure_reason}"
     returned = counts.get("roundReturned")
     identities = counts.get("roundIdentities")
@@ -453,40 +418,18 @@ def _source_result_summary(
     return f"{round_prefix}{source_label}检索结果已更新。"
 
 
-def _failure_reason(reason: str | None, *, source_label: str, blocked: bool) -> str:
-    if reason == "source_browser_extension_disconnected":
-        return f"{source_label}浏览器桥扩展未连接，请确认扩展已连接后重试。"
-    if reason == "source_browser_backend_unavailable":
-        return f"{source_label}浏览器桥暂不可用，系统会先尝试恢复连接；如果仍失败，请稍后重试。"
-    if reason == "source_browser_reference_stale":
-        return f"{source_label}页面引用持续失效，系统已尝试重开搜索页；请刷新猎聘页面后重试。"
-    if reason in {"source_filter_unavailable", "source_filter_partial", "source_filter_unsupported"}:
-        return f"{source_label}筛选条件未成功应用，请刷新页面后重试。"
-    if reason == "source_browser_timeout":
-        return f"{source_label}检索超时，请稍后重试。"
-    if reason == "source_login_required":
-        return f"{source_label}账号需要登录后才能继续检索。"
-    if reason == "source_account_mismatch":
-        return f"{source_label}账号与当前检索任务不匹配，请确认账号后重试。"
-    if reason in {"source_browser_policy_blocked", "source_risk_or_verification_required"}:
-        return f"{source_label}需要完成页面验证后才能继续检索。"
-    if reason == "source_browser_interaction_required":
-        return f"{source_label}需要人工完成页面操作后才能继续检索。"
-    if reason == "source_budget_exhausted":
-        return f"{source_label}本轮检索额度已用尽。"
-    if reason in {"source_filter_applied", "source_filter_degraded"}:
-        return f"{source_label}筛选条件已降级处理。"
-    if reason in {"source_location_filter_unsupported", "source_age_filter_unsupported"}:
-        return f"{source_label}暂不支持部分筛选条件。"
-    if blocked:
-        return f"{source_label}检索受阻，请稍后重试。"
-    return "运行失败，请查看详情。"
+def _failure_reason(reason: str | None, *, source_label: str) -> str:
+    return (
+        public_source_problem_message(
+            reason or "source_unknown",
+            source_label=source_label,
+        )
+        or "运行失败，请查看详情。"
+    )
 
 
 def _search_failure_reason(reason: str | None, *, source_label: str) -> str:
-    if reason is None:
-        return "检索失败，请稍后重试。"
-    return _failure_reason(reason, source_label=source_label, blocked=False)
+    return _failure_reason(reason or "source_unknown", source_label=source_label)
 
 
 def _round_prefix(value: object) -> str:
@@ -769,8 +712,4 @@ def _non_negative_int(value: object) -> int | None:
 
 
 def safe_runtime_progress_reason_code(value: object) -> str | None:
-    text = _safe_query_text(value, max_length=120)
-    if text in _PUBLIC_SOURCE_REASON_CODES:
-        return text
-    mapped = _PUBLIC_REASON_MAP.get(text) if text is not None else None
-    return mapped if mapped in _PUBLIC_SOURCE_REASON_CODES else None
+    return public_source_problem_code(value)

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from seektalent.models import RequirementSheet
+from seektalent.sources.liepin.reason_codes import public_source_problem_message
 
 
 DEFAULT_TENANT_ID = "local"
@@ -19,9 +20,18 @@ LIEPIN_AUTO_DETAIL_SCORE_THRESHOLD = 55
 LIEPIN_BROWSER_LOGIN_REQUIRED_CODE = "liepin_browser_login_required"
 LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE = "liepin_browser_probe_unavailable"
 LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE = "liepin_browser_account_mismatch"
-LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE = "请在本机 Chrome 登录猎聘并保持会话有效，系统会在检索时使用该登录态。"
-LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE = "浏览器检索通道暂不可用，请确认本机应用和浏览器助手正常后重试。"
-LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE = "当前 Chrome 中的猎聘账号与此工作台绑定不一致，请切换账号后重试。"
+
+
+def _source_problem_message(reason_code: str) -> str:
+    message = public_source_problem_message(reason_code, source_label="猎聘")
+    if message is None:
+        raise RuntimeError("workbench_source_problem_message_missing")
+    return message
+
+
+LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE = _source_problem_message(LIEPIN_BROWSER_LOGIN_REQUIRED_CODE)
+LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE = _source_problem_message(LIEPIN_BROWSER_PROBE_UNAVAILABLE_CODE)
+LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE = _source_problem_message(LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE)
 
 
 @dataclass(frozen=True)

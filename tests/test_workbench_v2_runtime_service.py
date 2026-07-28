@@ -1154,10 +1154,18 @@ def test_runtime_service_lists_public_progress_events_as_user_readable_payloads(
         (
             "blocked_backend_unavailable",
             "source_browser_backend_unavailable",
-            "source_browser_backend_unavailable",
+            "猎聘浏览器检索通道暂不可用，请确认本机应用和浏览器助手正常后重试。",
         ),
-        ("Bearer private-token", None, "猎聘检索受阻，请稍后重试。"),
-        ("unknown_private_reason", None, "猎聘检索受阻，请稍后重试。"),
+        (
+            "Bearer private-token",
+            "source_unknown",
+            "猎聘检索结果暂时无法确认，系统需要先核对本次操作状态。",
+        ),
+        (
+            "unknown_private_reason",
+            "source_unknown",
+            "猎聘检索结果暂时无法确认，系统需要先核对本次操作状态。",
+        ),
     ],
 )
 def test_runtime_service_source_result_summary_uses_only_canonical_safe_reason(
@@ -1338,7 +1346,10 @@ def test_runtime_service_get_status_uses_latest_public_failure_summary(tmp_path:
         updated_at=NOW,
     )
 
-    assert service.get_status(run.runtime_run_id)["summary"] == "本轮检索失败：source_browser_backend_unavailable"
+    assert service.get_status(run.runtime_run_id)["summary"] == (
+        "本轮检索失败："
+        "猎聘浏览器检索通道暂不可用，请确认本机应用和浏览器助手正常后重试。"
+    )
 
 
 def test_runtime_service_distinguishes_search_and_run_failure_summaries(tmp_path: Path) -> None:
@@ -1382,16 +1393,22 @@ def test_runtime_service_distinguishes_search_and_run_failure_summaries(tmp_path
         if event["runtimeEventType"] in {"runtime_search_failed", "runtime_run_failed"}
     ]
     assert failure_summaries == [
-        "第 1 轮检索失败：source_browser_backend_unavailable",
-        "招聘流程失败：source_browser_backend_unavailable",
+        "第 1 轮检索失败：猎聘浏览器检索通道暂不可用，请确认本机应用和浏览器助手正常后重试。",
+        "招聘流程失败：猎聘浏览器检索通道暂不可用，请确认本机应用和浏览器助手正常后重试。",
     ]
 
 
 @pytest.mark.parametrize(
     ("event_type", "expected_summary"),
     [
-        ("runtime_search_failed", "第 1 轮检索失败：运行失败，请查看详情。"),
-        ("runtime_run_failed", "招聘流程失败：运行失败，请查看详情。"),
+        (
+            "runtime_search_failed",
+            "第 1 轮检索失败：猎聘检索结果暂时无法确认，系统需要先核对本次操作状态。",
+        ),
+        (
+            "runtime_run_failed",
+            "招聘流程失败：猎聘检索结果暂时无法确认，系统需要先核对本次操作状态。",
+        ),
     ],
 )
 def test_runtime_service_failure_progress_drops_raw_event_failure_text(
@@ -1578,7 +1595,9 @@ def test_runtime_service_maps_public_browser_extension_disconnect_reason(tmp_pat
 
     [event] = service.list_progress_events(run.runtime_run_id, after_seq=0)
 
-    assert event["summary"] == "招聘流程失败：猎聘浏览器桥扩展未连接，请确认扩展已连接后重试。"
+    assert event["summary"] == (
+        "招聘流程失败：猎聘浏览器扩展未连接，请确认扩展已启用并连接后重试。"
+    )
 
 
 def _service(

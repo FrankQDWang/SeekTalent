@@ -5,6 +5,10 @@ from datetime import datetime
 from typing import TypedDict
 
 from seektalent.public_payload_safety import public_source_identifier, public_text
+from seektalent.sources.liepin.reason_codes import (
+    PUBLIC_SOURCE_REASON_CODES as PUBLIC_SOURCE_REASON_CODES,
+    public_source_problem_code,
+)
 
 PUBLIC_EVENT_SCHEMA_VERSION = "runtime_public_event_v1"
 SourceKind = str
@@ -18,47 +22,6 @@ _RUNTIME_PUBLIC_EVENT_NAMES = {
     "first_page_expansion": "runtime_round_first_page_expansion",
     "feedback": "runtime_round_feedback_completed",
     "finalization": "runtime_finalization_completed",
-}
-
-PUBLIC_SOURCE_REASON_CODES = {
-    "job_lease_expired",
-    "relay_pending_worker",
-    "runtime_failed",
-    "source_login_required",
-    "source_account_mismatch",
-    "source_browser_timeout",
-    "source_browser_backend_unavailable",
-    "source_browser_reference_stale",
-    "source_browser_extension_disconnected",
-    "source_browser_policy_blocked",
-    "source_risk_or_verification_required",
-    "source_browser_interaction_required",
-    "source_budget_exhausted",
-    "source_filter_applied",
-    "source_filter_partial",
-    "source_filter_unavailable",
-    "source_filter_unsupported",
-    "source_filter_degraded",
-    "source_location_filter_unsupported",
-    "source_age_filter_unsupported",
-    "source_provider_failed",
-    "source_partial",
-    "source_unknown",
-}
-
-_PUBLIC_REASON_MAP = {
-    "blocked_backend_unavailable": "source_browser_backend_unavailable",
-    "blocked_login_required": "source_login_required",
-    "failed_provider_error": "source_provider_failed",
-    "login_required": "source_login_required",
-    "partial_timeout": "source_browser_timeout",
-    "runtime_failed": "source_provider_failed",
-    "cancelled_by_user": "source_unknown",
-    "source_location_filter_partial": "source_filter_partial",
-    "source_age_filter_unsupported": "source_filter_unavailable",
-    "source_location_filter_unsupported": "source_filter_unavailable",
-    "source_filter_unsupported": "source_filter_unavailable",
-    "source_filter_applied": "source_filter_applied",
 }
 
 _PUBLIC_COUNT_KEYS = {
@@ -132,15 +95,7 @@ def runtime_public_event_name(stage: object) -> str:
 
 
 def public_source_reason_code(reason_code: object) -> str | None:
-    text = str(reason_code or "").strip()
-    if not text:
-        return None
-    if text in PUBLIC_SOURCE_REASON_CODES:
-        return text
-    mapped = _PUBLIC_REASON_MAP.get(text)
-    if mapped in PUBLIC_SOURCE_REASON_CODES:
-        return mapped
-    return None
+    return public_source_problem_code(reason_code)
 
 
 def normalize_runtime_public_event(payload: Mapping[str, object]) -> RuntimePublicEvent:

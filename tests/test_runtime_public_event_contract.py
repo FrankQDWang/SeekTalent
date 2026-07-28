@@ -468,12 +468,9 @@ def test_source_result_public_event_preserves_liepin_stale_reference_failure() -
 
 @pytest.mark.parametrize(
     "reason_code",
-    [
-        "liepin_opencli_results_not_ready",
-        "liepin_opencli_removed_config",
-    ],
+    ["liepin_opencli_removed_config"],
 )
-def test_source_result_public_event_maps_liepin_opencli_backend_unavailable_reasons(reason_code: str) -> None:
+def test_source_result_public_event_maps_liepin_opencli_backend_incompatible_reasons(reason_code: str) -> None:
     from seektalent.source_adapters import public_source_reason_code
 
     event = make_runtime_public_event(
@@ -486,7 +483,25 @@ def test_source_result_public_event_maps_liepin_opencli_backend_unavailable_reas
         safe_reason_code=public_source_reason_code(reason_code),
     )
 
-    assert event["safeReasonCode"] == "source_browser_backend_unavailable"
+    assert event["safeReasonCode"] == "source_browser_backend_incompatible"
+
+
+def test_source_result_public_event_maps_liepin_results_readiness_to_timeout() -> None:
+    from seektalent.source_adapters import public_source_reason_code
+
+    event = make_runtime_public_event(
+        runtime_run_id="run-1",
+        stage="source_result",
+        event_seq=131,
+        round_no=1,
+        source_kind="liepin",
+        status="blocked",
+        safe_reason_code=public_source_reason_code(
+            "liepin_opencli_results_not_ready"
+        ),
+    )
+
+    assert event["safeReasonCode"] == "source_browser_timeout"
 
 
 @pytest.mark.parametrize(
@@ -512,7 +527,7 @@ def test_source_result_public_event_maps_liepin_search_readiness_to_timeout(reas
     assert event["safeReasonCode"] == "source_browser_timeout"
 
 
-def test_source_result_public_event_maps_liepin_opencli_bootstrap_failed() -> None:
+def test_source_result_public_event_maps_liepin_opencli_installation_invalid() -> None:
     from seektalent.source_adapters import public_source_reason_code
 
     event = make_runtime_public_event(
@@ -525,7 +540,7 @@ def test_source_result_public_event_maps_liepin_opencli_bootstrap_failed() -> No
         safe_reason_code=public_source_reason_code("liepin_opencli_bootstrap_failed"),
     )
 
-    assert event["safeReasonCode"] == "source_browser_backend_unavailable"
+    assert event["safeReasonCode"] == "source_browser_installation_invalid"
 
 
 def test_source_result_public_event_maps_liepin_extension_disconnected() -> None:

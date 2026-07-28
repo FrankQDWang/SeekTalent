@@ -1138,7 +1138,7 @@ def test_v2_blocked_liepin_source_result_reports_actionable_reason(tmp_path: Pat
     progress_events = [event for event in view.transcriptEvents if event.type == "runtime_progress"]
 
     assert progress_events[-1].payload["summary"] == (
-        "第 1 轮猎聘检索受阻：猎聘浏览器桥扩展未连接，请确认扩展已连接后重试。"
+        "第 1 轮猎聘检索受阻：猎聘浏览器扩展未连接，请确认扩展已启用并连接后重试。"
     )
     assert "猎聘检索完成" not in progress_events[-1].payload["summary"]
 
@@ -1189,7 +1189,10 @@ def test_v2_blocked_liepin_source_result_uses_canonical_summary_instead_of_raw_s
     view = service.get_conversation(conversation_id)
     progress_events = [event for event in view.transcriptEvents if event.type == "runtime_progress"]
 
-    assert progress_events[-1].payload["summary"] == "第 1 轮猎聘检索受阻：猎聘检索受阻，请稍后重试。"
+    assert progress_events[-1].payload["summary"] == (
+        "第 1 轮猎聘检索受阻："
+        "猎聘检索结果暂时无法确认，系统需要先核对本次操作状态。"
+    )
 
 
 def test_list_events_returns_incremental_visible_events_and_refreshes_runtime(tmp_path: Path) -> None:
@@ -3524,6 +3527,7 @@ def test_v2_runtime_display_scrubs_non_string_query_terms_and_execution_scalars(
             "rawCandidateCount": 0,
             "uniqueCandidateCount": 0,
             "duplicateCandidateCount": 0,
+            "safeReasonCode": "source_unknown",
         }
     ]
     assert secret not in repr(payload)
@@ -3767,7 +3771,10 @@ def test_v2_runtime_display_uses_canonical_progress_summary_for_safe_looking_run
         }
     )
 
-    assert payload["summary"] == "第 1 轮猎聘检索受阻：猎聘检索受阻，请稍后重试。"
+    assert payload["summary"] == (
+        "第 1 轮猎聘检索受阻："
+        "猎聘检索结果暂时无法确认，系统需要先核对本次操作状态。"
+    )
     assert raw_summary not in json.dumps(payload, ensure_ascii=False)
 
 
@@ -3825,7 +3832,10 @@ def test_v2_runtime_display_uses_canonical_reason_for_search_failure() -> None:
         }
     )
 
-    assert payload["summary"] == "第 1 轮检索失败：检索失败，请稍后重试。"
+    assert payload["summary"] == (
+        "第 1 轮检索失败："
+        "来源检索结果暂时无法确认，系统需要先核对本次操作状态。"
+    )
     assert raw_summary not in json.dumps(payload, ensure_ascii=False)
 
 
@@ -3864,7 +3874,10 @@ def test_v2_runtime_display_preserves_safe_top_level_runtime_values() -> None:
         "runtimeEventType": "runtime_round_source_result",
         "status": "blocked",
         "stage": "source_result",
-        "summary": "第 1 轮来源检索受阻：来源检索受阻，请稍后重试。",
+        "summary": (
+            "第 1 轮来源检索受阻："
+            "来源检索结果暂时无法确认，系统需要先核对本次操作状态。"
+        ),
         "state": "running",
         "roundNo": 1,
         "sourceId": "internal_referrals",

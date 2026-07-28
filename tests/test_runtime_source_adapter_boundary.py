@@ -559,8 +559,8 @@ def test_source_dispatch_rejects_missing_intents_for_selected_source() -> None:
 def test_filter_capability_reason_codes_are_public_safe() -> None:
     assert public_source_reason_code("source_filter_unsupported") == "source_filter_unsupported"
     assert public_source_reason_code("source_filter_degraded") == "source_filter_degraded"
-    assert public_source_reason_code("source_location_filter_unsupported") == "source_location_filter_unsupported"
-    assert public_source_reason_code("source_age_filter_unsupported") == "source_age_filter_unsupported"
+    assert public_source_reason_code("source_location_filter_unsupported") == "source_filter_unsupported"
+    assert public_source_reason_code("source_age_filter_unsupported") == "source_filter_unsupported"
     event = RuntimeSourceLaneEvent(
         schema_version="runtime_source_lane_event_v1",
         runtime_run_id="run-1",
@@ -574,7 +574,7 @@ def test_filter_capability_reason_codes_are_public_safe() -> None:
         safe_reason_code="source_age_filter_unsupported",
     )
 
-    assert event.to_public_payload()["safe_reason_code"] == "source_age_filter_unsupported"
+    assert event.to_public_payload()["safe_reason_code"] == "source_filter_unsupported"
 
 
 def test_liepin_active_opencli_resume_path_does_not_use_old_requirement_fields() -> None:

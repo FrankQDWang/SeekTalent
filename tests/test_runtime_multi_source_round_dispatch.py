@@ -1862,7 +1862,7 @@ def test_liepin_backend_blocked_stays_blocked_when_cts_is_also_selected(monkeypa
         tracer.close()
 
     assert result.status == "blocked"
-    assert result.safe_reason_code == "blocked_backend_unavailable"
+    assert result.safe_reason_code == "source_browser_backend_unavailable"
 
 
 def test_liepin_source_round_passes_the_context_owned_claim_ledger_to_private_bundle(monkeypatch, tmp_path) -> None:
@@ -1976,7 +1976,7 @@ def test_liepin_backend_blocked_stays_blocked_when_liepin_is_only_selected_sourc
         tracer.close()
 
     assert result.status == "blocked"
-    assert result.safe_reason_code == "blocked_backend_unavailable"
+    assert result.safe_reason_code == "source_browser_backend_unavailable"
     assert result.executed_query_packages == ()
 
 

@@ -14,46 +14,9 @@ from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.providers.liepin.worker_contracts import OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT
 from seektalent.source_adapters import build_source_enabled_runtime
+from seektalent.sources.liepin.reason_codes import public_source_problem_code
 
 WorkflowRuntime = build_source_enabled_runtime
-
-_PUBLIC_LIEPIN_PIPELINE_REASON_CODES = {
-    "job_lease_expired",
-    "relay_pending_worker",
-    "runtime_failed",
-    "source_login_required",
-    "source_account_mismatch",
-    "source_browser_timeout",
-    "source_browser_backend_unavailable",
-    "source_browser_reference_stale",
-    "source_browser_extension_disconnected",
-    "source_browser_policy_blocked",
-    "source_risk_or_verification_required",
-    "source_browser_interaction_required",
-    "source_budget_exhausted",
-    "source_filter_applied",
-    "source_filter_partial",
-    "source_filter_unavailable",
-    "source_filter_unsupported",
-    "source_filter_degraded",
-    "source_location_filter_unsupported",
-    "source_age_filter_unsupported",
-    "source_provider_failed",
-    "source_partial",
-    "source_unknown",
-}
-_LIEPIN_PIPELINE_REASON_MAP = {
-    "blocked_backend_unavailable": "source_browser_backend_unavailable",
-    "blocked_login_required": "source_login_required",
-    "failed_provider_error": "source_provider_failed",
-    "liepin_opencli_detail_not_opened": "source_browser_timeout",
-    "liepin_opencli_detail_open_retry_exhausted": "source_browser_timeout",
-    "liepin_opencli_stale_ref": "source_browser_reference_stale",
-    "login_required": "source_login_required",
-    "partial_timeout": "source_browser_timeout",
-    "runtime_failed": "source_provider_failed",
-    "source_location_filter_partial": "source_filter_partial",
-}
 
 
 def liepin_smoke_command(args: argparse.Namespace) -> int:
@@ -382,12 +345,7 @@ def _refresh_liepin_smoke_session_safety(
 
 
 def _safe_liepin_pipeline_failure_code(value: object) -> str | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    if text in _PUBLIC_LIEPIN_PIPELINE_REASON_CODES:
-        return text
-    return _LIEPIN_PIPELINE_REASON_MAP.get(text)
+    return public_source_problem_code(value)
 
 
 def _liepin_smoke_pipeline_report(artifacts: object) -> dict[str, str | int]:

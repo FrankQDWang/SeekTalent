@@ -1083,8 +1083,8 @@ def test_round_reducer_merges_v2_query_groups_by_query_instance_id() -> None:
     ("reason_code", "expected_reason_code"),
     [
         ("blocked_backend_unavailable", "source_browser_backend_unavailable"),
-        ("Bearer private-token", None),
-        ("unknown_private_reason", None),
+        ("Bearer private-token", "source_unknown"),
+        ("unknown_private_reason", "source_unknown"),
     ],
 )
 def test_round_reducer_allowlists_execution_reason_codes_before_public_response(
@@ -1145,8 +1145,15 @@ def test_round_reducer_query_execution_reason_taxonomy_matches_runtime_public_ev
     from seektalent.runtime import public_events
     from seektalent_ui import agent_workbench_rounds
 
-    assert agent_workbench_rounds._PUBLIC_QUERY_EXECUTION_REASON_CODES == public_events.PUBLIC_SOURCE_REASON_CODES
-    assert agent_workbench_rounds._QUERY_EXECUTION_REASON_ALIASES == public_events._PUBLIC_REASON_MAP
+    reason_codes = [
+        None,
+        "unknown_private_reason",
+        *sorted(public_events.PUBLIC_SOURCE_REASON_CODES),
+    ]
+    assert [
+        agent_workbench_rounds._public_query_execution_reason_code(reason)
+        for reason in reason_codes
+    ] == [public_events.public_source_reason_code(reason) for reason in reason_codes]
 
 
 @pytest.mark.parametrize(

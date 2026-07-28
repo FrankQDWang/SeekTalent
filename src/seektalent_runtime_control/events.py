@@ -6,6 +6,7 @@ import json
 
 from seektalent.progress import ProgressEvent
 from seektalent.runtime.public_events import normalize_runtime_public_event, runtime_public_event_name
+from seektalent.sources.liepin.reason_codes import public_source_problem_message
 from seektalent_runtime_control.models import RuntimeControlEvent, RuntimeControlEventInput
 
 
@@ -210,9 +211,9 @@ def _public_source_result_summary(
     counts: Mapping[str, object],
 ) -> str:
     if status == "blocked":
-        return f"{round_prefix}{source_label}检索受阻：{_public_failure_reason(reason, source_label=source_label, blocked=True)}"
+        return f"{round_prefix}{source_label}检索受阻：{_public_failure_reason(reason, source_label=source_label)}"
     if status == "failed":
-        return f"{round_prefix}{source_label}检索失败：{_public_failure_reason(reason, source_label=source_label, blocked=False)}"
+        return f"{round_prefix}{source_label}检索失败：{_public_failure_reason(reason, source_label=source_label)}"
     returned = _non_negative_int(counts.get("roundReturned"))
     identities = _non_negative_int(counts.get("roundIdentities"))
     if returned is not None and identities is not None:
@@ -224,34 +225,14 @@ def _public_source_result_summary(
     return f"{round_prefix}{source_label}检索结果已更新。"
 
 
-def _public_failure_reason(reason: str | None, *, source_label: str, blocked: bool) -> str:
-    if reason == "source_browser_extension_disconnected":
-        return f"{source_label}浏览器桥扩展未连接，请确认扩展已连接后重试。"
-    if reason == "source_browser_backend_unavailable":
-        return f"{source_label}浏览器桥暂不可用，系统会先尝试恢复连接；如果仍失败，请稍后重试。"
-    if reason == "source_browser_reference_stale":
-        return f"{source_label}页面引用持续失效，系统已尝试重开搜索页；请刷新猎聘页面后重试。"
-    if reason in {"source_filter_unavailable", "source_filter_partial", "source_filter_unsupported"}:
-        return f"{source_label}筛选条件未成功应用，请刷新页面后重试。"
-    if reason == "source_browser_timeout":
-        return f"{source_label}检索超时，请稍后重试。"
-    if reason == "source_login_required":
-        return f"{source_label}账号需要登录后才能继续检索。"
-    if reason == "source_account_mismatch":
-        return f"{source_label}账号与当前检索任务不匹配，请确认账号后重试。"
-    if reason in {"source_browser_policy_blocked", "source_risk_or_verification_required"}:
-        return f"{source_label}需要完成页面验证后才能继续检索。"
-    if reason == "source_browser_interaction_required":
-        return f"{source_label}需要人工完成页面操作后才能继续检索。"
-    if reason == "source_budget_exhausted":
-        return f"{source_label}本轮检索额度已用尽。"
-    if reason in {"source_filter_applied", "source_filter_degraded"}:
-        return f"{source_label}筛选条件已降级处理。"
-    if reason in {"source_location_filter_unsupported", "source_age_filter_unsupported"}:
-        return f"{source_label}暂不支持部分筛选条件。"
-    if blocked:
-        return f"{source_label}检索受阻，请稍后重试。"
-    return "运行失败，请查看详情。"
+def _public_failure_reason(reason: str | None, *, source_label: str) -> str:
+    return (
+        public_source_problem_message(
+            reason or "source_unknown",
+            source_label=source_label,
+        )
+        or "运行失败，请查看详情。"
+    )
 
 
 def _round_prefix(value: object) -> str:

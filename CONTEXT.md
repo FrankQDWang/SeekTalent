@@ -61,7 +61,7 @@ A visual and interaction layer shown only inside an owned tab while SeekTalent c
 _Avoid_: Loading mask, disabled page
 
 **Idle deadline**:
-The instant 60 seconds after the last completed browser command for an owned tab. Each completed command moves the deadline forward; source-run completion immediately requests background reclamation and never waits for the deadline or close result.
+The instant 60 seconds after the last completed browser command for an owned tab. Extension-owned idle expiry is the only normal reclamation path; scope completion releases business references and authority without requesting immediate closure, while maintenance may reconcile exceptional orphan tabs.
 _Avoid_: Tab lifetime, hard timeout
 
 **Orphan tab**:
@@ -81,6 +81,22 @@ _Avoid_: Sidecar status, operation status, success flag
 **Source operation disposition**:
 The typed fact returned by one source operation: completed, partial, user action required, incompatible, failed, cancelled, or reconciliation unknown. Readiness is an operation-specific fact, not a generic completion disposition. The main application interprets the disposition under the run contract; it is never itself a product outcome.
 _Avoid_: Product outcome, sidecar lifecycle state
+
+**Failure cause**:
+A fine-grained causal fact observed by a source or component. It may be provider-specific and is preserved for diagnostics, but is neither a product problem nor user-facing text.
+_Avoid_: Public problem, error message
+
+**Public problem**:
+A stable, privacy-safe product classification whose members differ by handling, outcome, responsibility, user action, or user-facing explanation. It is derived from a failure cause and is not the cause itself.
+_Avoid_: Failure cause, raw reason code
+
+**Failure interpretation**:
+The deterministic translation of a failure cause and operation context into a public problem, source operation disposition, and optional user action. It reports meaning but grants neither recovery nor retry authority.
+_Avoid_: Retry policy, recovery workflow
+
+**User action**:
+One concrete step a user can perform to let the same logical run continue through a new attempt. It is distinct from support work, automatic recovery, and a product outcome.
+_Avoid_: Retry, support action, generic remediation
 
 **Needs attention**:
 A non-terminal product outcome that waits for one concrete user action before the same logical run may resume with a new attempt. Infrastructure exhaustion without an actionable user step is not needs attention.

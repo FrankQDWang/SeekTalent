@@ -24,7 +24,6 @@ from seektalent.runtime.orchestrator import (
     RuntimeSourceRoundContext as RuntimeSourceRoundContext,
     WorkflowRuntime as WorkflowRuntime,
 )
-from seektalent.runtime.public_events import public_source_reason_code as runtime_public_source_reason_code
 from seektalent.runtime.retrieval_runtime import RetrievalExecutionResult as RetrievalExecutionResult
 from seektalent.runtime.source_lanes import (
     RuntimeSourceLanePlan as RuntimeSourceLanePlan,
@@ -52,7 +51,9 @@ from seektalent.source_contracts import (
     SourceRegistry as SourceRegistry,
 )
 from seektalent.sources.cts.filter_projection import project_constraints_to_cts as project_constraints_to_cts
-from seektalent.sources.liepin.reason_codes import LIEPIN_PUBLIC_EVENT_REASON_MAP as LIEPIN_PUBLIC_EVENT_REASON_MAP
+from seektalent.sources.liepin.reason_codes import (
+    public_source_problem_code as public_source_problem_code,
+)
 from seektalent.sources.liepin.runtime_lane import (
     LiepinWorkerClient as LiepinWorkerClient,
     run_liepin_logical_query_bundle as run_liepin_logical_query_bundle,
@@ -98,11 +99,4 @@ from .runtime_factory import (
 
 
 def public_source_reason_code(reason_code: object) -> str | None:
-    public_code = runtime_public_source_reason_code(reason_code)
-    if public_code is not None:
-        return public_code
-    text = str(reason_code or "").strip()
-    if not text:
-        return None
-    mapped = LIEPIN_PUBLIC_EVENT_REASON_MAP.get(text)
-    return runtime_public_source_reason_code(mapped)
+    return public_source_problem_code(reason_code)

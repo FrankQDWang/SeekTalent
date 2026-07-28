@@ -24,43 +24,22 @@ _SENSITIVE_KEY_TOKENS = {
     "token",
 }
 _SAFE_REASON_CODES = {
-    "blocked_approval_missing",
-    "blocked_backend_unavailable",
-    "blocked_budget_exhausted",
-    "blocked_compliance",
-    "blocked_login_required",
-    "cancelled_by_user",
     "card_rank_budget",
     "detail_enrichment_applied",
     "detail_evidence",
-    "failed_internal_error",
-    "failed_provider_error",
     "hard_education_mismatch",
     "hard_filter_passed",
     "hard_location_mismatch",
     "high_value_card",
     "insufficient_card_signal",
-    "login_required",
     "matched_card_terms",
     "must_have_zero_overlap",
     "obvious_role_mismatch",
-    "partial_budget_exhausted",
-    "partial_timeout",
     "provider_rank_preserved",
-    "source_age_filter_unsupported",
-    "source_browser_backend_unavailable",
-    "source_browser_reference_stale",
-    "source_browser_timeout",
     "source_card_candidate",
     "source_detail_candidate",
-    "source_filter_degraded",
-    "source_filter_unavailable",
-    "source_filter_unsupported",
     "source_lanes_completed",
     "source_lanes_degraded",
-    "source_location_filter_unsupported",
-    "source_login_required",
-    "source_risk_challenge",
     "within_run_detail_budget",
 }
 _SAFE_COUNT_KEYS = {
@@ -192,7 +171,11 @@ def sanitize_text(value: str | None) -> str | None:
 def sanitize_reason_code(value: str | None) -> str | None:
     if value is None:
         return None
-    return value if value in _SAFE_REASON_CODES else "unknown_reason"
+    if value in _SAFE_REASON_CODES:
+        return value
+    from seektalent.sources.liepin.reason_codes import public_source_problem_code
+
+    return public_source_problem_code(value) or "unknown_reason"
 
 
 def sanitize_artifact_ref(value: str | None) -> str | None:

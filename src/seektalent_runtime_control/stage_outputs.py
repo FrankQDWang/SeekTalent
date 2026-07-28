@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from seektalent.public_payload_safety import public_source_identifier, public_text
+from seektalent.sources.liepin.reason_codes import public_source_problem_code
 from seektalent_runtime_control.errors import RuntimeControlError
 
 
@@ -65,45 +66,6 @@ _PUBLIC_EVENT_STATUSES = {"pending", "running", "completed", "partial", "blocked
 _PUBLIC_QUERY_GROUP_LIFECYCLE_BY_STAGE = {
     "round_query": "planned",
     "feedback": "executed",
-}
-_PUBLIC_SOURCE_REASON_CODES = {
-    "job_lease_expired",
-    "relay_pending_worker",
-    "runtime_failed",
-    "source_login_required",
-    "source_account_mismatch",
-    "source_browser_timeout",
-    "source_browser_backend_unavailable",
-    "source_browser_reference_stale",
-    "source_browser_extension_disconnected",
-    "source_browser_policy_blocked",
-    "source_risk_or_verification_required",
-    "source_browser_interaction_required",
-    "source_budget_exhausted",
-    "source_filter_applied",
-    "source_filter_partial",
-    "source_filter_unavailable",
-    "source_filter_unsupported",
-    "source_filter_degraded",
-    "source_location_filter_unsupported",
-    "source_age_filter_unsupported",
-    "source_provider_failed",
-    "source_partial",
-    "source_unknown",
-}
-_PUBLIC_REASON_MAP = {
-    "blocked_backend_unavailable": "source_browser_backend_unavailable",
-    "blocked_login_required": "source_login_required",
-    "failed_provider_error": "source_provider_failed",
-    "login_required": "source_login_required",
-    "partial_timeout": "source_browser_timeout",
-    "runtime_failed": "source_provider_failed",
-    "cancelled_by_user": "source_unknown",
-    "source_location_filter_partial": "source_filter_partial",
-    "source_age_filter_unsupported": "source_filter_unavailable",
-    "source_location_filter_unsupported": "source_filter_unavailable",
-    "source_filter_unsupported": "source_filter_unavailable",
-    "source_filter_applied": "source_filter_applied",
 }
 _SENSITIVE_KEY_EXACT = {
     "provider",
@@ -425,13 +387,7 @@ def _non_negative_int(value: object) -> int | None:
 
 
 def _safe_reason_code(value: object) -> str | None:
-    text = _text(value)
-    if text is None:
-        return None
-    if text in _PUBLIC_SOURCE_REASON_CODES:
-        return text
-    mapped = _PUBLIC_REASON_MAP.get(text)
-    return mapped if mapped in _PUBLIC_SOURCE_REASON_CODES else None
+    return public_source_problem_code(value)
 
 
 def _safe_json_object(value: Mapping[str, object]) -> dict[str, object]:

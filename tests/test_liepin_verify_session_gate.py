@@ -12,6 +12,7 @@ from seektalent.liepin_verify_session_gate import (
     _raise_reason,
 )
 from seektalent.providers.liepin.client import LiepinWorkerModeError
+from seektalent.sources.liepin.reason_codes import public_source_problem_message
 from tests.browser_bridge_bundle_fixtures import exact_browser_bridge_requirement
 from tests.settings_factory import make_settings
 
@@ -91,7 +92,7 @@ def test_production_gate_maps_direct_wtscli_failure_and_closes_transport(
     )
     gate = ProductionLiepinVerifySessionGate(make_settings())
 
-    with pytest.raises(LiepinWorkerModeError, match="登录猎聘") as raised:
+    with pytest.raises(LiepinWorkerModeError, match="需要登录") as raised:
         asyncio.run(gate.verify())
 
     assert raised.value.code == "liepin_opencli_login_required"
@@ -147,4 +148,7 @@ def test_gate_failures_have_stable_actionable_chinese_messages(reason: str) -> N
         _raise_reason(reason)
 
     assert raised.value.code == reason
-    assert any(token in str(raised.value) for token in ("请", "重试", "重新"))
+    assert str(raised.value) == public_source_problem_message(
+        reason,
+        source_label="猎聘",
+    )

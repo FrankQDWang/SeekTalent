@@ -34,19 +34,19 @@ def test_workbench_action_reason_preserves_liepin_opencli_reason_only() -> None:
 def test_workbench_reason_message_covers_search_and_results_readiness() -> None:
     assert (
         cli._workbench_reason_message("liepin_opencli_search_input_unapplied")
-        == "猎聘搜索框未能保留关键词。请等待搜索页面加载完成后重试。"
+        == "猎聘页面响应超时，请稍后重试。"
     )
     assert (
         cli._workbench_reason_message("liepin_opencli_search_not_ready")
-        == "猎聘搜索页面未就绪。请确认当前 Chrome 可以正常打开猎聘人才搜索页。"
+        == "猎聘页面响应超时，请稍后重试。"
     )
     assert (
         cli._workbench_reason_message("liepin_opencli_results_not_ready")
-        == "猎聘搜索结果尚未就绪。请确认页面加载完成后重试。"
+        == "猎聘页面响应超时，请稍后重试。"
     )
     assert (
         cli._workbench_reason_message("liepin_opencli_removed_config")
-        == "检测到已移除的 Liepin OpenCLI 清理配置。请删除旧的 tab 清理设置后重试。"
+        == "猎聘浏览器运行组件版本或能力不兼容，请更新应用并重新启用浏览器扩展后重试。"
     )
 
 

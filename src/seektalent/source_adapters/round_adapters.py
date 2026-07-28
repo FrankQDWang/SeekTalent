@@ -22,7 +22,7 @@ from seektalent.runtime.source_round_dispatch import (
     SourceRoundDispatchStatus,
 )
 from seektalent.sources.cts.filter_projection import project_constraints_to_cts
-from seektalent.sources.liepin.reason_codes import LIEPIN_PUBLIC_EVENT_REASON_MAP
+from seektalent.sources.liepin.reason_codes import public_source_problem_code
 from seektalent.source_contracts import (
     RuntimeQueryCandidateAttribution,
     SourceQueryExecutionOutcome,
@@ -233,7 +233,7 @@ async def _run_liepin_source_round(
         status=_source_round_status(result.status),
         candidates=tuple(result.candidate_store_updates.values()),
         raw_candidate_count=int(result.raw_candidate_count or 0),
-        safe_reason_code=_public_liepin_reason_code(
+        safe_reason_code=public_source_problem_code(
             result.stop_reason_code or result.blocked_reason_code or filter_warning_reason
         ),
         diagnostics=((result.safe_error_summary,) if result.safe_error_summary else ()),
@@ -243,15 +243,6 @@ async def _run_liepin_source_round(
         candidate_query_attributions=result.candidate_query_attributions,
         private_first_page_continuations=result.private_first_page_continuations,
     )
-
-
-def _public_liepin_reason_code(reason_code: str | None) -> str | None:
-    if reason_code is None:
-        return None
-    text = str(reason_code).strip()
-    if not text:
-        return None
-    return LIEPIN_PUBLIC_EVENT_REASON_MAP.get(text, text)
 
 
 def _source_filter_warning_reason(intents: tuple[RuntimeSourceQueryIntent, ...]) -> str | None:

@@ -12,33 +12,10 @@ from seektalent.opencli_browser.daemon_process import connect_installed_opencli_
 from seektalent.opencli_browser.lifecycle import browser_control_key
 from seektalent.opencli_launcher import BootstrapError, ensure_opencli_runtime, runtime_requirement
 from seektalent.providers.liepin.client import LiepinWorkerModeError
+from seektalent.sources.liepin.reason_codes import public_source_problem_message
 from seektalent.wtscli_verify_session_adapter import (
     probe_wtscli_liepin_session,
 )
-_REASON_MESSAGES = {
-    "liepin_host_tab_missing": "请在 Chrome 中打开任意 h.liepin.com 页面后重试。",
-    "liepin_host_window_ambiguous": "检测到多个可用的猎聘窗口，请只保留一个猎聘窗口后重试。",
-    "liepin_opencli_login_required": "请在当前 Chrome 中登录猎聘后重试。",
-    "liepin_opencli_identity_intercept": "猎聘要求完成身份验证，请在 Chrome 中处理后重试。",
-    "liepin_opencli_risk_page": "猎聘触发了风控或验证页面，请在 Chrome 中完成验证后重试。",
-    "liepin_opencli_unknown_modal": "猎聘页面存在未知阻断弹窗，请在 Chrome 中处理后重试。",
-    "liepin_opencli_search_not_ready": "猎聘搜索页面尚未就绪，请等待页面加载完成后重试。",
-    "liepin_opencli_bridge_build_mismatch": "WTSCLI runtime 与扩展版本不匹配，请重载扩展或重启 Chrome 后重试。",
-    "liepin_opencli_bridge_protocol_mismatch": "WTSCLI runtime 与扩展协议不匹配，请重载扩展或重启 Chrome 后重试。",
-    "liepin_opencli_bridge_capability_missing": "WTSCLI 扩展能力不完整，请重载扩展或重启 Chrome 后重试。",
-    "liepin_opencli_bridge_wrong_implementation": "当前浏览器桥接不是 SeekTalent WTSCLI，请启用随应用安装的 WTSCLI 扩展后重试。",
-    "liepin_opencli_bridge_integrity_failed": "WTSCLI 安装完整性校验失败，请重新安装 SeekTalent 后重试。",
-    "liepin_opencli_extension_disconnected": "WTSCLI 扩展未连接，请确认扩展已启用并重载后重试。",
-    "liepin_opencli_daemon_not_running": "WTSCLI 后台服务未就绪，请重新启动 SeekTalent 后重试。",
-    "liepin_opencli_daemon_stale": "WTSCLI 后台服务版本已过期，请重新启动 SeekTalent 后重试。",
-    "liepin_opencli_bootstrap_failed": "WTSCLI runtime 未安装完整，请重新安装或重新启动 SeekTalent 后重试。",
-    "liepin_opencli_status_unavailable": "WTSCLI 状态暂不可用，请确认扩展已启用并重新启动 SeekTalent 后重试。",
-    "liepin_opencli_timeout": "猎聘会话校验超时，请等待页面加载完成后重试。",
-    "liepin_opencli_stale_control_fence": "猎聘浏览器控制权已失效，请重新启动本次检索。",
-    "liepin_opencli_stale_ref": "猎聘浏览器 profile 或运行凭据已失效，请重新启动本次检索。",
-    "liepin_opencli_tab_response_malformed": "WTSCLI 未能建立安全的猎聘校验标签页，请重载扩展后重试。",
-    "liepin_owned_tab_missing": "猎聘校验标签页已失效，请重新启动本次检索。",
-}
 
 
 class ProductionLiepinVerifySessionGate:
@@ -106,11 +83,14 @@ def _verify_session(settings: AppSettings) -> None:
 
 def _raise_reason(reason: object) -> None:
     code = str(reason or "liepin_opencli_status_unavailable")
-    message = _REASON_MESSAGES.get(
+    message = public_source_problem_message(
         code,
-        "猎聘会话校验失败，请确认 WTSCLI 扩展和猎聘页面可用后重试。",
+        source_label="猎聘",
     )
-    raise LiepinWorkerModeError(message, code=code)
+    raise LiepinWorkerModeError(
+        message or "猎聘会话校验失败，请确认浏览器检索通道可用后重试。",
+        code=code,
+    )
 
 
 def _normalized_boundary_reason(reason: str) -> str:

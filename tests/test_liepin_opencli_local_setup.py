@@ -71,7 +71,7 @@ def test_managed_opencli_bootstrap_failure_preserves_specific_reason() -> None:
     assert result.ok is False
     assert result.safe_reason_code == "opencli_bootstrap_failed"
     assert liepin_reason_from_opencli_reason("opencli_bootstrap_failed") == "liepin_opencli_bootstrap_failed"
-    assert public_source_reason_code("liepin_opencli_bootstrap_failed") == "source_browser_backend_unavailable"
+    assert public_source_reason_code("liepin_opencli_bootstrap_failed") == "source_browser_installation_invalid"
 
 
 def test_dev_launcher_uses_liepin_opencli_helper_without_legacy_mcp_adapter() -> None:

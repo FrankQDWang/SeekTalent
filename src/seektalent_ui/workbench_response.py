@@ -5,6 +5,7 @@ from typing import Literal
 
 from seektalent.dev_mode import DevModeStatus
 from seektalent.source_adapters import public_source_reason_code
+from seektalent.sources.liepin.reason_codes import public_source_problem_message
 from seektalent_ui.candidate_identity import public_identity_id
 from seektalent_ui.models import (
     WorkbenchCandidateEvidenceResponse,
@@ -34,11 +35,7 @@ from seektalent_ui.models import (
     WorkbenchSourceStatus,
 )
 from seektalent_ui.workbench_store import (
-    LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE,
-    LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE,
     LIEPIN_BROWSER_LOGIN_REQUIRED_CODE,
-    LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE,
-    LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE,
     RuntimeSourceCountProjection,
     WorkbenchCandidateEvidence,
     WorkbenchCandidateReviewItem,
@@ -472,32 +469,8 @@ def public_runtime_source_reason_code(reason_code: str | None) -> str | None:
 
 
 def liepin_start_probe_warning_message(reason_code: str) -> str:
-    if reason_code == LIEPIN_BROWSER_LOGIN_REQUIRED_CODE:
-        return LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE
-    if reason_code == LIEPIN_BROWSER_ACCOUNT_MISMATCH_CODE:
-        return LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE
-    if reason_code == "liepin_opencli_removed_config":
-        return "检测到已移除的 Liepin OpenCLI 清理配置，请删除旧的 tab cleanup 设置后重试。"
-    return LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE
+    return public_source_problem_message(reason_code, source_label="猎聘") or "猎聘检索暂不可用，请稍后重试。"
 
 
 def source_runtime_warning_message(reason_code: str) -> str | None:
-    if reason_code == "source_login_required":
-        return LIEPIN_BROWSER_LOGIN_REQUIRED_MESSAGE
-    if reason_code == "source_account_mismatch":
-        return LIEPIN_BROWSER_ACCOUNT_MISMATCH_MESSAGE
-    if reason_code in {
-        "source_browser_timeout",
-        "source_browser_backend_unavailable",
-        "source_browser_reference_stale",
-        "source_browser_extension_disconnected",
-        "source_browser_policy_blocked",
-        "source_risk_or_verification_required",
-        "source_browser_interaction_required",
-    }:
-        return LIEPIN_BROWSER_PROBE_UNAVAILABLE_MESSAGE
-    if reason_code == "source_budget_exhausted":
-        return "当前来源的检索预算已用完，本轮已停止继续打开更多结果。"
-    if reason_code in {"source_provider_failed", "source_partial", "source_unknown"}:
-        return "当前来源检索未完整完成，请稍后重试或切换来源。"
-    return None
+    return public_source_problem_message(reason_code, source_label="猎聘")

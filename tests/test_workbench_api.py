@@ -926,7 +926,7 @@ def test_authenticated_session_creation_returns_default_source_cards(tmp_path: P
     assert cards["liepin"]["warningCode"] == "source_login_required"
     assert (
         cards["liepin"]["warningMessage"]
-        == "请在本机 Chrome 登录猎聘并保持会话有效，系统会在检索时使用该登录态。"
+        == "猎聘账号需要登录后才能继续检索。"
     )
     assert {run["sourceKind"] for run in payload["sourceRuns"]} == {"liepin"}
     assert payload["requirement_review"]["status"] == "draft"
@@ -982,7 +982,7 @@ def test_session_creation_uses_login_prompt_without_removed_setup_path(tmp_path:
 
     assert cards["liepin"]["authState"] == "login_required"
     assert cards["liepin"]["warningCode"] == "source_login_required"
-    assert "本机 Chrome 登录猎聘" in cards["liepin"]["warningMessage"]
+    assert cards["liepin"]["warningMessage"] == "猎聘账号需要登录后才能继续检索。"
 
 
 def test_session_runtime_source_state_uses_public_latest_lane_payloads(tmp_path: Path) -> None:
@@ -2626,7 +2626,7 @@ def test_session_start_requires_approved_requirement_review_and_blocks_unconnect
     assert cards["liepin"]["warningCode"] == "source_browser_backend_unavailable"
     assert (
         cards["liepin"]["warningMessage"]
-        == "浏览器检索通道暂不可用，请确认本机应用和浏览器助手正常后重试。"
+        == "猎聘浏览器检索通道暂不可用，请确认本机应用和浏览器助手正常后重试。"
     )
     assert FakeWorkbenchRuntime.started.wait(timeout=1)
     FakeWorkbenchRuntime.release.set()
@@ -2725,7 +2725,7 @@ def test_cts_runtime_run_id_is_attached_before_completion_without_exposing_runti
     FakeWorkbenchRuntime.release.set()
 
     failed = _wait_for_source_status(client, conflict_session["sessionId"], conflict_cts_run["sourceRunId"], "failed")
-    assert failed["warningCode"] == "runtime_failed"
+    assert failed["warningCode"] == "source_provider_failed"
     with sqlite3.connect(_db_path(tmp_path)) as conn:
         conflict_row = conn.execute(
             "SELECT runtime_run_id, warning_message FROM source_runs WHERE source_run_id = ?",
