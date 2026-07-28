@@ -614,7 +614,10 @@ def test_expired_recoverable_lease_fails_closed_in_runner(tmp_path, monkeypatch:
     run = store.get_run("runtime-expired")
     assert resume_flags == [False]
     assert run.status == "failed"
-    assert run.stop_reason_code == "runtime_executor_crash_timeout"
+    assert (
+        run.stop_reason_code
+        == "runtime_checkpoint_safe_boundary_invalid"
+    )
 
 
 def test_idle_stop_is_bounded_and_repeated_stop_is_idempotent(

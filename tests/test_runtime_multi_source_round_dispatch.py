@@ -506,7 +506,9 @@ def test_runtime_source_round_context_requires_explicit_detail_open_claim_ledger
         tracer.close()
 
 
-def test_runtime_checkpoint_persistence_rehydrates_opened_claim_without_private_ledger_payload(tmp_path) -> None:
+def test_runtime_checkpoint_boundary_does_not_copy_detail_claim_ledger(tmp_path) -> None:
+    from seektalent_runtime_control.checkpoint_v2 import checkpoint_projection
+
     runtime = WorkflowRuntime(make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"))
     run_state = _run_state()
     ledger = DetailOpenClaimLedger(run_state.detail_open_claims_by_provider_key)
@@ -527,8 +529,7 @@ def test_runtime_checkpoint_persistence_rehydrates_opened_claim_without_private_
 
     assert len(captured) == 1
     checkpoint = captured[0]
-    assert checkpoint.run_state is not run_state
-    assert checkpoint.run_state.detail_open_claims_by_provider_key is not run_state.detail_open_claims_by_provider_key
+    assert checkpoint.run_state is run_state
     assert checkpoint.run_state.detail_open_claims_by_provider_key["opaque-claim-key"].status == "opened"
     assert checkpoint.run_state.detail_open_claims_by_provider_key["opaque-claim-key"].browser_open_attempt_count == 1
     assert checkpoint.candidate_store is checkpoint.run_state.candidate_store
@@ -537,18 +538,14 @@ def test_runtime_checkpoint_persistence_rehydrates_opened_claim_without_private_
     assert "detail_open_claim_ledger" not in vars(checkpoint)
     assert "_lock" not in vars(checkpoint)
 
-    restored_run_state = RunState.model_validate(checkpoint.run_state.model_dump(mode="json"))
-    restored_ledger = DetailOpenClaimLedger(restored_run_state.detail_open_claims_by_provider_key)
-    restored_claim = restored_run_state.detail_open_claims_by_provider_key["opaque-claim-key"]
-    assert restored_claim.status == "opened"
-    assert restored_claim.browser_open_attempt_count == 1
-    assert restored_claim.last_safe_reason_code is None
-    assert restored_ledger.try_claim("opaque-claim-key") is False
+    projection = checkpoint_projection(checkpoint.run_state)
+    assert "detail_open_claims_by_provider_key" not in projection.control_state
+    assert projection.detail_claims["opaque-claim-key"]["status"] == "opened"
 
     ledger.try_claim("later-claim-key")
 
     assert "opaque-claim-key" in checkpoint.run_state.detail_open_claims_by_provider_key
-    assert "later-claim-key" not in checkpoint.run_state.detail_open_claims_by_provider_key
+    assert "later-claim-key" in checkpoint.run_state.detail_open_claims_by_provider_key
 
 
 def test_logical_query_dispatch_freezes_requested_count_and_identity() -> None:
@@ -1334,10 +1331,7 @@ def test_rejected_round_persists_terminal_receipts_before_exit(tmp_path) -> None
             ("cts", "failed", True),
             ("liepin", "blocked", False),
         ]
-        assert checkpoint_receipts[-1] == [
-            ("cts", "failed", True),
-            ("liepin", "blocked", False),
-        ]
+        assert checkpoint_receipts == []
         assert json.loads((tracer.run_dir / "runtime" / "query_execution_ledger.json").read_text()) == [
             receipt.model_dump(mode="json") for receipt in run_state.retrieval_state.query_execution_ledger
         ]

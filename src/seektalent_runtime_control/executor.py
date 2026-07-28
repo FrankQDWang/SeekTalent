@@ -9,6 +9,11 @@ from uuid import uuid4
 from seektalent.config import AppSettings
 from seektalent.progress import ProgressEvent
 from seektalent.runtime.orchestrator import WorkflowRuntime
+from seektalent_runtime_control.checkpoint_v2 import (
+    RUNTIME_CHECKPOINT_SCHEMA_V1,
+    checkpoint_projection,
+    legacy_checkpoint_projection,
+)
 from seektalent_runtime_control.commands import RuntimeCommandService
 from seektalent_runtime_control.event_sink import RuntimeControlEventSink, RuntimeEventSink
 from seektalent_runtime_control.errors import RuntimeControlError
@@ -20,6 +25,7 @@ from seektalent_runtime_control.models import (
     RuntimeRunSnapshot,
 )
 from seektalent_runtime_control.requirements import ApprovedRequirementRevision
+from seektalent_runtime_control.recovery_state import RecoveryStateAssembler
 from seektalent_runtime_control.store import RuntimeCheckpointLoadFailure, RuntimeControlStore
 
 SourceContext = dict[str, str | int | bool | None]
@@ -230,6 +236,19 @@ class WorkflowRuntimeExecutor:
             attempt_no=attempt_no,
             claim_reason=claim_reason,
         )
+        if (
+            resume_checkpoint is not None
+            and resume_checkpoint.safe_boundary
+            == "after_finalization_commit"
+        ):
+            return self._settle_completed_run(
+                runtime_run_id=run.runtime_run_id,
+                executor_id=executor_id,
+                attempt_no=attempt_no,
+            )
+        detail_claim_revision, detail_claim_payload_hash = (
+            self.store.get_detail_claim_revision(runtime_run_id=run.runtime_run_id)
+        )
 
         def runtime_start_callback(workflow_runtime_run_id: str) -> None:
             nonlocal runtime_started
@@ -259,20 +278,35 @@ class WorkflowRuntimeExecutor:
             )
 
         def runtime_checkpoint_callback(artifacts: object) -> None:
-            checkpoint = RuntimeCheckpoint(
+            projection = checkpoint_projection(
+                getattr(artifacts, "run_state", {})
+            )
+            checkpoint = self.store.write_checkpoint_v2(
                 checkpoint_id=self.checkpoint_id_factory(),
                 runtime_run_id=run.runtime_run_id,
-                stage="round",
-                round_no=None,
-                safe_boundary="runtime_candidate_checkpoint",
-                run_state=_run_state_payload(getattr(artifacts, "run_state", {})),
-                source_plan={"sourceIds": resolved_source_ids},
-                pending_commands=[],
-                artifact_manifest_ref=None,
-                schema_version="runtime-control-checkpoint/v1",
+                executor_id=executor_id,
+                attempt_no=attempt_no,
+                stage=str(getattr(artifacts, "stage", "round")),
+                round_no=getattr(artifacts, "round_no", None),
+                safe_boundary=str(
+                    getattr(
+                        artifacts,
+                        "safe_boundary",
+                        "runtime_candidate_checkpoint",
+                    )
+                ),
+                accepted_requirement_revision_id=(
+                    approved.approved_requirement_revision_id
+                ),
+                source_ids=resolved_source_ids,
+                projection=projection,
+                detail_claim_revision=detail_claim_revision,
+                detail_claim_hash=detail_claim_payload_hash,
                 created_at=self.now(),
+                continuation_cursor=_string_key_dict(
+                    getattr(artifacts, "continuation_cursor", None)
+                ),
             )
-            self.store.write_checkpoint(checkpoint, executor_id=executor_id, attempt_no=attempt_no)
             self.store.append_executor_event(
                 _event(
                     runtime_run_id=run.runtime_run_id,
@@ -288,6 +322,18 @@ class WorkflowRuntimeExecutor:
                 attempt_no=attempt_no,
                 run_status="running",
                 latest_checkpoint_id=checkpoint.checkpoint_id,
+            )
+
+        def runtime_detail_claim_callback(claims: object) -> None:
+            nonlocal detail_claim_revision, detail_claim_payload_hash
+            payload = _detail_claim_payload(claims)
+            detail_claim_revision, detail_claim_payload_hash = (
+                self.store.write_detail_claim_snapshot(
+                    runtime_run_id=run.runtime_run_id,
+                    claims=payload,
+                    expected_revision=detail_claim_revision,
+                    updated_at=self.now(),
+                )
             )
 
         def runtime_round_boundary_callback(round_no: int) -> object | None:
@@ -321,9 +367,52 @@ class WorkflowRuntimeExecutor:
                 runtime_kwargs["source_context"] = resolved_source_context
             if _runtime_accepts_round_boundary_callback(runtime):
                 runtime_kwargs["runtime_round_boundary_callback"] = runtime_round_boundary_callback
+            if _runtime_accepts_detail_claim_callback(runtime):
+                runtime_kwargs[
+                    "runtime_detail_claim_callback"
+                ] = runtime_detail_claim_callback
             if resume_checkpoint is not None and _runtime_accepts_resume_context(runtime):
-                runtime_kwargs["resume_checkpoint"] = resume_checkpoint.model_dump(mode="json")
-                runtime_kwargs["resume_run_state"] = dict(resume_checkpoint.run_state)
+                if resume_checkpoint.schema_version == RUNTIME_CHECKPOINT_SCHEMA_V1:
+                    legacy_projection = legacy_checkpoint_projection(
+                        resume_checkpoint.run_state
+                    )
+                    if legacy_projection.detail_claims:
+                        (
+                            detail_claim_revision,
+                            detail_claim_payload_hash,
+                        ) = self.store.write_detail_claim_snapshot(
+                            runtime_run_id=run.runtime_run_id,
+                            claims=legacy_projection.detail_claims,
+                            expected_revision=detail_claim_revision,
+                            updated_at=self.now(),
+                        )
+                    resume_checkpoint = self.store.write_checkpoint_v2(
+                        checkpoint_id=self.checkpoint_id_factory(),
+                        runtime_run_id=run.runtime_run_id,
+                        executor_id=executor_id,
+                        attempt_no=attempt_no,
+                        stage=resume_checkpoint.stage,
+                        round_no=resume_checkpoint.round_no,
+                        safe_boundary=resume_checkpoint.safe_boundary,
+                        accepted_requirement_revision_id=(
+                            approved.approved_requirement_revision_id
+                        ),
+                        source_ids=resolved_source_ids,
+                        projection=legacy_projection,
+                        detail_claim_revision=detail_claim_revision,
+                        detail_claim_hash=detail_claim_payload_hash,
+                        created_at=self.now(),
+                    )
+                runtime_kwargs["resume_checkpoint"] = (
+                    resume_checkpoint.model_dump(mode="json")
+                )
+                runtime_kwargs["resume_run_state"] = (
+                    RecoveryStateAssembler(self.store)
+                    .assemble(resume_checkpoint)
+                    .model_dump(mode="json")
+                    if isinstance(runtime, WorkflowRuntime)
+                    else dict(resume_checkpoint.run_state)
+                )
             await runtime.run_async(**runtime_kwargs)
         except (RuntimeError, ValueError, OSError) as exc:
             reason_code = "runtime_run_failed" if runtime_started else "runtime_executor_start_failed"
@@ -355,12 +444,29 @@ class WorkflowRuntimeExecutor:
                 status="failed",
                 reason_code=reason_code,
             )
+            if self.store.get_run(run.runtime_run_id).latest_checkpoint_id:
+                self.store.compact_terminal_checkpoints(
+                    runtime_run_id=run.runtime_run_id
+                )
             raise
 
+        return self._settle_completed_run(
+            runtime_run_id=run.runtime_run_id,
+            executor_id=executor_id,
+            attempt_no=attempt_no,
+        )
+
+    def _settle_completed_run(
+        self,
+        *,
+        runtime_run_id: str,
+        executor_id: str,
+        attempt_no: int,
+    ) -> RuntimeRunRecord:
         completed_at = self.now()
         self.store.append_executor_event(
             _event(
-                runtime_run_id=run.runtime_run_id,
+                runtime_run_id=runtime_run_id,
                 event_type="runtime_run_completed",
                 stage="finalization",
                 status="completed",
@@ -374,12 +480,16 @@ class WorkflowRuntimeExecutor:
             completed_at=completed_at,
         )
         self.store.release_executor_lease(
-            runtime_run_id=run.runtime_run_id,
+            runtime_run_id=runtime_run_id,
             executor_id=executor_id,
             attempt_no=attempt_no,
             released_at=self.now(),
         )
-        return self.store.get_run(run.runtime_run_id)
+        if self.store.get_run(runtime_run_id).latest_checkpoint_id:
+            self.store.compact_terminal_checkpoints(
+                runtime_run_id=runtime_run_id
+            )
+        return self.store.get_run(runtime_run_id)
 
     def _source_context(self, source_ids: Sequence[str]) -> SourceContext | None:
         if self.source_context_provider is not None:
@@ -586,6 +696,19 @@ def _runtime_accepts_round_boundary_callback(runtime: object) -> bool:
     return any(parameter.kind == Parameter.VAR_KEYWORD for parameter in parameters.values())
 
 
+def _runtime_accepts_detail_claim_callback(runtime: object) -> bool:
+    run_async = getattr(runtime, "run_async", None)
+    if not callable(run_async):
+        return False
+    parameters = signature(run_async).parameters
+    if "runtime_detail_claim_callback" in parameters:
+        return True
+    return any(
+        parameter.kind == Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+
+
 def _run_state_payload(run_state: object) -> dict[str, object]:
     if isinstance(run_state, dict):
         return _string_key_dict(run_state)
@@ -595,6 +718,19 @@ def _run_state_payload(run_state: object) -> dict[str, object]:
         return _string_key_dict(payload)
     values = vars(run_state) if hasattr(run_state, "__dict__") else {}
     return _string_key_dict(values)
+
+
+def _detail_claim_payload(claims: object) -> dict[str, object]:
+    if not isinstance(claims, dict):
+        raise RuntimeControlError("runtime_detail_claim_snapshot_invalid")
+    payload: dict[str, object] = {}
+    for key, claim in claims.items():
+        if not isinstance(key, str):
+            continue
+        model_dump = getattr(claim, "model_dump", None)
+        value = model_dump(mode="json") if callable(model_dump) else claim
+        payload[key] = _string_key_dict(value)
+    return payload
 
 
 def _plus_seconds(value: str, seconds: int) -> str:

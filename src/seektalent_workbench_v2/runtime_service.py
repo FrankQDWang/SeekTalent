@@ -328,6 +328,11 @@ class WorkbenchV2RuntimeService:
         workflow_input = snapshot.snapshot.get("workflowInput") if snapshot is not None else None
         if not isinstance(workflow_input, Mapping):
             raise RuntimeControlError("workbench_v2_runtime_recovery_input_missing")
+        workflow_input = {
+            key: value
+            for key, value in workflow_input.items()
+            if isinstance(key, str)
+        }
         job_title = _required_workflow_input_text(workflow_input, "jobTitle")
         jd_text = _required_workflow_input_text(workflow_input, "jdText")
         notes_value = workflow_input.get("notes")

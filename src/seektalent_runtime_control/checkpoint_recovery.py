@@ -63,10 +63,33 @@ def _before_source_dispatch_is_valid(
 
 
 def _runtime_candidate_checkpoint_is_valid(
-    checkpoint: RuntimeCheckpoint,
-    context: RuntimeCheckpointValidationContext,
+    _checkpoint: RuntimeCheckpoint,
+    _context: RuntimeCheckpointValidationContext,
 ) -> bool:
-    return _checkpoint_matches_run(checkpoint, context) and context.candidate_truth_valid
+    return False
+
+
+def _cursor_matches(
+    checkpoint: RuntimeCheckpoint,
+    *,
+    next_phase: str,
+) -> bool:
+    raw_cursor = checkpoint.durable_refs.get("continuationCursor")
+    cursor = (
+        {
+            key: value
+            for key, value in raw_cursor.items()
+            if isinstance(key, str)
+        }
+        if isinstance(raw_cursor, dict)
+        else None
+    )
+    return (
+        cursor is not None
+        and cursor.get("nextPhase") == next_phase
+        and cursor.get("completedRounds")
+        == checkpoint.durable_refs.get("roundLedgerHighWatermark")
+    )
 
 
 def _after_round_controller_is_valid(
@@ -76,15 +99,75 @@ def _after_round_controller_is_valid(
     return (
         _checkpoint_matches_run(checkpoint, context)
         and checkpoint.round_no is not None
-        and _round_marker_matches(checkpoint)
+        and (
+            _round_marker_matches(checkpoint)
+            if checkpoint.schema_version == "runtime-control-checkpoint/v1"
+            else checkpoint.durable_refs.get("roundLedgerHighWatermark")
+            == checkpoint.round_no
+        )
         and context.candidate_truth_valid
+        and _cursor_matches(checkpoint, next_phase="rounds")
+    )
+
+
+def _before_finalization_is_valid(
+    checkpoint: RuntimeCheckpoint,
+    context: RuntimeCheckpointValidationContext,
+) -> bool:
+    return (
+        _checkpoint_matches_run(checkpoint, context)
+        and context.candidate_truth_valid
+        and _cursor_matches(checkpoint, next_phase="finalization")
+    )
+
+
+def _after_finalization_is_valid(
+    checkpoint: RuntimeCheckpoint,
+    context: RuntimeCheckpointValidationContext,
+) -> bool:
+    finalization_revision = checkpoint.durable_refs.get(
+        "finalizationRevision"
+    )
+    return (
+        _checkpoint_matches_run(checkpoint, context)
+        and checkpoint.stage == "finalization"
+        and checkpoint.round_no is None
+        and isinstance(finalization_revision, int)
+        and not isinstance(finalization_revision, bool)
+        and finalization_revision > 0
+        and context.candidate_truth_valid
+        and _cursor_matches(checkpoint, next_phase="complete")
+    )
+
+
+def _after_source_result_is_valid(
+    _checkpoint: RuntimeCheckpoint,
+    _context: RuntimeCheckpointValidationContext,
+) -> bool:
+    """Fail closed until a durable mid-round continuation cursor exists."""
+    return False
+
+
+def _paused_boundary_is_valid(
+    checkpoint: RuntimeCheckpoint,
+    context: RuntimeCheckpointValidationContext,
+) -> bool:
+    return (
+        _checkpoint_matches_run(checkpoint, context)
+        and context.candidate_truth_valid
+        and _cursor_matches(checkpoint, next_phase="rounds")
     )
 
 
 SAFE_BOUNDARY_REGISTRY: dict[str, SafeBoundaryValidator] = {
     "before_source_dispatch": _before_source_dispatch_is_valid,
     "runtime_candidate_checkpoint": _runtime_candidate_checkpoint_is_valid,
+    "after_source_result_commit": _after_source_result_is_valid,
     "after_round_controller": _after_round_controller_is_valid,
+    "before_finalization": _before_finalization_is_valid,
+    "after_finalization_commit": _after_finalization_is_valid,
+    "entering_pause": _paused_boundary_is_valid,
+    "entering_needs_attention": _paused_boundary_is_valid,
 }
 
 

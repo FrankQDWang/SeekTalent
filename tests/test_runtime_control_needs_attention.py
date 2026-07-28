@@ -844,7 +844,6 @@ def test_verify_session_mapping_is_total_closed_and_scope_bound() -> None:
         "liepin_opencli_identity_intercept": "complete_identity_check",
         "liepin_opencli_login_required": "log_in_to_liepin",
         "liepin_opencli_risk_page": "complete_liepin_risk_check",
-        "liepin_opencli_unknown_modal": "resolve_liepin_modal",
     }
     for source_code, canonical_code in expected.items():
         source_action = VerifySessionUserActionV1(
@@ -854,7 +853,6 @@ def test_verify_session_mapping_is_total_closed_and_scope_bound() -> None:
                 "liepin_opencli_identity_intercept": "verify_session.complete_identity_check",
                 "liepin_opencli_login_required": "verify_session.log_in",
                 "liepin_opencli_risk_page": "verify_session.complete_risk_check",
-                "liepin_opencli_unknown_modal": "verify_session.dismiss_or_resolve_modal",
             }[source_code],
         )
         mapped = map_verify_session_user_action(
@@ -865,6 +863,15 @@ def test_verify_session_mapping_is_total_closed_and_scope_bound() -> None:
         assert mapped.instruction_key == USER_ACTION_INSTRUCTIONS[canonical_code]
         assert mapped.scope == USER_ACTION_SCOPES[canonical_code]
         assert mapped.affected_scope_ref == "6" * 32
+
+    with pytest.raises(ValueError, match="verify_session_user_action_unsupported"):
+        map_verify_session_user_action(
+            VerifySessionUserActionV1(
+                code="liepin_opencli_unknown_modal",
+                instruction_key="verify_session.dismiss_or_resolve_modal",
+            ),
+            affected_scope_ref="6" * 32,
+        )
 
     with pytest.raises((TypeError, ValueError)):
         map_verify_session_user_action(object(), affected_scope_ref="6" * 32)
@@ -879,7 +886,7 @@ def test_needs_attention_envelope_requires_one_canonical_action() -> None:
         _envelope(outcome="failed", action=action)
 
 
-def test_runtime_control_v15_fresh_schema_has_action_history_and_pointer(
+def test_runtime_control_v16_fresh_schema_has_action_history_and_pointer(
     tmp_path: Path,
 ) -> None:
     store = _store(tmp_path)
@@ -891,7 +898,7 @@ def test_runtime_control_v15_fresh_schema_has_action_history_and_pointer(
         action_sql = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'runtime_control_user_actions'"
         ).fetchone()
-    assert RUNTIME_CONTROL_SCHEMA_VERSION == version == 15
+    assert RUNTIME_CONTROL_SCHEMA_VERSION == version == 16
     assert "current_action_id" in run_columns
     assert action_sql is not None
 
@@ -900,6 +907,10 @@ def test_no_owner_entry_and_resolution_retain_history(tmp_path: Path) -> None:
     store = _store(tmp_path)
     checkpoint = _checkpoint()
     store.write_checkpoint_for_recovery(checkpoint)
+    assert checkpoint.schema_version == "runtime-control-checkpoint/v2"
+    assert store.get_latest_checkpoint(runtime_run_id=RUN_ID).schema_version == (
+        "runtime-control-checkpoint/v2"
+    )
     action = _action()
     admission = _entry_admission(store, checkpoint)
     entered = store.commit_needs_attention(
@@ -2049,7 +2060,7 @@ def test_v14_to_v15_statement_failure_rolls_back_and_retries(
     )
     RuntimeControlStore(path).initialize()
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 15
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 16
 
 
 @pytest.mark.parametrize("hook_index", range(0, 11))

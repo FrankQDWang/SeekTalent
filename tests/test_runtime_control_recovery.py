@@ -250,11 +250,13 @@ def test_recovery_restores_latest_checkpoint_before_new_runtime_events(tmp_path:
         now=lambda: "2026-06-08T00:00:06.000000Z",
     ).recover_start_timeouts(resume_recoverable=True)
 
-    assert [decision.reason_code for decision in decisions] == ["runtime_checkpoint_restored"]
+    assert [decision.reason_code for decision in decisions] == [
+        "runtime_checkpoint_safe_boundary_invalid"
+    ]
     events = store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=10).events
-    assert events[-1].event_type == "runtime_checkpoint_restored"
+    assert events[-1].event_type == "runtime_checkpoint_restore_failed"
     assert events[-1].payload["checkpointId"] == "rtcheckpoint_1"
-    assert store.get_run("runtime_run_1").status == "resume_requested"
+    assert store.get_run("runtime_run_1").status == "failed"
 
 
 def test_recovery_can_fail_recoverable_checkpoint_instead_of_resuming(tmp_path: Path) -> None:
@@ -293,14 +295,16 @@ def test_recovery_can_fail_recoverable_checkpoint_instead_of_resuming(tmp_path: 
         now=lambda: "2026-06-08T00:00:06.000000Z",
     ).recover_start_timeouts(resume_recoverable=False)
 
-    assert [decision.reason_code for decision in decisions] == ["runtime_executor_crash_timeout"]
+    assert [decision.reason_code for decision in decisions] == [
+        "runtime_checkpoint_safe_boundary_invalid"
+    ]
     run = store.get_run("runtime_run_1")
     assert run.status == "failed"
-    assert run.stop_reason_code == "runtime_executor_crash_timeout"
+    assert run.stop_reason_code == "runtime_checkpoint_safe_boundary_invalid"
     events = store.list_events(runtime_run_id="runtime_run_1", after_seq=0, limit=10).events
     assert [event.event_type for event in events] == [
         "runtime_executor_lease_expired",
-        "runtime_executor_crashed",
+        "runtime_checkpoint_restore_failed",
     ]
     assert store.list_active_executor_leases() == []
     with sqlite3.connect(store.path) as conn:
@@ -866,7 +870,7 @@ def test_recovery_pairs_legacy_decision_after_more_than_one_hundred_intervening_
     ).events == events_before
 
 
-@pytest.mark.parametrize("legacy_case", ["cancel", "restored", "restore_failed"])
+@pytest.mark.parametrize("legacy_case", ["cancel", "restore_failed"])
 def test_recovery_reuses_legacy_decision_payload_shapes(
     tmp_path: Path,
     legacy_case: str,

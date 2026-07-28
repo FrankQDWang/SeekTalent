@@ -1,0 +1,37 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Replace full RunState recovery snapshots with compact Runtime Control Checkpoint v2 projections and durable truth references.",
+  "rationale": "Recovery correctness requires coordinated runtime safe boundaries, SQLite-owned candidate and detail revisions, deterministic assembly, schema migration, and terminal compaction. The slice crosses runtime and runtime-control storage boundaries and cannot be split without reintroducing mixed checkpoint authority.",
+  "touched_layers": [
+    "docs",
+    "other",
+    "runtime",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent/runtime/orchestrator.py"
+  ],
+  "dependency_files": [],
+  "deletion_targets": [
+    "full RunState copies in newly written recovery checkpoints",
+    "detail-open claim changes that force full RunState checkpoints",
+    "unbounded intermediate recovery checkpoints after terminal commit"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent/runtime/orchestrator.py",
+    "src/seektalent_runtime_control/store.py"
+  ],
+  "line_count_rationale": "The existing runtime orchestrator and Runtime Control SQLite store are oversized ownership boundaries. This vertical slice makes surgical changes in place; splitting those modules is a separate refactor outside the checkpoint scope.",
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest"
+  ],
+  "risks": [
+    "A checkpoint pointer could advance without the candidate truth revision unless every boundary remains in one SQLite transaction.",
+    "Compaction could remove resumable state before a terminal product outcome is durably committed.",
+    "Legacy v1 payload migration must fail closed without permitting new v1 writes."
+  ]
+}

@@ -808,14 +808,14 @@ def test_provider_account_subject_is_revalidated_before_every_subsequent_command
         ),
         (
             "unknown_modal",
-            "liepin_opencli_unknown_modal",
+            "liepin_opencli_search_not_ready",
             "ready",
             "ready",
             "ready",
             "ready",
             "not_ready",
             "not_ready",
-            "clear",
+            "not_observed",
             "not_ready",
         ),
         (

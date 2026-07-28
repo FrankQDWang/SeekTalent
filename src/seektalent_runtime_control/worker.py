@@ -273,6 +273,10 @@ def _executor_finalized_failure(exc: Exception) -> bool:
         "runtime_resume_checkpoint_missing",
         "runtime_checkpoint_corrupt",
         "runtime_checkpoint_schema_unsupported",
+        "runtime_checkpoint_safe_boundary_unregistered",
+        "runtime_checkpoint_safe_boundary_invalid",
+        "runtime_checkpoint_missing",
+        "runtime_checkpoint_run_mismatch",
     }
 
 
