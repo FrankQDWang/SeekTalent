@@ -414,11 +414,6 @@ def build_liepin_opencli_worker_client(
     from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
 
     def build_retriever() -> LiepinOpenCliResumeRetriever:
-        if cards_operation_executor is None:
-            raise LiepinWorkerModeError(
-                "Liepin cards Source Port is required.",
-                code="liepin_cards_source_port_missing",
-            )
         try:
             site = build_liepin_opencli_site_adapter(
                 settings,

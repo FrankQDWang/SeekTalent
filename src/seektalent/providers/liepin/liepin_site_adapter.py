@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 import os
 import random
 import re
@@ -28,6 +29,7 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserTiming,
 )
 from seektalent.opencli_browser.lifecycle import browser_control_key
+from seektalent.opencli_browser.fault_isolation import isolated_call
 from seektalent.opencli_browser.reason_codes import OPENCLI_PAGE_NOT_READY
 from seektalent.opencli_browser.runtime import ALLOWED_BROWSER_COMMANDS, FORBIDDEN_BROWSER_COMMANDS
 from seektalent.providers.liepin.detail_payload_text import structured_liepin_detail_text
@@ -108,6 +110,8 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     extract_liepin_search_button_ref,
     extract_liepin_search_input_ref,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _is_provider_candidate_key_hash(value: object) -> bool:
@@ -1401,14 +1405,36 @@ class LiepinSiteAdapter:
                 )
             self._remote_structured_cards[source_run_id] = remote
             return envelope
-        return self._search_liepin_cards_once(
-            source_run_id=source_run_id,
-            query=query,
-            max_pages=max_pages,
-            max_cards=max_cards,
-            native_filters=native_filters,
-            recovering_search_surface=False,
-        )
+        raise RuntimeError("liepin_cards_source_port_missing")
+
+    def _execute_liepin_cards_sidecar_effect(
+        self,
+        *,
+        source_run_id: str,
+        query: str,
+        max_pages: int,
+        max_cards: int,
+        native_filters: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
+        """Execute cards only for the Source Port sidecar browser owner."""
+        try:
+            self._begin_browser_control_scope()
+            return self._search_liepin_cards_once(
+                source_run_id=source_run_id,
+                query=query,
+                max_pages=max_pages,
+                max_cards=max_cards,
+                native_filters=native_filters,
+                recovering_search_surface=False,
+            )
+        finally:
+            isolated_call(
+                self._finish_browser_control_scope,
+                lambda exc: _LOGGER.warning(
+                    "liepin_browser_scope_cleanup_failed error=%s",
+                    type(exc).__name__,
+                ),
+            )
 
     def _search_liepin_cards_once(
         self,

@@ -95,6 +95,10 @@ class _HistoryUnknown:
 @dataclass(frozen=True, slots=True)
 class _HistoryObserved:
     ack: LiepinCardsAcceptedAckV1
+    query: SourceHistoryQueryV1
+    result: SourceHistoryQueryResultV1
+    history_conclusion: str
+    dispatch_intent_ref: str
 
 
 class LiepinCardsSourceOperationExecutor:
@@ -128,7 +132,9 @@ class LiepinCardsSourceOperationExecutor:
         self._lane_queries: dict[str, str] = {}
         self._pending_checkpoint_operation_ids: set[str] = set()
         self._process: _SidecarProcess | None = None
-        self._lock = threading.Lock()
+        # The lock only protects framing on one subprocess pipe and close().
+        # Durable admission, replay, and fencing remain store/journal owned.
+        self._channel_lock = threading.Lock()
 
     def bind_lane(self, source_lane_run_id: str, query_instance_id: str) -> None:
         existing = self._lane_queries.setdefault(
@@ -147,28 +153,27 @@ class LiepinCardsSourceOperationExecutor:
         max_cards: int,
         native_filters,
     ) -> tuple[dict[str, object], dict[str, object]]:
-        with self._lock:
-            request = LiepinCardsOperationRequestV1.model_validate(
-                {
-                    "contract_version": (
-                        "seektalent.source.liepin-cards.request/v1"
-                    ),
-                    "runtime_run_id": self._runtime_run_id,
-                    "source_lane_run_id": source_run_id,
-                    "query_instance_id": self._lane_queries.get(
-                        source_run_id,
-                        source_run_id,
-                    ),
-                    "keyword_query": query,
-                    "max_pages": max_pages,
-                    "max_cards": max_cards,
-                    "native_filters": (
-                        dict(native_filters) if native_filters else None
-                    ),
-                },
-                strict=True,
-            )
-            return self._execute(request)
+        request = LiepinCardsOperationRequestV1.model_validate(
+            {
+                "contract_version": (
+                    "seektalent.source.liepin-cards.request/v1"
+                ),
+                "runtime_run_id": self._runtime_run_id,
+                "source_lane_run_id": source_run_id,
+                "query_instance_id": self._lane_queries.get(
+                    source_run_id,
+                    source_run_id,
+                ),
+                "keyword_query": query,
+                "max_pages": max_pages,
+                "max_cards": max_cards,
+                "native_filters": (
+                    dict(native_filters) if native_filters else None
+                ),
+            },
+            strict=True,
+        )
+        return self._execute(request)
 
     def checkpoint_operation_ids(self) -> tuple[str, ...]:
         return tuple(sorted(self._pending_checkpoint_operation_ids))
@@ -177,7 +182,7 @@ class LiepinCardsSourceOperationExecutor:
         self._pending_checkpoint_operation_ids.difference_update(operation_ids)
 
     def close(self) -> None:
-        with self._lock:
+        with self._channel_lock:
             process, self._process = self._process, None
             if process is not None:
                 process.close()
@@ -273,10 +278,35 @@ class LiepinCardsSourceOperationExecutor:
             delivery=delivery,
             request=request,
         )
+        if existing is not None:
+            recovered = self._query_terminal_history_safely(accepted, identity)
+            if isinstance(recovered, _HistoryObserved):
+                replayed = self._replay_observed_terminal(submit)
+                if replayed is None:
+                    self._record_reconciliation_unknown(
+                        _unknown_from_observed(recovered),
+                        operation_id,
+                    )
+                    return _unknown_result()
+                ack, terminal = replayed
+            else:
+                if isinstance(recovered, _HistoryUnknown):
+                    self._record_reconciliation_unknown(
+                        recovered,
+                        operation_id,
+                    )
+                return _unknown_result()
+        else:
+            ack = None
+            terminal = None
         try:
-            ack, terminal = self._exchange(submit)
+            if terminal is None:
+                ack, terminal = self._exchange(submit)
         except (OSError, RuntimeError, SidecarReadinessError):
-            recovered = self._query_terminal_history(accepted, identity)
+            recovered = self._query_terminal_history_safely(
+                accepted,
+                identity,
+            )
             if recovered is None:
                 return _unknown_result()
             if isinstance(recovered, _HistoryUnknown):
@@ -284,6 +314,10 @@ class LiepinCardsSourceOperationExecutor:
             elif isinstance(recovered, _HistoryObserved):
                 replayed = self._replay_observed_terminal(submit)
                 if replayed is None:
+                    self._record_reconciliation_unknown(
+                        _unknown_from_observed(recovered),
+                        operation_id,
+                    )
                     return _unknown_result()
                 ack, terminal = replayed
             else:
@@ -320,7 +354,10 @@ class LiepinCardsSourceOperationExecutor:
             self._record_reconciliation_unknown(terminal, operation_id)
             return _unknown_result()
         if isinstance(terminal, ReceivedLiepinCardsReconcileRequired):
-            recovered = self._query_terminal_history(accepted, identity)
+            recovered = self._query_terminal_history_safely(
+                accepted,
+                identity,
+            )
             if recovered is None:
                 return _unknown_result()
             if isinstance(recovered, _HistoryUnknown):
@@ -332,6 +369,10 @@ class LiepinCardsSourceOperationExecutor:
             if isinstance(recovered, _HistoryObserved):
                 replayed = self._replay_observed_terminal(submit)
                 if replayed is None:
+                    self._record_reconciliation_unknown(
+                        _unknown_from_observed(recovered),
+                        operation_id,
+                    )
                     return _unknown_result()
                 recovered_ack, terminal = replayed
                 ack = ack or recovered_ack
@@ -339,11 +380,6 @@ class LiepinCardsSourceOperationExecutor:
                 recovered_ack, terminal = recovered
                 ack = ack or recovered_ack
         observation = terminal.payload.observation
-        artifact = read_liepin_cards_artifact(
-            self._artifact_root,
-            observation.artifact_ref or "",
-            expected_hash=observation.artifact_hash or "",
-        )
         current = self._store.get_source_operation(
             self._runtime_run_id,
             operation_id,
@@ -367,6 +403,14 @@ class LiepinCardsSourceOperationExecutor:
                 source_operation_disposition=observation.disposition,
                 observed_at=_now(),
             )
+        try:
+            artifact = read_liepin_cards_artifact(
+                self._artifact_root,
+                observation.artifact_ref or "",
+                expected_hash=observation.artifact_hash or "",
+            )
+        except (OSError, ValueError):
+            return _artifact_unavailable_result(observation)
         if (
             self._store.get_source_operation(
                 self._runtime_run_id,
@@ -454,43 +498,69 @@ class LiepinCardsSourceOperationExecutor:
         )
 
     def _exchange(self, submit: LiepinCardsSubmitV1):
-        process = self._ready_cards_process()
-        assert process.cards_session is not None
-        session = process.cards_session
-        message_id = f"submit-{secrets.token_hex(16)}"
-        deadline = time.monotonic() + (
-            submit.identity.deadline.value / 1000
-        )
-        process.transport.write_raw(
-            session.encode_submit(
-                message_id=message_id,
-                correlation_id=submit.identity.correlation_id,
-                payload=submit,
-            ),
-            deadline,
-        )
-        ack = None
-        while True:
-            messages = session.feed(
-                process.transport.read_history_chunk(
-                    deadline,
-                    process.process,
-                )
+        with self._channel_lock:
+            process = self._ready_cards_process()
+            assert process.cards_session is not None
+            session = process.cards_session
+            message_id = f"submit-{secrets.token_hex(16)}"
+            deadline = time.monotonic() + (
+                submit.identity.deadline.value / 1000
             )
-            for message in messages:
-                if isinstance(message, ReceivedLiepinCardsAcceptedAck):
-                    ack = message.payload
-                    continue
-                if isinstance(
-                    message,
-                    (
-                        ReceivedLiepinCardsResult,
-                        ReceivedLiepinCardsReconcileRequired,
-                    ),
-                ):
-                    if ack is None:
-                        raise RuntimeError("liepin_cards_ack_missing")
-                    return ack, message
+            process.transport.write_raw(
+                session.encode_submit(
+                    message_id=message_id,
+                    correlation_id=submit.identity.correlation_id,
+                    payload=submit,
+                ),
+                deadline,
+            )
+            ack = None
+            while True:
+                messages = session.feed(
+                    process.transport.read_history_chunk(
+                        deadline,
+                        process.process,
+                    )
+                )
+                for message in messages:
+                    if isinstance(message, ReceivedLiepinCardsAcceptedAck):
+                        ack = message.payload
+                        continue
+                    if isinstance(
+                        message,
+                        (
+                            ReceivedLiepinCardsResult,
+                            ReceivedLiepinCardsReconcileRequired,
+                        ),
+                    ):
+                        if ack is None:
+                            raise RuntimeError("liepin_cards_ack_missing")
+                        return ack, message
+
+    def _query_terminal_history_safely(self, accepted, identity):
+        try:
+            return self._query_terminal_history(accepted, identity)
+        except (OSError, RuntimeError, SidecarReadinessError):
+            query = _history_query(accepted, identity)
+            return _HistoryUnknown(
+                ack=None,
+                query=query,
+                result=SourceHistoryUnavailable.model_validate(
+                    {
+                        **query.model_dump(mode="python"),
+                        "contract_version": (
+                            "seektalent.source-port.query.result/v1"
+                        ),
+                        "outcome": "history_unavailable",
+                        "reason": "unreadable",
+                        "oldest_retained_generation": None,
+                        "newest_known_generation": None,
+                    },
+                    strict=True,
+                ),
+                history_conclusion=None,
+                dispatch_intent_ref=None,
+            )
 
     def _query_terminal_history(self, accepted, identity):
         process = _spawn_sidecar(
@@ -507,34 +577,10 @@ class LiepinCardsSourceOperationExecutor:
                 accepted.dispatch.accepted_sidecar_generation or 1,
             )
             while True:
-                query = SourceHistoryQueryV1(
-                    contract_version=(
-                        "seektalent.source-port.query.request/v1"
-                    ),
-                    run_id=identity.run_id,
-                    operation_id=identity.operation_id,
-                    source="liepin",
-                    operation_kind="cards",
-                    idempotency_key=identity.idempotency_key,
-                    request_hash=identity.request_hash,
-                    attempt_no=identity.attempt_no,
-                    authorization_selector=ExactAuthorizationSelector(
-                        kind="exact",
-                        ordinal=(
-                            accepted.dispatch.dispatch_authorization_ordinal
-                        ),
-                    ),
-                    accepted_generation_hint=(
-                        accepted.dispatch.accepted_sidecar_generation
-                    ),
-                    searched_first_generation=1,
+                query = _history_query(
+                    accepted,
+                    identity,
                     searched_last_generation=searched_last_generation,
-                    expected_source_operation_ledger_revision=(
-                        accepted.operation.ledger_revision
-                    ),
-                    expected_reconciliation_revision=(
-                        accepted.operation.reconciliation_revision
-                    ),
                 )
                 message_id = f"history-{secrets.token_hex(16)}"
                 deadline = time.monotonic() + 30
@@ -646,7 +692,15 @@ class LiepinCardsSourceOperationExecutor:
                             fact.durable_dispatch_intent_ref
                         ),
                     )
-                    return _HistoryObserved(ack=recovered_ack)
+                    return _HistoryObserved(
+                        ack=recovered_ack,
+                        query=query,
+                        result=result,
+                        history_conclusion=fact.conclusion,
+                        dispatch_intent_ref=(
+                            fact.durable_dispatch_intent_ref
+                        ),
+                    )
                 return None
         finally:
             process.close()
@@ -726,13 +780,16 @@ def _spawn_sidecar(
     journal_path: Path,
     artifact_root: Path,
     history_only: bool,
+    module: str = "seektalent.liepin_cards_sidecar",
+    environment_overrides: dict[str, str] | None = None,
 ) -> _SidecarProcess:
-    journal_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    artifact_root.mkdir(parents=True, exist_ok=True, mode=0o700)
+    if not history_only:
+        journal_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        artifact_root.mkdir(parents=True, exist_ok=True, mode=0o700)
     command = [
         sys.executable,
         "-m",
-        "seektalent.liepin_cards_sidecar",
+        module,
         "--journal",
         str(journal_path),
         "--artifacts",
@@ -743,6 +800,8 @@ def _spawn_sidecar(
     environment = dict(os.environ)
     environment.pop("PYTHONPATH", None)
     environment["SEEKTALENT_RUNTIME_ARTIFACT_OUTPUT_MODE"] = "prod"
+    if environment_overrides is not None:
+        environment.update(environment_overrides)
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -828,6 +887,55 @@ def _authorization_from_acceptance(identity, dispatch):
     return authorization
 
 
+def _history_query(
+    accepted,
+    identity,
+    *,
+    searched_last_generation: int | None = None,
+) -> SourceHistoryQueryV1:
+    last_generation = searched_last_generation or max(
+        1,
+        accepted.dispatch.accepted_sidecar_generation or 1,
+    )
+    return SourceHistoryQueryV1(
+        contract_version="seektalent.source-port.query.request/v1",
+        run_id=identity.run_id,
+        operation_id=identity.operation_id,
+        source="liepin",
+        operation_kind="cards",
+        idempotency_key=identity.idempotency_key,
+        request_hash=identity.request_hash,
+        attempt_no=identity.attempt_no,
+        authorization_selector=ExactAuthorizationSelector(
+            kind="exact",
+            ordinal=accepted.dispatch.dispatch_authorization_ordinal,
+        ),
+        accepted_generation_hint=(
+            accepted.dispatch.accepted_sidecar_generation
+        ),
+        searched_first_generation=1,
+        searched_last_generation=last_generation,
+        expected_source_operation_ledger_revision=(
+            accepted.operation.ledger_revision
+        ),
+        expected_reconciliation_revision=(
+            accepted.operation.reconciliation_revision
+        ),
+    )
+
+
+def _unknown_from_observed(
+    observed: _HistoryObserved,
+) -> _HistoryUnknown:
+    return _HistoryUnknown(
+        ack=observed.ack,
+        query=observed.query,
+        result=observed.result,
+        history_conclusion=observed.history_conclusion,
+        dispatch_intent_ref=observed.dispatch_intent_ref,
+    )
+
+
 def _workflow_result(request, artifact, observation):
     status = (
         "succeeded"
@@ -858,6 +966,24 @@ def _workflow_result(request, artifact, observation):
         },
     }
     return envelope, structured
+
+
+def _artifact_unavailable_result(observation):
+    reason = "liepin_cards_artifact_unavailable"
+    return (
+        {
+            "status": "failed",
+            "cards_seen": observation.cards_seen,
+            "safe_reason_code": reason,
+        },
+        {
+            "ok": False,
+            "action": "extract_structured_liepin_cards",
+            "safe_reason_code": reason,
+            "counts": {},
+            "observation": {},
+        },
+    )
 
 
 def _unknown_result():

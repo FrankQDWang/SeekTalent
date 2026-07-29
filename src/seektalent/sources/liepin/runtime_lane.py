@@ -156,6 +156,7 @@ async def run_liepin_source_lane(
             source_plan_id=source_plan_id,
             source_lane_run_id=source_lane_run_id,
             worker_client=worker_client,
+            cards_operation_executor=cards_operation_executor,
         )
     if request.lane_mode != "card":
         raise ValueError(f"Unsupported Liepin source lane mode: {request.lane_mode}")
@@ -707,10 +708,21 @@ async def _run_detail_lane(
     source_plan_id: str,
     source_lane_run_id: str,
     worker_client: LiepinWorkerClient | None,
+    cards_operation_executor,
 ) -> RuntimeSourceLaneResult:
     context = normalize_runtime_liepin_context(request.source_context)
     query_terms = list(request.source_query_terms or _basic_source_query_terms(request))
-    client = worker_client or build_liepin_worker_client(settings)
+    if cards_operation_executor is not None:
+        bind_lane = getattr(cards_operation_executor, "bind_lane", None)
+        if callable(bind_lane):
+            bind_lane(
+                source_lane_run_id,
+                request.logical_query_instance_id or source_lane_run_id,
+            )
+    client = worker_client or build_liepin_worker_client(
+        settings,
+        cards_operation_executor=cards_operation_executor,
+    )
     provider = _build_provider(settings=settings, worker_client=client)
     search_result = await provider.search(
         SearchRequest(

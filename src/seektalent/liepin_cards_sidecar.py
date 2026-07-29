@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
 from hashlib import sha256
 import time
 from pathlib import Path
@@ -48,12 +49,17 @@ from seektalent.strict_json import strict_json_object_loads
 
 
 def main(argv: list[str] | None = None) -> int:
+    return _serve(argv)
+
+
+def _serve(
+    argv: list[str] | None = None,
+    *,
+    site_factory: Callable[[], object] | None = None,
+    fault_hook: Callable[[str], None] | None = None,
+) -> int:
     args = _parser().parse_args(argv)
-    journal = (
-        open_command_journal(args.journal)
-        if args.journal.exists()
-        else create_command_journal(args.journal)
-    )
+    journal = None
     journal_session = None
     session = None
     try:
@@ -65,6 +71,11 @@ def main(argv: list[str] | None = None) -> int:
         if args.history_only:
             _serve_history(session, args.journal)
             return 0
+        journal = (
+            open_command_journal(args.journal)
+            if args.journal.exists()
+            else create_command_journal(args.journal)
+        )
         journal_session = journal.start()
         frame_session = session.liepin_cards_session()
         site = None
@@ -83,6 +94,7 @@ def main(argv: list[str] | None = None) -> int:
                 raise RuntimeError("liepin_cards_sidecar_unexpected_message")
             received = messages[0]
             submit = received.payload
+            _inject_fault(fault_hook, "before_accept")
             authorization = submit.delivery.authorization
             accepted = journal_session.record_accepted(
                 AcceptedCommand(
@@ -128,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
                 allow_existing_phase_replay=True,
                 allow_transport_replay=True,
             )
+            _inject_fault(fault_hook, "after_accept")
             dispatch_ref = (
                 f"source-dispatch://{submit.identity.operation_id}/"
                 f"{authorization.dispatch_authorization_ordinal}"
@@ -190,12 +203,18 @@ def main(argv: list[str] | None = None) -> int:
                 expected_head_journal_revision=accepted.revision,
                 durable_dispatch_intent_ref=dispatch_ref,
             )
+            _inject_fault(fault_hook, "after_dispatch_intent")
             if site is None:
-                site = build_liepin_opencli_site_adapter(
-                    AppSettings(_env_file=None),
-                    cards_operation_executor=None,
+                site = (
+                    site_factory()
+                    if site_factory is not None
+                    else build_liepin_opencli_site_adapter(
+                        AppSettings(_env_file=None),
+                        cards_operation_executor=None,
+                    )
                 )
             artifact = _execute_cards(site, submit)
+            _inject_fault(fault_hook, "after_effect")
             artifact_ref, artifact_hash = write_liepin_cards_artifact(
                 args.artifacts,
                 artifact,
@@ -242,6 +261,7 @@ def main(argv: list[str] | None = None) -> int:
                     failure_hash=terminal_digest,
                     terminal_reply_bytes=terminal_bytes,
                 )
+            _inject_fault(fault_hook, "after_terminal")
             _send_result(
                 session,
                 frame_session,
@@ -256,13 +276,22 @@ def main(argv: list[str] | None = None) -> int:
             session.close()
         if journal_session is not None:
             journal_session.close()
-        journal.close()
+        if journal is not None:
+            journal.close()
     return 0
+
+
+def _inject_fault(
+    fault_hook: Callable[[str], None] | None,
+    point: str,
+) -> None:
+    if fault_hook is not None:
+        fault_hook(point)
 
 
 def _execute_cards(site, submit) -> LiepinCardsArtifactV1:
     request = submit.request
-    envelope = site.search_liepin_cards(
+    envelope = site._execute_liepin_cards_sidecar_effect(
         source_run_id=request.source_lane_run_id,
         query=request.keyword_query,
         max_pages=request.max_pages,

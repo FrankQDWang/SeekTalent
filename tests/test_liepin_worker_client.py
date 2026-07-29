@@ -24,6 +24,14 @@ from seektalent.providers.liepin.client import (
 )
 from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
 from seektalent.providers.liepin.opencli_retriever import LiepinOpenCliResumeRetriever
+from seektalent.providers.liepin.liepin_site_adapter import (
+    LiepinOpenCliSiteConfig,
+    LiepinSiteAdapter,
+)
+from seektalent.opencli_browser.contracts import (
+    OpenCliBrowserConfig,
+    OpenCliBrowserResult,
+)
 from seektalent.providers.liepin.worker_contracts import (
     LoginHandoff,
     RedactedWorkerDiagnostics,
@@ -135,28 +143,111 @@ def test_build_opencli_client_for_browser_backed_mode() -> None:
     assert isinstance(client, LiepinOpenCliWorkerClient)
 
 
-def test_opencli_client_without_cards_source_port_fails_closed_before_setup(
+def test_opencli_client_without_cards_source_port_keeps_non_cards_composition(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from seektalent import opencli_launcher
+    class Site:
+        def status(self):
+            return SimpleNamespace(ok=True, safe_reason_code=None)
 
-    setup_threads: list[int] = []
-
-    def fail_setup():
-        setup_threads.append(threading.get_ident())
-        raise opencli_launcher.BootstrapError(
-            "opencli_offline_runtime_missing: reinstall required"
-        )
-
-    monkeypatch.setattr(opencli_launcher, "ensure_opencli_runtime", fail_setup)
+    monkeypatch.setattr(
+        liepin_client_module,
+        "build_liepin_opencli_site_adapter",
+        lambda *_args, **_kwargs: Site(),
+    )
     client = build_liepin_worker_client(make_settings(liepin_worker_mode="opencli"))
 
-    assert setup_threads == []
-    with pytest.raises(LiepinWorkerModeError) as captured:
-        asyncio.run(client.ensure_ready())
+    asyncio.run(client.ensure_ready())
 
-    assert captured.value.code == "liepin_cards_source_port_missing"
-    assert setup_threads == []
+    assert isinstance(client, LiepinOpenCliWorkerClient)
+
+
+def test_opencli_detail_search_routes_nested_cards_through_source_port(
+    tmp_path: Path,
+) -> None:
+    cards_calls: list[dict[str, object]] = []
+
+    def execute_cards(**kwargs):
+        cards_calls.append(kwargs)
+        reason = "liepin_test_cards_blocked"
+        return (
+            {
+                "status": "blocked",
+                "cards_seen": 0,
+                "safe_reason_code": reason,
+            },
+            {
+                "ok": False,
+                "action": "extract_structured_liepin_cards",
+                "safe_reason_code": reason,
+                "counts": {"cards": 0},
+                "observation": {"cards": []},
+            },
+        )
+
+    site = LiepinSiteAdapter(
+        browser_config=OpenCliBrowserConfig(
+            command=("opencli",),
+            session="seektalent-liepin",
+            timeout_seconds=10,
+        ),
+        site_config=LiepinOpenCliSiteConfig(
+            allowed_hosts=("h.liepin.com",),
+            allowed_start_urls=(
+                "https://h.liepin.com/search/getConditionItem#session",
+            ),
+            lease_dir=tmp_path,
+            artifact_root=tmp_path,
+        ),
+        automation=SimpleNamespace(
+            daemon_enabled=False,
+            status=lambda: OpenCliBrowserResult(
+                ok=True,
+                action="status",
+            ),
+            finish_control_scope=lambda: None,
+        ),
+        cards_operation_executor=execute_cards,
+    )
+    client = LiepinOpenCliWorkerClient(
+        retriever=LiepinOpenCliResumeRetriever(runner=site),
+        connection_id="local-opencli",
+        provider_account_hash="local-opencli",
+    )
+    request = SearchRequest(
+        query_terms=["python"],
+        query_role="primary",
+        keyword_query="python",
+        adapter_notes=[],
+        runtime_constraints=[],
+        fetch_mode="detail",
+        page_size=1,
+        provider_context={
+            "liepin_requirement_sheet_json": '{"job_title":"Python"}',
+            "liepin_max_pages": 1,
+            "liepin_max_cards": 1,
+        },
+    )
+
+    with pytest.raises(LiepinWorkerModeError) as error:
+        asyncio.run(
+            client.search(
+                request,
+                round_no=1,
+                trace_id="detail-lane-1",
+            )
+        )
+
+    assert error.value.code == "liepin_test_cards_blocked"
+    assert cards_calls == [
+        {
+            "source_run_id": "detail-lane-1",
+            "query": "python",
+            "max_pages": 1,
+            "max_cards": 1,
+            "native_filters": None,
+        }
+    ]
 
 
 def test_opencli_runtime_setup_wires_daemon_once_without_retired_registry(
