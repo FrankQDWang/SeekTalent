@@ -761,7 +761,7 @@ def test_verify_session_result_rejects_another_operation_kind() -> None:
         canonical_verify_session_result_bytes(bypassed)
 
 
-def test_contract_stays_source_port_only_with_no_production_caller_or_json_parser() -> None:
+def test_verify_contract_and_dispatch_kernel_keep_reviewed_callers_only() -> None:
     source = CONTRACT_PATH.read_text(encoding="utf-8")
     operation_dispatch = OPERATION_DISPATCH_PATH.read_text(encoding="utf-8")
     wire_primitives = WIRE_PRIMITIVES_PATH.read_text(encoding="utf-8")
@@ -830,6 +830,8 @@ def test_contract_stays_source_port_only_with_no_production_caller_or_json_parse
     assert set(callers) == {
         "src/seektalent/liepin_cards_source_operation.py",
         "src/seektalent/source_port/authenticated_liepin_cards_frames.py",
+        "src/seektalent/source_port/authenticated_liepin_details_frames.py",
+        "src/seektalent/source_port/authenticated_liepin_source_frames.py",
         "src/seektalent_runtime_control/needs_attention_admission.py",
         "src/seektalent_runtime_control/safe_retry_turnover.py",
         "src/seektalent_runtime_control/user_action_mapping.py",

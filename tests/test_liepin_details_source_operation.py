@@ -890,7 +890,7 @@ def test_terminal_reply_loss_replays_without_second_effect_and_main_ingests_once
 
     site = object.__new__(LiepinSiteAdapter)
     site._cards_operation_executor = _Executor()
-    site.ingest_liepin_detail_resume_from_source_artifact = (  # type: ignore[method-assign]
+    site._ingest_liepin_detail_resume_from_source_artifact = (  # type: ignore[method-assign]
         lambda **kwargs: ingest_calls.append(dict(kwargs))
     )
     envelope, result = LiepinSiteAdapter.run_liepin_details_operation(
@@ -1194,11 +1194,11 @@ def test_production_caller_scan_details_effect_owners() -> None:
     adapter = (
         src / "seektalent/providers/liepin/liepin_site_adapter.py"
     ).read_text(encoding="utf-8")
-    assert "ingest_liepin_detail_resume_from_source_artifact" in adapter
+    assert "def _ingest_liepin_detail_resume_from_source_artifact" in adapter
     assert "_observe_liepin_detail_resume_for_sidecar" in adapter
     sidecar = (src / "seektalent/liepin_cards_sidecar.py").read_text(encoding="utf-8")
     assert "collected-resumes" not in sidecar
-    assert "ingest_liepin_detail_resume_from_source_artifact" not in sidecar
+    assert "_ingest_liepin_detail_resume_from_source_artifact" not in sidecar
 
 
 def test_continuation_expand_uses_details_port_only() -> None:

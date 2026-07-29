@@ -1609,14 +1609,14 @@ class LiepinSiteAdapter:
         if result.ok and structured.get("ingest_ready") is True:
             resume = structured.get("resume")
             if isinstance(resume, Mapping):
-                self.ingest_liepin_detail_resume_from_source_artifact(
+                self._ingest_liepin_detail_resume_from_source_artifact(
                     source_run_id=source_run_id,
                     rank=rank,
                     resume=resume,
                 )
         return envelope, result
 
-    def ingest_liepin_detail_resume_from_source_artifact(
+    def _ingest_liepin_detail_resume_from_source_artifact(
         self,
         *,
         source_run_id: str,
