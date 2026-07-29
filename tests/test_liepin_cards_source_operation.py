@@ -27,6 +27,7 @@ from seektalent.liepin_cards_source_operation import (
     LiepinCardsSourceOperationExecutor,
     _HistoryUnknown,
     _authorization_from_acceptance,
+    _sidecar_environment,
     _spawn_sidecar,
 )
 from seektalent.liepin_cards_sidecar import (
@@ -66,6 +67,22 @@ from tests.test_runtime_multi_source_round_dispatch import _run_state
 NOW = datetime(2026, 7, 28, 0, 5, tzinfo=UTC)
 
 
+def test_sidecar_environment_pins_the_current_release_import_root(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("PYTHONPATH", "/ambient/source/must/not/win")
+
+    environment = _sidecar_environment(
+        {"PYTHONPATH": "/override/source/must/not/win"},
+    )
+
+    import_root = Path(environment["PYTHONPATH"])
+    assert import_root == Path(__file__).resolve().parents[1] / "src"
+    assert (
+        import_root / "seektalent" / "liepin_cards_sidecar.py"
+    ).is_file()
+
+
 def _request(**updates: object) -> LiepinCardsOperationRequestV1:
     payload: dict[str, object] = {
         "contract_version": "seektalent.source.liepin-cards.request/v1",
@@ -89,6 +106,43 @@ def test_cards_operation_identity_and_hash_are_stable_across_delivery_attempts()
     assert canonical_liepin_cards_request_hash(request) != canonical_liepin_cards_request_hash(
         _request(keyword_query="推荐系统 工程师")
     )
+
+
+def test_cards_operation_deadline_uses_browser_effect_budget(
+    tmp_path: Path,
+) -> None:
+    store = _seed_running_store(tmp_path)
+    settings = AppSettings(
+        _env_file=None,
+        workspace_root=str(tmp_path),
+        runtime_control_path=str(store.path),
+        liepin_worker_timeout_seconds=0.01,
+        liepin_opencli_timeout_seconds=120,
+    )
+    executor = LiepinCardsSourceOperationExecutor(
+        settings=settings,
+        store=store,
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-1",
+        attempt_no=1,
+        accepted_requirement_revision_id="approved-1",
+        runtime_attempt_authority_ref="runtime_attempt_authority_ref_1",
+    )
+    request = _request(
+        runtime_run_id="runtime_run_1",
+        source_lane_run_id=(
+            "runtime_run_1:source:1:liepin:round:1:lane:1"
+        ),
+    )
+
+    identity = executor._identity(
+        request,
+        operation_id=stable_liepin_cards_operation_id(request),
+        request_hash=canonical_liepin_cards_request_hash(request),
+        existing=None,
+    )
+
+    assert identity.deadline.value == 120_000
 
 
 def test_cards_safe_retry_reuses_operation_identity_and_durable_cas_epoch() -> None:

@@ -49,6 +49,7 @@ REVIEWED_REACHABLE_FAILURE_CAUSES = {
     "liepin_first_page_continuation_cleanup_failed",
     "liepin_first_page_expansion_blocked",
     "liepin_first_page_expansion_partial",
+    "liepin_opencli_candidate_identity_missing",
     "liepin_opencli_candidate_identity_mismatch",
     "liepin_opencli_card_extract_failed",
     "liepin_opencli_fill_verification_failed",
@@ -171,8 +172,16 @@ def test_runtime_lane_does_not_define_a_second_large_reason_inventory() -> None:
         ("liepin_opencli_card_extract_failed", "source_provider_failed"),
         ("liepin_opencli_search_restore_failed", "source_partial"),
         (
+            "liepin_opencli_candidate_identity_missing",
+            "source_browser_reference_stale",
+        ),
+        (
             "liepin_opencli_candidate_identity_mismatch",
             "source_browser_reference_stale",
+        ),
+        (
+            "liepin_details_source_port_missing",
+            "source_provider_failed",
         ),
         ("liepin_protected_artifact_root_missing", "source_configuration_invalid"),
         (

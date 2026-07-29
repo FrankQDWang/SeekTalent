@@ -1,0 +1,87 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Hard-cut one production Liepin details browser operation (open/wait/capture) behind the existing authenticated, journaled supervised sidecar Source Execution Port; force continuation through the same details operation.",
+  "rationale": "After the cards hard-cut, main still owns detail open/wait/capture and continuation browser effects against the same WTSCLI profile. Splitting the new details route from deletion would leave a direct production browser bypass or two competing correctness authorities. Continuation must not keep a separate direct browser path.",
+  "touched_layers": [
+    "docs",
+    "other",
+    "provider",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent/providers/liepin/liepin_details_locator_store.py",
+    "src/seektalent/providers/liepin/liepin_site_adapter.py",
+    "src/seektalent/providers/liepin/liepin_search_workflow.py",
+    "src/seektalent/providers/liepin/liepin_workflow_site.py"
+  ],
+  "dependency_files": [],
+  "deletion_targets": [
+    "main-process direct detail open/wait/capture/URL-probe routes to WTSCLI and Chrome",
+    "main-process continuation expand browser bypass that does not use the details Source Port",
+    "main-side reason-code-driven automatic detail open replay as a competing correctness authority",
+    "sidecar-local reason-code automatic detail open retry within one authorization",
+    "production fallback that keeps main as a second Liepin browser-effect owner for details",
+    "sidecar writes of main product state such as collected-resumes"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent/providers/liepin/liepin_site_adapter.py"
+  ],
+  "line_count_rationale": "liepin_site_adapter.py remains the existing oversized browser-effect owner and receives only the details Source Port effect/ingest wiring for this hard cut. Splitting that module is a separate refactor outside this operation migration.",
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest",
+    "uv run --group dev python -m pytest -q -p no:tach tests/test_liepin_details_source_operation.py tests/test_liepin_cards_source_operation.py tests/test_source_port_command_journal.py tests/test_runtime_control_source_operations.py tests/test_runtime_control_source_reconciliation.py tests/test_source_port_history_contract.py tests/test_source_port_authenticated_history_frames.py",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev ty check src tests tools",
+    "uv run --group dev python tools/check_arch_imports.py",
+    "uv run --group dev python tools/check_privacy_gate.py --base origin/main",
+    "uv run --group dev python tools/check_agent_safety_gate.py --base origin/main",
+    "uv run --group dev python tools/check_ai_bad_smells.py --base origin/main",
+    "uv run --group dev python tools/check_pr_governance.py --base origin/main",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-source-decoupling.sh"
+  ],
+  "risks": [
+    "A transport timeout after browser dispatch must reconcile history instead of repeating the browser effect.",
+    "A stale executor, profile generation, dispatch epoch, or sidecar generation must not commit a late observation.",
+    "Terminal and partial payloads must remain outside the compact command journal and bind through immutable artifact references.",
+    "Continuation expand must call the same details Source Port; any retained direct open/wait/capture bypass reintroduces dual ownership.",
+    "Sidecar must not write collected-resumes or other main product state; main ingests only after artifact identity validation.",
+    "DetailOpenClaim must follow effect_posture; unknown must not auto-repeat open, and not_attempted must release without recording an open attempt.",
+    "Direct installed-WTSCLI verify_session must remain the only intentional main browser-effect exception.",
+    "Extension idleDeadlineAt close authority must not move into SeekTalent."
+  ],
+  "production_caller_audit": {
+    "baseline": "main@027ed19f after PR #451 cards hard-cut",
+    "cards": {
+      "owner": "supervised liepin_cards_sidecar via LiepinCardsSourceOperationExecutor",
+      "main_public_entry": "LiepinSiteAdapter.search_liepin_cards callback-only; missing port fails closed",
+      "effect": "_execute_liepin_cards_sidecar_effect -> _search_liepin_cards_once"
+    },
+    "details_before": {
+      "owner": "main LiepinSiteAdapter / LiepinSearchWorkflow",
+      "effects": [
+        "safe_liepin_detail_url_for_ref",
+        "open_liepin_detail / open_liepin_detail_cached_url",
+        "wait_liepin_detail_ready",
+        "capture_liepin_detail_resume / _capture_liepin_detail_resume_claim_aware"
+      ]
+    },
+    "continuation_before": {
+      "owner": "main expand_first_page_continuation using the same detail open/wait/capture effects",
+      "discard": "no browser"
+    },
+    "verify_session_exception": {
+      "owner": "main liepin_verify_session_gate._verify_session -> installed WTSCLI probe",
+      "retained": true
+    },
+    "details_after": {
+      "owner": "same supervised sidecar process with liepin_details_v1",
+      "main_public_entry": "details Source Port callback-only; missing port fails closed",
+      "continuation": "expand loops the same details Source Port; no direct browser bypass"
+    }
+  }
+}

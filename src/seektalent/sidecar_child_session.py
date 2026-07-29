@@ -23,9 +23,9 @@ from seektalent.source_port.authenticated_source_port_session import (
     PostHandshakeSourcePortSession,
     ReceivedSourcePortMessage,
 )
-from seektalent.source_port.authenticated_liepin_cards_frames import (
-    PostHandshakeLiepinCardsSession,
-    ReceivedLiepinCardsMessage,
+from seektalent.source_port.authenticated_liepin_source_frames import (
+    PostHandshakeLiepinSourceSession,
+    ReceivedLiepinSourceMessage,
 )
 from seektalent.source_port.authenticated_history_frames import (
     PostHandshakeHistorySession,
@@ -46,7 +46,7 @@ class _SidecarResultState:
     session_id: str
     protocol_minor: int
     source_port: PostHandshakeSourcePortSession
-    liepin_cards: PostHandshakeLiepinCardsSession
+    liepin_source: PostHandshakeLiepinSourceSession
     history: PostHandshakeHistorySession
     source_port_exchange_lock: threading.Lock
     source_port_exchange_in_flight: bool = False
@@ -76,20 +76,20 @@ class SidecarHandshakeResult(SourcePortEndpoint):
     def source_port_session(self) -> PostHandshakeSourcePortSession:
         return _result_state(self).source_port
 
-    def liepin_cards_session(self) -> PostHandshakeLiepinCardsSession:
-        return _result_state(self).liepin_cards
+    def liepin_source_session(self) -> PostHandshakeLiepinSourceSession:
+        return _result_state(self).liepin_source
 
-    def send_liepin_cards_frame(self, frame: bytes, *, deadline: float) -> None:
+    def send_liepin_source_frame(self, frame: bytes, *, deadline: float) -> None:
         _result_state(self).transport.write_raw(frame, deadline)
 
-    def receive_liepin_cards_messages(
+    def receive_liepin_source_messages(
         self,
         *,
         deadline: float,
-    ) -> tuple[ReceivedLiepinCardsMessage, ...]:
+    ) -> tuple[ReceivedLiepinSourceMessage, ...]:
         state = _result_state(self)
         chunk = state.transport.read_history_chunk(deadline, None)
-        return state.liepin_cards.feed(chunk)
+        return state.liepin_source.feed(chunk)
 
     def cards_history_session(self) -> PostHandshakeHistorySession:
         return _result_state(self).history
@@ -204,7 +204,7 @@ def _new_result(transport: _ProtocolTransport, material: _HandshakeMaterial) -> 
             main_to_sidecar_key=material.main_to_sidecar_key,
             sidecar_to_main_key=material.sidecar_to_main_key,
         ),
-        liepin_cards=PostHandshakeLiepinCardsSession(
+        liepin_source=PostHandshakeLiepinSourceSession(
             role="sidecar",
             session_id=material.session_id,
             protocol_minor=material.protocol_minor,

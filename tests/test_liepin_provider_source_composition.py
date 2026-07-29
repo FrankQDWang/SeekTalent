@@ -33,6 +33,7 @@ def test_liepin_site_adapter_public_methods_stay_compatible() -> None:
         "open_liepin_detail(self, *, source_run_id: 'str', ref: 'str', rank: 'int') -> 'OpenCliBrowserResult'",
         "open_liepin_tab(self, url: 'str') -> 'OpenCliBrowserResult'",
         "recover_connection(self) -> 'OpenCliBrowserResult'",
+        "run_liepin_details_operation(self, *, source_run_id: 'str', card_ref: 'str', rank: 'int', open_mode: 'str', provider_candidate_key_hash: 'str | None' = None, expected_provider_candidate_key_hash: 'str | None' = None) -> 'tuple[dict[str, object], OpenCliBrowserResult]'",
         "scroll(self, *, direction: 'str') -> 'OpenCliBrowserResult'",
         "search_liepin_cards(self, *, source_run_id: 'str', query: 'str', max_pages: 'int', max_cards: 'int', native_filters: 'Mapping[str, object] | None' = None) -> 'dict[str, object]'",
         "search_liepin_resumes(self, *, source_run_id: 'str', query: 'str', target_resumes: 'int', max_pages: 'int', max_cards: 'int', native_filters: 'Mapping[str, object] | None' = None) -> 'dict[str, object]'",
