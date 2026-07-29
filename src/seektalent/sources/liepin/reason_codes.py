@@ -215,6 +215,11 @@ _LIEPIN_FAILURE_POLICY_ENTRIES = (
         legacy_lane_retryable_metadata=False,
     ),
     _policy(
+        "liepin_cards_source_port_missing",
+        "source_provider_failed",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
         "liepin_opencli_extension_disconnected",
         "source_browser_extension_disconnected",
         legacy_lane_retryable_metadata=False,

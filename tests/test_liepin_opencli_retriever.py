@@ -977,7 +977,7 @@ def test_opencli_retriever_recovers_extension_connection_before_search(tmp_path:
     assert len(response.resumes) == 2
 
 
-def test_opencli_retriever_retries_search_after_extension_recovery(tmp_path: Path) -> None:
+def test_opencli_retriever_does_not_replay_search_after_extension_disconnect(tmp_path: Path) -> None:
     class RetryRunner(FakeOpenCliRunner):
         recover_calls = 0
         search_calls = 0
@@ -1015,11 +1015,15 @@ def test_opencli_retriever_retries_search_after_extension_recovery(tmp_path: Pat
         )
     )
 
-    assert runner.recover_calls == 1
-    assert runner.search_calls == 2
-    assert runner.scope_calls == 2
-    assert runner.finish_calls == 2
-    assert len(response.resumes) == 2
+    assert runner.recover_calls == 0
+    assert runner.search_calls == 1
+    assert runner.scope_calls == 1
+    assert runner.finish_calls == 1
+    assert response.resumes == []
+    assert (
+        response.request_payload["safeReasonCode"]
+        == "liepin_opencli_extension_disconnected"
+    )
 
 
 def test_opencli_retriever_runner_protocol_is_site_level() -> None:

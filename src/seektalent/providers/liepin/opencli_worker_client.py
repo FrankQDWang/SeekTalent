@@ -26,9 +26,6 @@ from seektalent.providers.liepin.worker_contracts import (
 )
 
 
-_OPENCLI_SEARCH_LOCK = threading.Lock()
-
-
 class LiepinOpenCliWorkerClient:
     async def handle_first_page_continuation_with_detail_open_claim_ledger(self, *, action: str,
             continuation: ProviderSearchContinuation, detail_open_claim_ledger: DetailOpenClaimLedger,
@@ -41,10 +38,9 @@ class LiepinOpenCliWorkerClient:
             raise LiepinWorkerModeError("Liepin OpenCLI continuation failed.", code=str(exc)) from exc
 
     def _handle_first_page_continuation_sync(self, **kwargs) -> ProviderFirstPageExpansionResult:
-        with _OPENCLI_SEARCH_LOCK:
-            return self._ready_retriever().handle_first_page_continuation_with_detail_open_claim_ledger(
-                **kwargs
-            )
+        return self._ready_retriever().handle_first_page_continuation_with_detail_open_claim_ledger(
+            **kwargs
+        )
 
     def __init__(
         self,
@@ -177,14 +173,13 @@ class LiepinOpenCliWorkerClient:
         *,
         detail_open_claim_context: DetailOpenClaimSearchContext | None = None,
     ):
-        with _OPENCLI_SEARCH_LOCK:
-            retriever = self._ready_retriever()
-            if detail_open_claim_context is not None:
-                return retriever._search_resumes_with_detail_open_claim_context(
-                    request,
-                    detail_open_claim_context=detail_open_claim_context,
-                )
-            return retriever.search_resumes(request)
+        retriever = self._ready_retriever()
+        if detail_open_claim_context is not None:
+            return retriever._search_resumes_with_detail_open_claim_context(
+                request,
+                detail_open_claim_context=detail_open_claim_context,
+            )
+        return retriever.search_resumes(request)
 
     async def session_status(
         self,

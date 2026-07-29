@@ -36,7 +36,6 @@ function capabilitiesPayload() {
       backend: "opencli",
       tools: [
         "seektalent_opencli_status",
-        "seektalent_opencli_search_liepin_cards",
         "seektalent_opencli_capabilities",
         "seektalent_opencli_open_liepin_tab",
         "seektalent_opencli_state",
@@ -111,18 +110,7 @@ function runAction(action: string, payload: Record<string, unknown>): Promise<st
   if (action === "capabilities") {
     return Promise.resolve(capabilitiesPayload());
   }
-  if (process.env.SEEKTALENT_LIEPIN_OPENCLI_TASK === "liepin.search_resumes" && action === "search_cards") {
-    return Promise.resolve(
-      safeJson({
-        ok: false,
-        action,
-        safeReasonCode: "liepin_opencli_forbidden_command",
-        safeMessage: "card search is disabled for resume tasks",
-        counts: {},
-      }),
-    );
-  }
-  if (action === "open_liepin_tab" || action === "search_cards" || action === "search_resumes") {
+  if (action === "open_liepin_tab") {
     actionCount = 0;
     terminalReason = null;
     stateReady = false;
@@ -134,8 +122,6 @@ function runAction(action: string, payload: Record<string, unknown>): Promise<st
       "capabilities",
       "state",
       "get_url",
-      "search_cards",
-      "search_resumes",
       "extract_visible_liepin_cards",
       "extract_structured_liepin_cards",
       "capture_liepin_detail_resume",
@@ -159,8 +145,6 @@ function runAction(action: string, payload: Record<string, unknown>): Promise<st
     if (
       action !== "status" &&
       action !== "capabilities" &&
-      action !== "search_cards" &&
-      action !== "search_resumes" &&
       action !== "extract_visible_liepin_cards" &&
       action !== "extract_structured_liepin_cards" &&
       action !== "finalize_liepin_resumes"
@@ -246,23 +230,6 @@ export default function registerSeekTalentOpenCliBrowser(pi: ExtensionAPI) {
     parameters: Type.Object({}),
     async execute(_toolCallId: string, params: ToolParams) {
       return textResult(await runAction("capabilities", params));
-    },
-  });
-
-  pi.registerTool({
-    name: "seektalent_opencli_search_liepin_cards",
-    label: "Search Liepin cards",
-    description:
-      "Run the bounded SeekTalent Liepin card-search flow for liepin.search_cards only. Never use this tool for liepin.search_resumes.",
-    parameters: Type.Object({
-      sourceRunId: Type.String(),
-      query: Type.String(),
-      maxPages: Type.Optional(Type.Number()),
-      maxCards: Type.Optional(Type.Number()),
-      nativeFilters: Type.Optional(Type.Object({}, { additionalProperties: true })),
-    }),
-    async execute(_toolCallId: string, params: ToolParams) {
-      return textResult(await runAction("search_cards", params));
     },
   });
 

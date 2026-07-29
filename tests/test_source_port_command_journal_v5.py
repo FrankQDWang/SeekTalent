@@ -5,7 +5,7 @@ from hashlib import sha256
 import inspect
 from pathlib import Path
 import sqlite3
-from typing import Literal, get_type_hints
+from typing import get_type_hints
 from unittest.mock import patch
 
 import pytest
@@ -959,12 +959,14 @@ def test_cross_identity_synthetic_epoch_returns_typed_conflict_or_unavailable(tm
     assert isinstance(result, SourceHistoryIdentityConflict | SourceHistoryUnavailable)
 
 
-def test_public_writer_remains_literal_one_and_cannot_create_or_target_ordinal_two(tmp_path: Path) -> None:
+def test_public_writer_rejects_ordinal_two_without_durable_safe_retry_authority(
+    tmp_path: Path,
+) -> None:
     path = tmp_path / "writer.sqlite3"
     session = create_command_journal(path).start()
-    forged = replace(_accepted(), dispatch_authorization_ordinal=2)  # type: ignore[arg-type]
+    forged = replace(_accepted(), dispatch_authorization_ordinal=2)
 
-    assert get_type_hints(AcceptedCommand)["dispatch_authorization_ordinal"] == Literal[1]
+    assert get_type_hints(AcceptedCommand)["dispatch_authorization_ordinal"] is int
     with pytest.raises(ValueError):
         session.record_accepted(forged)
     with sqlite3.connect(path) as connection:
@@ -975,4 +977,7 @@ def test_public_writer_remains_literal_one_and_cannot_create_or_target_ordinal_t
         CommandJournalSession.record_observed_result,
         CommandJournalSession.record_observed_failure,
     ):
-        assert "dispatch_authorization_ordinal" not in inspect.signature(method).parameters
+        parameter = inspect.signature(method).parameters[
+            "dispatch_authorization_ordinal"
+        ]
+        assert parameter.default == 1

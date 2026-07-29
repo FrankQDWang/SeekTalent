@@ -135,7 +135,9 @@ def test_build_opencli_client_for_browser_backed_mode() -> None:
     assert isinstance(client, LiepinOpenCliWorkerClient)
 
 
-def test_opencli_runtime_setup_is_deferred_and_source_safe(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_opencli_client_without_cards_source_port_fails_closed_before_setup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     from seektalent import opencli_launcher
 
     setup_threads: list[int] = []
@@ -153,9 +155,8 @@ def test_opencli_runtime_setup_is_deferred_and_source_safe(monkeypatch: pytest.M
     with pytest.raises(LiepinWorkerModeError) as captured:
         asyncio.run(client.ensure_ready())
 
-    assert captured.value.code == "liepin_opencli_command_missing"
-    assert str(captured.value) == "Liepin browser component is unavailable. Reinstall SeekTalent."
-    assert setup_threads and setup_threads[0] != threading.get_ident()
+    assert captured.value.code == "liepin_cards_source_port_missing"
+    assert setup_threads == []
 
 
 def test_opencli_runtime_setup_wires_daemon_once_without_retired_registry(
@@ -184,7 +185,10 @@ def test_opencli_runtime_setup_wires_daemon_once_without_retired_registry(
         workspace_root=str(tmp_path),
         liepin_worker_mode="opencli",
     )
-    client = build_liepin_worker_client(settings)
+    client = build_liepin_worker_client(
+        settings,
+        cards_operation_executor=lambda **_kwargs: ({}, {}),
+    )
 
     asyncio.run(client.ensure_ready())
     asyncio.run(client.ensure_ready())
@@ -296,7 +300,10 @@ def test_runtime_restart_never_creates_reads_writes_or_replays_retired_registry(
     settings = make_settings(workspace_root=str(tmp_path), liepin_worker_mode="opencli")
 
     for _restart in range(2):
-        client = build_liepin_worker_client(settings)
+        client = build_liepin_worker_client(
+            settings,
+            cards_operation_executor=lambda **_kwargs: ({}, {}),
+        )
         asyncio.run(client.ensure_ready())
 
     assert calls == []

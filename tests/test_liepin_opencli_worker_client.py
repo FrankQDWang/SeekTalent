@@ -146,7 +146,7 @@ def test_opencli_worker_private_claim_route_forwards_same_ledger_and_logical_pro
     assert context.query_instance_id == "logical-query-5"
 
 
-def test_search_and_expansion_share_single_opencli_lock() -> None:
+def test_search_and_expansion_do_not_use_process_lock_as_authority() -> None:
     class RecordingRetriever(FakeRetriever):
         active = 0
         max_active = 0
@@ -180,7 +180,7 @@ def test_search_and_expansion_share_single_opencli_lock() -> None:
                 continuation=continuation, detail_open_claim_ledger=DetailOpenClaimLedger({}),
                 logical_round_no=1, query_instance_id="q"))
     asyncio.run(run_both())
-    assert retriever.max_active == 1
+    assert retriever.max_active == 2
 
 
 def test_expansion_forwards_exact_private_transport_arguments() -> None:

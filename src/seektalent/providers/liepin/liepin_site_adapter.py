@@ -361,6 +361,8 @@ class LiepinSiteAdapter:
         browser_config: OpenCliBrowserConfig,
         site_config: LiepinOpenCliSiteConfig,
         automation: OpenCliBrowserAutomation,
+        cards_operation_executor: Callable[..., tuple[dict[str, object], dict[str, object]]]
+        | None = None,
     ) -> None:
         self._browser_config = browser_config
         self._site_config = site_config
@@ -368,6 +370,8 @@ class LiepinSiteAdapter:
         self._host_page_id: str | None = None
         self._native_filter_clear_signatures_by_scope: dict[str, str] = {}
         self._continuation_store: LiepinFirstPageContinuationStore | None = None
+        self._cards_operation_executor = cards_operation_executor
+        self._remote_structured_cards: dict[str, OpenCliBrowserResult] = {}
 
     def _first_page_continuation_store(self) -> LiepinFirstPageContinuationStore:
         root = self._site_config.artifact_root
@@ -903,6 +907,9 @@ class LiepinSiteAdapter:
             return OpenCliBrowserResult(ok=False, action="apply_liepin_filters", safe_reason_code=exc.safe_reason_code)
 
     def extract_structured_liepin_cards(self, *, source_run_id: str, max_cards: int) -> OpenCliBrowserResult:
+        remote = self._remote_structured_cards.pop(source_run_id, None)
+        if remote is not None:
+            return remote
         try:
             if max_cards < 1 or max_cards > 50:
                 raise OpenCliBrowserError("liepin_opencli_forbidden_command")
@@ -1343,23 +1350,64 @@ class LiepinSiteAdapter:
         max_cards: int,
         native_filters: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
-        first_attempt = self._search_liepin_cards_once(
-            source_run_id=source_run_id,
-            query=query,
-            max_pages=max_pages,
-            max_cards=max_cards,
-            native_filters=native_filters,
-            recovering_search_surface=False,
-        )
-        if first_attempt.get("safe_reason_code") != "liepin_opencli_stale_ref":
-            return first_attempt
+        if self._cards_operation_executor is not None:
+            envelope, structured = self._cards_operation_executor(
+                source_run_id=source_run_id,
+                query=query,
+                max_pages=max_pages,
+                max_cards=max_cards,
+                native_filters=native_filters,
+            )
+            safe_reason = structured.get("safe_reason_code")
+            if not isinstance(safe_reason, str):
+                safe_reason = None
+            raw_counts = structured.get("counts")
+            counts = (
+                {
+                    key: value
+                    for key, value in raw_counts.items()
+                    if isinstance(key, str)
+                    and isinstance(value, int)
+                    and not isinstance(value, bool)
+                }
+                if isinstance(raw_counts, dict)
+                else {}
+            )
+            raw_observation = structured.get("observation")
+            observation = (
+                {
+                    key: value
+                    for key, value in raw_observation.items()
+                    if isinstance(key, str)
+                }
+                if isinstance(raw_observation, dict)
+                else {}
+            )
+            action = str(structured.get("action") or "")
+            if safe_reason is None:
+                remote = OpenCliBrowserResult(
+                    ok=structured.get("ok") is True,
+                    action=action,
+                    counts=counts,
+                    observation=observation,
+                )
+            else:
+                remote = OpenCliBrowserResult(
+                    ok=structured.get("ok") is True,
+                    action=action,
+                    safe_reason_code=safe_reason,
+                    counts=counts,
+                    observation=observation,
+                )
+            self._remote_structured_cards[source_run_id] = remote
+            return envelope
         return self._search_liepin_cards_once(
             source_run_id=source_run_id,
             query=query,
             max_pages=max_pages,
             max_cards=max_cards,
             native_filters=native_filters,
-            recovering_search_surface=True,
+            recovering_search_surface=False,
         )
 
     def _search_liepin_cards_once(

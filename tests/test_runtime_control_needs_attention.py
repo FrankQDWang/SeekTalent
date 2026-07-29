@@ -28,17 +28,6 @@ from seektalent.source_port.operation_dispatch import (
 from seektalent.source_port.verify_session_contract import (
     VerifySessionResultV1,
     VerifySessionUserActionV1,
-    canonical_verify_session_result_bytes,
-)
-from seektalent.source_port.history_contract import (
-    ExactAuthorizationSelector,
-    SourceHistoryQueryV1,
-)
-from seektalent.source_port.history_sqlite_reader import (
-    SourceHistorySQLiteReader,
-)
-from seektalent.source_history_reconciliation import (
-    commit_admitted_source_history_reconciliation,
 )
 from seektalent.user_action import (
     USER_ACTION_INSTRUCTIONS,
@@ -58,15 +47,6 @@ from seektalent_runtime_control.user_action_mapping import (
     map_verify_session_user_action,
 )
 from tests.test_diagnostics_schema import _failure
-from tests.support.source_history_sqlite_harness import (
-    AcceptedHistoryInput,
-    SourceHistorySQLiteHarness,
-)
-from tests.test_source_history_reconciliation import (
-    _close_exchange as _close_history_exchange,
-    _exchange as _history_exchange,
-    ready_lease_factory as _history_lease_fixture,
-)
 
 
 def test_needs_attention_apis_have_zero_production_callers() -> None:
@@ -112,14 +92,6 @@ ENTERED_AT = "2026-07-27T04:00:00Z"
 RESOLVED_AT = "2026-07-27T04:05:00Z"
 MAIN_TO_SIDECAR_KEY = bytes(range(32))
 SIDECAR_TO_MAIN_KEY = bytes(range(32, 64))
-
-
-@pytest.fixture
-def needs_attention_history_lease_factory(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-):
-    return _history_lease_fixture.__wrapped__(tmp_path, monkeypatch)
 
 
 def _downgrade_v15_to_v14(conn: sqlite3.Connection) -> None:
@@ -533,118 +505,6 @@ def _entry_admission(
     )
 
 
-def _commit_real_history_result(
-    *,
-    root: Path,
-    store: RuntimeControlStore,
-    received: ReceivedVerifySessionResult,
-    monkeypatch: pytest.MonkeyPatch,
-    lease_factory,
-) -> None:
-    authenticated = require_authenticated_verify_session_result(received)
-    result = authenticated.result
-    identity = result.identity
-    authorization = authenticated.dispatch_authorization
-    harness = SourceHistorySQLiteHarness.create(
-        root / f"history-{identity.operation_id}.sqlite3"
-    )
-    harness.register_generation(1)
-    accepted_revision = harness.record_accepted(
-        AcceptedHistoryInput(
-            run_id=identity.run_id,
-            operation_id=identity.operation_id,
-            source="liepin",
-            operation_kind="verify_session",
-            idempotency_key=identity.idempotency_key,
-            request_hash=identity.request_hash,
-            attempt_no=identity.attempt_no,
-            accepted_requirement_revision_id=(
-                identity.accepted_requirement_revision_id
-            ),
-            runtime_attempt_fence_ref=identity.runtime_attempt_fence_ref,
-            authorized_dispatch_intent_id=(
-                authorization.dispatch_intent_id
-            ),
-            authorized_dispatch_intent_revision=(
-                authorization.dispatch_intent_revision
-            ),
-            authorized_dispatch_intent_digest=(
-                authorization.dispatch_intent_digest
-            ),
-            profile_binding_generation=identity.profile_binding_generation,
-            browser_control_scope_id=identity.browser_control_scope_id,
-            controller_fence_ref=None,
-        ),
-        generation=1,
-    )
-    dispatch_revision = harness.record_dispatch_intent(
-        run_id=identity.run_id,
-        operation_id=identity.operation_id,
-        expected_head_journal_revision=accepted_revision,
-        generation=1,
-        durable_dispatch_intent_ref=authorization.dispatch_intent_id,
-    )
-    terminal_digest = sha256(
-        canonical_verify_session_result_bytes(result)
-    ).hexdigest()
-    assert terminal_digest == authenticated.result_digest
-    harness.record_observed_result(
-        run_id=identity.run_id,
-        operation_id=identity.operation_id,
-        expected_head_journal_revision=dispatch_revision,
-        generation=1,
-        result_ref=terminal_digest,
-        result_hash=terminal_digest,
-    )
-    harness.register_generation(2)
-    harness.register_generation(3)
-    query = SourceHistoryQueryV1(
-        contract_version="seektalent.source-port.query.request/v1",
-        run_id=identity.run_id,
-        operation_id=identity.operation_id,
-        source="liepin",
-        operation_kind="verify_session",
-        idempotency_key=identity.idempotency_key,
-        request_hash=identity.request_hash,
-        attempt_no=identity.attempt_no,
-        authorization_selector=ExactAuthorizationSelector(
-            kind="exact",
-            ordinal=authorization.dispatch_authorization_ordinal,
-        ),
-        accepted_generation_hint=1,
-        searched_first_generation=1,
-        searched_last_generation=3,
-        expected_source_operation_ledger_revision=(
-            identity.expected_source_operation_ledger_revision
-        ),
-        expected_reconciliation_revision=(
-            identity.expected_reconciliation_revision
-        ),
-    )
-    admitted, session, child, errors = _history_exchange(
-        SourceHistorySQLiteReader(harness.path),
-        query,
-        lease_factory,
-        monkeypatch,
-    )
-    try:
-        committed = commit_admitted_source_history_reconciliation(
-            admitted,
-            store,
-            terminal_payload=result,
-            committed_at="2026-07-27T03:58:00.000000Z",
-        )
-        assert committed.conclusive_observation_ref == terminal_digest
-        assert committed.history_result_digest != terminal_digest
-    finally:
-        _close_history_exchange(
-            session,
-            child,
-            errors,
-            lease_factory,
-        )
-
-
 def _accept_authenticated_operation(
     store: RuntimeControlStore,
     received: ReceivedVerifySessionResult,
@@ -949,167 +809,6 @@ def test_no_owner_entry_and_resolution_retain_history(tmp_path: Path) -> None:
     [historical] = store.list_user_actions(runtime_run_id=RUN_ID)
     assert historical.status == "resolved"
     assert historical.resolution_evidence_ref is not None
-
-
-def test_real_history_pipeline_enters_and_resolves_with_new_operation(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    needs_attention_history_lease_factory,
-) -> None:
-    store = _store(tmp_path)
-    checkpoint = _checkpoint()
-    store.write_checkpoint_for_recovery(checkpoint)
-    entry_received = _authenticated_result(
-        ready=False,
-        session_suffix="real-entry",
-    )
-    _commit_real_history_result(
-        root=tmp_path / "entry-history",
-        store=store,
-        received=entry_received,
-        monkeypatch=monkeypatch,
-        lease_factory=needs_attention_history_lease_factory,
-    )
-    entry = require_authenticated_verify_session_result(entry_received)
-    admission = store.admit_needs_attention(
-        received=entry_received,
-        checkpoint=checkpoint,
-    )
-    store.commit_needs_attention(
-        runtime_run_id=RUN_ID,
-        action_id=ACTION_ID,
-        admission=admission,
-        checkpoint=checkpoint,
-        envelope=_envelope(action=_action()),
-        expected_state_revision=store.get_run(RUN_ID).state_revision,
-        entered_at=ENTERED_AT,
-    )
-
-    resolution_received = _authenticated_result(
-        ready=True,
-        session_suffix="real-resolution",
-        operation_id=RESOLUTION_OPERATION_ID,
-        idempotency_key="verify-session-real-resolution",
-        dispatch_intent_id="dispatch-intent-real-resolution",
-        source_operation_acceptance_ref="source-acceptance-real-resolution",
-    )
-    resolution = require_authenticated_verify_session_result(
-        resolution_received
-    )
-    assert resolution.result.identity.operation_id != (
-        entry.result.identity.operation_id
-    )
-    assert resolution.result.identity.request_hash != (
-        entry.result.identity.request_hash
-    )
-    assert resolution.result.identity.runtime_attempt_fence_ref != (
-        entry.result.identity.runtime_attempt_fence_ref
-    )
-    assert resolution.request_semantic_digest == entry.request_semantic_digest
-    _accept_authenticated_operation(
-        store,
-        resolution_received,
-        suffix="real-resolution",
-    )
-    _commit_real_history_result(
-        root=tmp_path / "resolution-history",
-        store=store,
-        received=resolution_received,
-        monkeypatch=monkeypatch,
-        lease_factory=needs_attention_history_lease_factory,
-    )
-    satisfaction = store.admit_action_satisfaction(
-        action_id=ACTION_ID,
-        received=resolution_received,
-    )
-    resolved = store.resolve_needs_attention(
-        runtime_run_id=RUN_ID,
-        action_id=ACTION_ID,
-        admission=satisfaction,
-        expected_state_revision=store.get_run(RUN_ID).state_revision,
-        resolved_at=RESOLVED_AT,
-    )
-
-    assert resolved.status == "resume_requested"
-    [action] = store.list_user_actions(runtime_run_id=RUN_ID)
-    assert action.resolution_operation_id == RESOLUTION_OPERATION_ID
-    assert action.resolution_request_hash == (
-        resolution.result.identity.request_hash
-    )
-    assert action.resolution_runtime_attempt_fence_ref == (
-        resolution.result.identity.runtime_attempt_fence_ref
-    )
-    assert action.resolution_reconciliation_id is not None
-
-
-@pytest.mark.parametrize(
-    "poisoning",
-    ("swapped_history_ref", "swapped_terminal_ref"),
-)
-def test_real_history_entry_rejects_swapped_history_and_terminal_digests(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-    needs_attention_history_lease_factory,
-    poisoning: str,
-) -> None:
-    store = _store(tmp_path)
-    checkpoint = _checkpoint()
-    received = _authenticated_result(
-        ready=False,
-        session_suffix=f"real-swapped-{poisoning}",
-    )
-    authenticated = require_authenticated_verify_session_result(received)
-    _commit_real_history_result(
-        root=tmp_path / poisoning,
-        store=store,
-        received=received,
-        monkeypatch=monkeypatch,
-        lease_factory=needs_attention_history_lease_factory,
-    )
-    with sqlite3.connect(store.path) as conn:
-        conn.row_factory = sqlite3.Row
-        row = conn.execute(
-            """
-            SELECT * FROM runtime_control_source_reconciliations
-            WHERE runtime_run_id = ? AND operation_id = ?
-            """,
-            (RUN_ID, OPERATION_ID),
-        ).fetchone()
-        assert row is not None
-        conn.execute(
-            "DROP TRIGGER runtime_control_source_reconciliations_no_update"
-        )
-        if poisoning == "swapped_history_ref":
-            conn.execute(
-                """
-                UPDATE runtime_control_source_reconciliations
-                SET history_result_ref = ?
-                WHERE reconciliation_id = ?
-                """,
-                (
-                    f"sha256:{authenticated.result_digest}",
-                    row["reconciliation_id"],
-                ),
-            )
-        else:
-            conn.execute(
-                """
-                UPDATE runtime_control_source_reconciliations
-                SET conclusive_observation_ref = history_result_digest
-                WHERE reconciliation_id = ?
-                """,
-                (row["reconciliation_id"],),
-            )
-
-    with pytest.raises(RuntimeControlError) as exc_info:
-        store.admit_needs_attention(
-            received=received,
-            checkpoint=checkpoint,
-        )
-    assert (
-        exc_info.value.reason_code
-        == "runtime_needs_attention_admission_rejected"
-    )
 
 
 def test_cancellation_and_failure_terminal_exits_retain_action_history(

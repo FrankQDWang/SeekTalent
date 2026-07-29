@@ -694,25 +694,22 @@ def test_source_port_contract_has_neutral_import_closure_and_no_business_caller(
         source = path.read_text(encoding="utf-8")
         if "seektalent.source_port" in source:
             source_port_callers.append(path.relative_to(PROJECT_ROOT).as_posix())
-    # Runtime control consumes the shared authorization contract plus the
-    # verify-session action vocabulary needed by the #427 lifecycle boundary.
-    # The WTSCLI entry is the explicit production-unreachable typed composition leaf.
-    # The bootstrap path is test-only; the remaining entries are the #379 main-side composition.
+    # The production cards operation consumes the neutral Source Port
+    # primitives; verify_session remains a direct installed-WTSCLI probe.
     assert source_port_callers == [
         "src/seektalent_runtime_control/needs_attention_admission.py",
         "src/seektalent_runtime_control/user_action_mapping.py",
         "src/seektalent_runtime_control/safe_retry_turnover.py",
         "src/seektalent_runtime_control/needs_attention_store.py",
         "src/seektalent/sidecar_readiness.py",
-        "src/seektalent/source_history_reconciliation.py",
         "src/seektalent/wtscli_verify_session_classification.py",
+        "src/seektalent/liepin_cards_source_operation.py",
+        "src/seektalent/liepin_cards_sidecar.py",
         "src/seektalent/sidecar_child_session.py",
         "src/seektalent/sidecar_bootstrap.py",
-        "src/seektalent/verify_session_closed_loop.py",
-        "src/seektalent/wtscli_verify_session_composition.py",
     ]
     bootstrap = PROJECT_ROOT / "src" / "seektalent" / "sidecar_bootstrap.py"
-    assert "--test-only-verify-session-journal" in bootstrap.read_text(encoding="utf-8")
+    assert "--test-only-verify-session-journal" not in bootstrap.read_text(encoding="utf-8")
 
     completed = subprocess.run(
         [

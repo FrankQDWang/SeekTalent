@@ -230,6 +230,31 @@ class WorkflowRuntimeExecutor:
         runtime = self.runtime_factory()
         if not isinstance(runtime, RuntimeLike):
             raise RuntimeControlError("runtime_adapter_invalid")
+        cards_operation_executor = None
+        if (
+            isinstance(runtime, WorkflowRuntime)
+            and self.settings is not None
+            and "liepin" in resolved_source_ids
+            and self.settings.liepin_worker_mode == "opencli"
+        ):
+            from seektalent.liepin_cards_source_operation import (
+                LiepinCardsSourceOperationExecutor,
+            )
+
+            cards_operation_executor = LiepinCardsSourceOperationExecutor(
+                settings=self.settings,
+                store=self.store,
+                runtime_run_id=run.runtime_run_id,
+                executor_id=executor_id,
+                attempt_no=attempt_no,
+                accepted_requirement_revision_id=(
+                    approved.approved_requirement_revision_id
+                ),
+                runtime_attempt_authority_ref=(
+                    f"executor-lease://{run.runtime_run_id}/{attempt_no}"
+                ),
+            )
+            runtime.source_operation_executor = cards_operation_executor
         resume_checkpoint = self._load_resume_checkpoint(
             runtime_run_id=run.runtime_run_id,
             executor_id=executor_id,
@@ -241,6 +266,8 @@ class WorkflowRuntimeExecutor:
             and resume_checkpoint.safe_boundary
             == "after_finalization_commit"
         ):
+            if cards_operation_executor is not None:
+                cards_operation_executor.close()
             return self._settle_completed_run(
                 runtime_run_id=run.runtime_run_id,
                 executor_id=executor_id,
@@ -281,6 +308,11 @@ class WorkflowRuntimeExecutor:
             projection = checkpoint_projection(
                 getattr(artifacts, "run_state", {})
             )
+            source_operation_ids = (
+                cards_operation_executor.checkpoint_operation_ids()
+                if cards_operation_executor is not None
+                else ()
+            )
             checkpoint = self.store.write_checkpoint_v2(
                 checkpoint_id=self.checkpoint_id_factory(),
                 runtime_run_id=run.runtime_run_id,
@@ -306,7 +338,12 @@ class WorkflowRuntimeExecutor:
                 continuation_cursor=_string_key_dict(
                     getattr(artifacts, "continuation_cursor", None)
                 ),
+                source_operation_ids=source_operation_ids,
             )
+            if cards_operation_executor is not None:
+                cards_operation_executor.checkpoint_committed(
+                    source_operation_ids
+                )
             self.store.append_executor_event(
                 _event(
                     runtime_run_id=run.runtime_run_id,
@@ -415,6 +452,8 @@ class WorkflowRuntimeExecutor:
                 )
             await runtime.run_async(**runtime_kwargs)
         except (RuntimeError, ValueError, OSError) as exc:
+            if cards_operation_executor is not None:
+                cards_operation_executor.close()
             reason_code = "runtime_run_failed" if runtime_started else "runtime_executor_start_failed"
             self.store.append_executor_event(
                 _event(
@@ -449,7 +488,13 @@ class WorkflowRuntimeExecutor:
                     runtime_run_id=run.runtime_run_id
                 )
             raise
+        except BaseException:
+            if cards_operation_executor is not None:
+                cards_operation_executor.close()
+            raise
 
+        if cards_operation_executor is not None:
+            cards_operation_executor.close()
         return self._settle_completed_run(
             runtime_run_id=run.runtime_run_id,
             executor_id=executor_id,

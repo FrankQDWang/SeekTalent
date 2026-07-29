@@ -170,25 +170,6 @@ def _run_action(runner: LiepinSiteAdapter, action: str, payload: dict[str, objec
             cards_seen=_optional_payload_int(payload, "cardsSeen", "cards_seen"),
             target_resumes=_optional_payload_int(payload, "targetResumes", "target_resumes"),
         )
-    if action == "search_cards":
-        native_filters = payload.get("nativeFilters") or payload.get("native_filters")
-        return runner.search_liepin_cards(
-            source_run_id=str(payload.get("sourceRunId") or payload.get("source_run_id") or ""),
-            query=str(payload.get("query") or ""),
-            max_pages=_payload_int(payload, "maxPages", "max_pages", default=1),
-            max_cards=_payload_int(payload, "maxCards", "max_cards", default=10),
-            native_filters=cast(Mapping[str, object], native_filters) if isinstance(native_filters, dict) else None,
-        )
-    if action == "search_resumes":
-        native_filters = payload.get("nativeFilters") or payload.get("native_filters")
-        return runner.search_liepin_resumes(
-            source_run_id=str(payload.get("sourceRunId") or payload.get("source_run_id") or ""),
-            query=str(payload.get("query") or ""),
-            target_resumes=_payload_int(payload, "targetResumes", "target_resumes", default=2),
-            max_pages=_payload_int(payload, "maxPages", "max_pages", default=1),
-            max_cards=_payload_int(payload, "maxCards", "max_cards", default=10),
-            native_filters=cast(Mapping[str, object], native_filters) if isinstance(native_filters, dict) else None,
-        )
     raise OpenCliBrowserError("liepin_opencli_forbidden_command")
 
 

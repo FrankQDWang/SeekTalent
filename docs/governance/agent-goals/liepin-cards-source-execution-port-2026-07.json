@@ -1,0 +1,62 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Hard-cut one production Liepin cards browser operation behind an authenticated, journaled Source Execution Port.",
+  "rationale": "The cards operation must move atomically across Runtime Control acceptance and outbox ownership, a supervised sidecar process, durable command history, content-addressed artifacts, reconciliation, candidate truth ingestion, and Checkpoint v2. Splitting the new route from deletion would leave a direct production browser bypass or two competing correctness authorities.",
+  "touched_layers": [
+    "docs",
+    "governance",
+    "other",
+    "provider",
+    "runtime",
+    "sources",
+    "tests"
+  ],
+  "red_files": [
+    "src/seektalent/providers/liepin/client.py",
+    "src/seektalent/providers/liepin/liepin_site_adapter.py",
+    "src/seektalent/providers/liepin/opencli_browser_cli.py",
+    "src/seektalent/providers/liepin/opencli_extensions/seektalent_opencli_browser.ts",
+    "src/seektalent/providers/liepin/opencli_retriever.py",
+    "src/seektalent/providers/liepin/opencli_worker_client.py",
+    "src/seektalent/runtime/composition.py",
+    "src/seektalent/runtime/orchestrator.py"
+  ],
+  "dependency_files": [],
+  "deletion_targets": [
+    "main-process direct cards search routes to WTSCLI and Chrome",
+    "reason-code-driven automatic whole-search replay",
+    "the process-global OpenCLI search lock as correctness authority",
+    "verify-session Source Port simulations not consumed by a production primitive",
+    "high-level OpenCLI extension and Python helper search commands that bypass the cards Source Execution Port"
+  ],
+  "line_count_exemptions": [
+    "src/seektalent/providers/liepin/liepin_site_adapter.py",
+    "src/seektalent/runtime/orchestrator.py",
+    "src/seektalent_runtime_control/store.py"
+  ],
+  "line_count_rationale": "These existing oversized ownership modules receive only the narrow wiring or transactional changes required by the vertical hard cut. Splitting stable browser, runtime, or Runtime Control storage modules is a separate refactor outside this operation migration.",
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest",
+    "uv run --group dev python -m pytest -q -p no:tach tests/test_liepin_cards_source_operation.py tests/test_source_port_command_journal.py tests/test_runtime_control_source_operations.py tests/test_runtime_control_source_reconciliation.py tests/test_source_port_history_contract.py tests/test_source_port_authenticated_history_frames.py",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev ty check src tests tools",
+    "uv run --group dev python tools/check_arch_imports.py",
+    "uv run --group dev python tools/check_privacy_gate.py --base origin/main",
+    "uv run --group dev python tools/check_agent_safety_gate.py --base origin/main",
+    "uv run --group dev python tools/check_ai_bad_smells.py --base origin/main",
+    "uv run --group dev python tools/check_pr_governance.py --base origin/main",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-source-decoupling.sh"
+  ],
+  "risks": [
+    "A transport timeout after browser dispatch must reconcile history instead of repeating the browser effect.",
+    "A stale executor, profile generation, dispatch epoch, or sidecar generation must not commit a late observation.",
+    "Terminal and partial payloads must remain outside the compact command journal and bind through immutable artifact references.",
+    "Candidate truth and the operation main commit reference must advance in the same SQLite transaction as the Checkpoint v2 pointer.",
+    "The hard cut must not move details, continuation, cleanup, or verify-session into this sidecar operation."
+  ]
+}

@@ -518,6 +518,7 @@ class WorkflowRuntime:
         source_round_adapter_provider: RuntimeSourceRoundAdapterProvider | None = None,
         source_first_page_expander_provider: RuntimeSourceFirstPageExpanderProvider | None = None,
         source_query_policy_provider: RuntimeSourceQueryPolicyProvider | None = None,
+        source_operation_executor: object | None = None,
         retrieval_service: RetrievalService | None = None,
         judge_limiter: AsyncJudgeLimiter | None = None,
         eval_remote_logging: bool = True,
@@ -528,6 +529,7 @@ class WorkflowRuntime:
         self.source_round_adapter_provider = source_round_adapter_provider
         self.source_first_page_expander_provider = source_first_page_expander_provider
         self.source_query_policy_provider = source_query_policy_provider
+        self.source_operation_executor = source_operation_executor
         self.judge_limiter = judge_limiter
         self.eval_remote_logging = eval_remote_logging
         self.prompts = PromptRegistry(settings.prompt_dir)

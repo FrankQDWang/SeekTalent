@@ -219,6 +219,7 @@ async def _run_liepin_source_round(
         source_budget_policy=source_plan.source_budget_policy,
         liepin_context=context.source_context,
         detail_open_claim_ledger=context.detail_open_claim_ledger,
+        cards_operation_executor=runtime.source_operation_executor,
     )
     _record_source_provider_results_from_lane(
         runtime=runtime,

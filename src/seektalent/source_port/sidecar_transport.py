@@ -1,4 +1,4 @@
-"""One post-handshake Source Port transport shared by history and verify-session."""
+"""Authenticated Source Port history transport."""
 
 from __future__ import annotations
 
@@ -8,8 +8,7 @@ import threading
 import time
 import weakref
 from dataclasses import dataclass
-from collections.abc import Callable
-from typing import Literal, Never, SupportsIndex, TypeAlias
+from typing import Literal, Never, SupportsIndex
 
 from seektalent.sidecar_handshake_protocol import (
     DEFAULT_HANDSHAKE_TIMEOUT_SECONDS,
@@ -18,7 +17,6 @@ from seektalent.sidecar_handshake_protocol import (
     _validated_timeout,
 )
 from seektalent.source_port import authenticated_history_frames as history_frames
-from seektalent.source_port import authenticated_verify_session_frames as verify_frames
 from seektalent.source_port.authenticated_source_port_session import (
     PostHandshakeSourcePortSession,
     ReceivedSourcePortMessage,
@@ -31,39 +29,9 @@ from seektalent.source_port.history_contract import (
     SourceHistoryQueryV1,
     SourceHistoryUnavailable,
 )
-from seektalent.source_port.verify_session_contract import VerifySessionRequestV1
 
 
 _HistoryResult = SourceHistoryMatched | SourceHistoryNotFound | SourceHistoryIdentityConflict | SourceHistoryUnavailable
-ReceivedVerifySessionTerminal: TypeAlias = (
-    verify_frames.ReceivedVerifySessionRejected
-    | verify_frames.ReceivedVerifySessionResult
-    | verify_frames.ReceivedVerifySessionFailure
-    | verify_frames.ReceivedVerifySessionReconcileRequired
-)
-ReceivedVerifySessionAcceptedTerminal: TypeAlias = (
-    verify_frames.ReceivedVerifySessionResult
-    | verify_frames.ReceivedVerifySessionFailure
-    | verify_frames.ReceivedVerifySessionReconcileRequired
-)
-
-
-@dataclass(frozen=True, slots=True)
-class VerifySessionExchangeResult:
-    """One complete verify reply: rejection needs no ack; all other terminals do."""
-
-    accepted_ack: verify_frames.ReceivedVerifySessionAcceptedAck | None
-    terminal: ReceivedVerifySessionTerminal
-
-    def __post_init__(self) -> None:
-        if isinstance(self.terminal, verify_frames.ReceivedVerifySessionRejected):
-            if self.accepted_ack is not None:
-                raise ValueError("verify rejection cannot carry an accepted ack")
-            return
-        if self.accepted_ack is None:
-            raise ValueError("verify terminal requires an accepted ack")
-
-
 @dataclass(frozen=True, slots=True)
 class _AdmittedSourceHistoryState:
     endpoint: weakref.ReferenceType[SourcePortEndpoint]
@@ -199,75 +167,6 @@ def exchange_source_history(
         endpoint._finish_source_port_exchange(succeeded=succeeded)
 
 
-def exchange_verify_session(
-    endpoint: SourcePortEndpoint,
-    request: VerifySessionRequestV1,
-    *,
-    timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS,
-    accepted_ack_handler: Callable[
-        [verify_frames.ReceivedVerifySessionAcceptedAck],
-        None,
-    ]
-    | None = None,
-) -> VerifySessionExchangeResult:
-    """Submit verify-session: a fresh rejection is terminal; durable terminals require ack."""
-    normalized_timeout = _validated_timeout(timeout)
-    source_port = _require_endpoint(endpoint)
-    if type(request) is not VerifySessionRequestV1:
-        raise TypeError("request must be a VerifySessionRequestV1")
-    if accepted_ack_handler is not None and not callable(accepted_ack_handler):
-        raise TypeError("accepted_ack_handler must be callable")
-    _begin_verify_exchange(endpoint)
-    succeeded = False
-    try:
-        deadline = time.monotonic() + normalized_timeout
-        message_id = secrets.token_hex(16)
-        frame = source_port.encode_submit(
-            message_id=message_id,
-            correlation_id=request.identity.correlation_id,
-            payload=request,
-        )
-        endpoint._send_source_port_frame(frame, deadline)
-        ack: verify_frames.ReceivedVerifySessionAcceptedAck | None = None
-        while True:
-            messages = endpoint._receive_source_port_messages(deadline)
-            if not messages:
-                continue
-            for message in messages:
-                if getattr(message, "reply_to", None) != message_id:
-                    raise SourcePortTransportFrameError("source_port_wrong_reply")
-                if isinstance(message, verify_frames.ReceivedVerifySessionAcceptedAck):
-                    if ack is not None:
-                        raise SourcePortTransportFrameError("source_port_verify_session_response_state_mismatch")
-                    ack = message
-                    if accepted_ack_handler is not None:
-                        accepted_ack_handler(message)
-                    continue
-                if isinstance(
-                    message,
-                    (
-                        verify_frames.ReceivedVerifySessionRejected,
-                        verify_frames.ReceivedVerifySessionResult,
-                        verify_frames.ReceivedVerifySessionFailure,
-                        verify_frames.ReceivedVerifySessionReconcileRequired,
-                    ),
-                ):
-                    if isinstance(message, verify_frames.ReceivedVerifySessionRejected):
-                        if ack is not None:
-                            raise SourcePortTransportFrameError("source_port_verify_session_response_state_mismatch")
-                        source_port.require_frame_boundary()
-                        succeeded = True
-                        return VerifySessionExchangeResult(accepted_ack=None, terminal=message)
-                    if ack is None:
-                        raise SourcePortTransportFrameError("source_port_verify_session_response_state_mismatch")
-                    source_port.require_frame_boundary()
-                    succeeded = True
-                    return VerifySessionExchangeResult(accepted_ack=ack, terminal=message)
-                raise SourcePortTransportFrameError("source_port_unexpected_direction")
-    finally:
-        endpoint._finish_source_port_exchange(succeeded=succeeded)
-
-
 def send_source_port_frame(
     endpoint: SourcePortEndpoint,
     frame: bytes,
@@ -363,66 +262,6 @@ def _serve_received_history_query(
     return result
 
 
-def serve_source_port(
-    endpoint: SourcePortEndpoint,
-    history_reader: object,
-    verify_composition: object,
-    *,
-    timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS,
-) -> None:
-    """Serve authenticated history and verify-session commands over one pipe."""
-    normalized_timeout = _validated_timeout(timeout)
-    _require_endpoint(endpoint)
-    from seektalent.source_port.verify_session_journal_effect import VerifySessionJournalEffectComposition
-
-    if type(verify_composition) is not VerifySessionJournalEffectComposition:
-        raise TypeError("verify composition must be factory-created")
-    while True:
-        try:
-            deadline = time.monotonic() + normalized_timeout
-            messages = endpoint._receive_source_port_messages(deadline)
-        except SidecarReadinessError as error:
-            if error.reason is SidecarReadinessReason.EOF:
-                return
-            raise
-        for message in messages:
-            if isinstance(message, history_frames.ReceivedHistoryQuery):
-                _begin_history_exchange(endpoint)
-                succeeded = False
-                try:
-                    _serve_received_history_query(endpoint, history_reader, message, deadline=deadline)
-                    succeeded = True
-                finally:
-                    endpoint._finish_source_port_exchange(succeeded=succeeded)
-                continue
-            if not isinstance(message, verify_frames.ReceivedVerifySessionSubmit):
-                raise SourcePortTransportFrameError("source_port_unexpected_direction")
-            _begin_verify_exchange(endpoint)
-            succeeded = False
-            try:
-                exchange = verify_composition.handle_submit(message)
-                _send_verify_exchange(endpoint, exchange, deadline=deadline)
-                succeeded = True
-            finally:
-                endpoint._finish_source_port_exchange(succeeded=succeeded)
-
-
-def serve_test_source_port(
-    endpoint: SourcePortEndpoint,
-    history_reader: object,
-    verify_composition: object,
-    *,
-    timeout: float = DEFAULT_HANDSHAKE_TIMEOUT_SECONDS,
-) -> None:
-    """Compatibility name for deterministic native packaged-sidecar tests."""
-    serve_source_port(
-        endpoint,
-        history_reader,
-        verify_composition,
-        timeout=timeout,
-    )
-
-
 def serve_test_source_history_database(
     endpoint: SourcePortEndpoint,
     path: object,
@@ -444,30 +283,6 @@ def serve_test_source_history_database(
             if error.reason is SidecarReadinessReason.EOF:
                 return
             raise
-
-
-def _send_verify_exchange(endpoint: SourcePortEndpoint, exchange: object, *, deadline: float) -> None:
-    frames = getattr(exchange, "outbound_frames", None)
-    if type(frames) is not tuple or not all(type(frame) is bytes for frame in frames):
-        raise TypeError("verify composition exchange must be factory-created")
-    deadline_at = getattr(exchange, "arrival_deadline_at", None)
-    if deadline_at is not None and (isinstance(deadline_at, bool) or not isinstance(deadline_at, (int, float))):
-        raise TypeError("verify composition exchange deadline is invalid")
-    write_deadline = deadline if deadline_at is None else float(deadline_at)
-    for frame in frames:
-        endpoint._send_source_port_frame(frame, write_deadline)
-    pending_effect = getattr(exchange, "pending_effect", None)
-    if pending_effect is None:
-        return
-    consume = getattr(pending_effect, "consume", None)
-    if not callable(consume):
-        raise TypeError("verify pending effect must be factory-created")
-    terminal = consume()
-    terminal_frames = getattr(terminal, "outbound_frames", None)
-    if type(terminal_frames) is not tuple or not all(type(frame) is bytes for frame in terminal_frames):
-        raise TypeError("verify terminal exchange must be factory-created")
-    for frame in terminal_frames:
-        endpoint._send_source_port_frame(frame, write_deadline)
 
 
 def _require_endpoint(endpoint: SourcePortEndpoint) -> PostHandshakeSourcePortSession:
@@ -545,12 +360,6 @@ def _begin_history_exchange(endpoint: SourcePortEndpoint) -> None:
     raise history_frames.SourceHistoryAdmissionError(reason)
 
 
-def _begin_verify_exchange(endpoint: SourcePortEndpoint) -> None:
-    outcome = endpoint._begin_source_port_exchange()
-    if outcome != "acquired":
-        raise SourcePortTransportFrameError("source_port_session_closed")
-
-
 def _receive_one_history_result(
     endpoint: SourcePortEndpoint,
     deadline: float,
@@ -616,15 +425,11 @@ __all__ = [
     "ReceivedSourcePortMessage",
     "SourcePortEndpoint",
     "SourcePortTransportFrameError",
-    "VerifySessionExchangeResult",
     "exchange_source_history",
-    "exchange_verify_session",
     "receive_source_port_messages",
     "require_live_admitted_source_history_result",
     "send_source_port_frame",
     "serve_source_history_query",
-    "serve_source_port",
     "serve_test_source_history_database",
-    "serve_test_source_port",
     "wait_for_parent_eof",
 ]

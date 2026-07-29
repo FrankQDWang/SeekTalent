@@ -22,6 +22,7 @@ def build_runtime_composition(
     retrieval_service: RetrievalService | None = None,
     judge_limiter: AsyncJudgeLimiter | None = None,
     eval_remote_logging: bool = True,
+    liepin_cards_operation_executor: object | None = None,
 ) -> RuntimeComposition:
     return RuntimeComposition(
         settings=settings,
@@ -38,6 +39,7 @@ def build_runtime_composition(
             settings,
             provider_adapter_registry=provider_adapter_registry,
         ),
+        source_operation_executor=liepin_cards_operation_executor,
         judge_limiter=judge_limiter,
         eval_remote_logging=eval_remote_logging,
     )
@@ -49,6 +51,7 @@ def build_source_enabled_runtime(
     retrieval_service: RetrievalService | None = None,
     judge_limiter: AsyncJudgeLimiter | None = None,
     eval_remote_logging: bool = True,
+    liepin_cards_operation_executor: object | None = None,
 ) -> WorkflowRuntime:
     return build_workflow_runtime(
         build_runtime_composition(
@@ -56,6 +59,7 @@ def build_source_enabled_runtime(
             retrieval_service=retrieval_service,
             judge_limiter=judge_limiter,
             eval_remote_logging=eval_remote_logging,
+            liepin_cards_operation_executor=liepin_cards_operation_executor,
         )
     )
 
