@@ -17,7 +17,12 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserError,
 )
 from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_URL
-from seektalent.providers.liepin.liepin_site_adapter import LiepinOpenCliSiteConfig, LiepinSiteAdapter
+from seektalent.providers.liepin.liepin_site_adapter import (
+    LiepinOpenCliSiteConfig,
+    LiepinSiteAdapter,
+    _search_readiness_evidence,
+)
+from seektalent.providers.liepin.liepin_state_machine import LiepinStateSnapshot
 from tools.check_liepin_browser_boundaries import (
     collect_python_boundary_scan_files,
     find_forbidden_python_boundary_patterns,
@@ -385,6 +390,26 @@ def test_opencli_python_helper_exposes_no_direct_cards_or_resume_search_action()
     assert 'action == "search_resumes"' not in cli_text
     assert "runner.search_liepin_cards(" not in cli_text
     assert "runner.search_liepin_resumes(" not in cli_text
+
+
+def test_search_readiness_evidence_exposes_only_safe_surface_state() -> None:
+    evidence = _search_readiness_evidence(
+        LiepinStateSnapshot(
+            ok=True,
+            url="https://h.liepin.com/search/getConditionItem",
+            text="[11]<input type=search role=combobox id=rc_select_0 />",
+        )
+    )
+
+    assert evidence == {
+        "state_ok": True,
+        "url_host": "h.liepin.com",
+        "url_path": "/search/getConditionItem",
+        "search_surface_url": True,
+        "search_input_ref_present": False,
+        "search_button_ref_present": False,
+        "terminal_reason": None,
+    }
 
 
 def test_liepin_opencli_policy_rejects_api_ajax_graphql_download_and_export_routes() -> None:
