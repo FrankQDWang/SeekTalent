@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from hashlib import sha256
 import time
 from pathlib import Path
 from typing import Literal
@@ -216,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
             terminal_bytes = canonical_json_bytes(
                 observation.model_dump(mode="json")
             )
+            terminal_digest = _terminal_observation_digest(terminal_bytes)
             if observation.disposition in {"completed", "partial"}:
                 journal_session.record_observed_result(
                     run_id=submit.identity.run_id,
@@ -224,8 +226,8 @@ def main(argv: list[str] | None = None) -> int:
                         authorization.dispatch_authorization_ordinal
                     ),
                     expected_head_journal_revision=dispatch.revision,
-                    result_ref=artifact_ref,
-                    result_hash=artifact_hash,
+                    result_ref=terminal_digest,
+                    result_hash=terminal_digest,
                     terminal_reply_bytes=terminal_bytes,
                 )
             else:
@@ -236,8 +238,8 @@ def main(argv: list[str] | None = None) -> int:
                         authorization.dispatch_authorization_ordinal
                     ),
                     expected_head_journal_revision=dispatch.revision,
-                    failure_ref=artifact_ref,
-                    failure_hash=artifact_hash,
+                    failure_ref=terminal_digest,
+                    failure_hash=terminal_digest,
                     terminal_reply_bytes=terminal_bytes,
                 )
             _send_result(
@@ -392,6 +394,10 @@ def _send(session, frame: bytes) -> None:
         frame,
         deadline=time.monotonic() + 30,
     )
+
+
+def _terminal_observation_digest(terminal_reply_bytes: bytes) -> str:
+    return sha256(terminal_reply_bytes).hexdigest()
 
 
 def _message_id(kind: str, operation_id: str) -> str:

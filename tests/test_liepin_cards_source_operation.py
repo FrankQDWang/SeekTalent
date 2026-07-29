@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from hashlib import sha256
 import os
 from types import SimpleNamespace
 
@@ -22,6 +23,7 @@ from seektalent.liepin_cards_source_operation import (
     _authorization_from_acceptance,
     _spawn_sidecar,
 )
+from seektalent.liepin_cards_sidecar import _terminal_observation_digest
 from seektalent.source_port.authenticated_liepin_cards_frames import (
     LiepinCardsAcceptedAckV1,
     LiepinCardsResultV1,
@@ -222,6 +224,14 @@ def test_cards_artifact_is_content_addressed_private_and_durable(
         artifact_ref,
         expected_hash=artifact_hash,
     ) == artifact
+
+
+def test_cards_terminal_journal_digest_binds_terminal_reply_not_artifact() -> None:
+    terminal_reply = b'{"disposition":"failed","artifact_hash":"artifact-digest"}'
+
+    assert _terminal_observation_digest(terminal_reply) == sha256(
+        terminal_reply
+    ).hexdigest()
 
 
 def test_cards_history_sidecar_is_authenticated_supervised_child(
