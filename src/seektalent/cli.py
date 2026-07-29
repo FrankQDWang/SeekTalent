@@ -46,7 +46,7 @@ from seektalent.resources import (
     package_spec_file,
     resolve_user_path,
 )
-from seektalent.sources.liepin.reason_codes import (
+from seektalent.failure_interpretation import (
     LIEPIN_PRODUCTION_FAILURE_REASON_CODES,
     public_source_problem_message,
 )
@@ -625,8 +625,7 @@ def _fallback_local_product_data_paths(workspace_root: Path, runtime_mode: Runti
     )
     corpus_db = _raw_env_value("SEEKTALENT_CORPUS_DB_PATH", env_file=".env") or ".seektalent/corpus.sqlite3"
     liepin_db = (
-        _raw_env_value("SEEKTALENT_LIEPIN_CONNECTOR_DB_PATH", env_file=".env")
-        or ".seektalent/liepin_connector.sqlite3"
+        _raw_env_value("SEEKTALENT_LIEPIN_CONNECTOR_DB_PATH", env_file=".env") or ".seektalent/liepin_connector.sqlite3"
     )
     liepin_sessions = (
         _raw_env_value("SEEKTALENT_LIEPIN_SESSION_STORE_DIR", env_file=".env") or ".seektalent/liepin_sessions"

@@ -5,7 +5,7 @@ from __future__ import annotations
 from seektalent.source_port.verify_session_contract import (
     VerifySessionUserActionV1,
 )
-from seektalent.sources.liepin.reason_codes import user_action_for_liepin_failure
+from seektalent.failure_interpretation import user_action_for_liepin_failure
 from seektalent.user_action import UserActionV1
 
 

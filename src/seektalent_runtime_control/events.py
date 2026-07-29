@@ -6,7 +6,7 @@ import json
 
 from seektalent.progress import ProgressEvent
 from seektalent.runtime.public_events import normalize_runtime_public_event, runtime_public_event_name
-from seektalent.sources.liepin.reason_codes import public_source_problem_message
+from seektalent.failure_interpretation import public_source_problem_message
 from seektalent_runtime_control.models import RuntimeControlEvent, RuntimeControlEventInput
 
 

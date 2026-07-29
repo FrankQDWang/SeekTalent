@@ -12,7 +12,7 @@ from seektalent.providers.liepin.worker_contracts import (
     OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
     SessionStatus,
 )
-from seektalent.sources.liepin.reason_codes import (
+from seektalent.failure_interpretation import (
     LIEPIN_PRODUCTION_FAILURE_REASON_CODES,
 )
 from seektalent_ui.liepin_account_binding import (
