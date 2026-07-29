@@ -6,12 +6,66 @@ from seektalent.opencli_browser.contracts import OpenCliBrowserError, OpenCliBro
 from seektalent.providers.liepin.liepin_site_parsing import _opencli_result_text
 from seektalent.providers.liepin.opencli_filter_planning import (
     native_filter_city_overseas_tab_ref,
+    native_filter_city_picker_option_visible,
     native_filter_city_search_input_ref,
+    native_filter_city_search_input_matches,
     native_filter_option_visible_in_section,
+    native_filter_selection_applied,
 )
 
 if TYPE_CHECKING:
     from seektalent.providers.liepin.liepin_site_adapter import LiepinSiteAdapter
+
+
+def observe_picker_ready(
+    site: LiepinSiteAdapter,
+    *,
+    section: str,
+    label: str,
+    events: list[dict[str, object]],
+) -> OpenCliBrowserResult:
+    for attempt in range(1, 4):
+        if attempt > 1:
+            site.wait_time(seconds=1)
+        state = site.state()
+        reason = state.safe_reason_code
+        if state.ok:
+            state_text = _opencli_result_text(state)
+            if native_filter_selection_applied(state_text, section=section, label=label):
+                reason = "requested_city_already_applied"
+            elif native_filter_city_search_input_ref(state_text) is not None:
+                reason = "city_search_input_ready"
+            elif native_filter_city_picker_option_visible(state_text, label=label):
+                reason = "requested_city_option_ready"
+            else:
+                reason = "city_picker_not_ready"
+        events.append(
+            {
+                "action_kind": "observe_native_filter_menu",
+                "filter": "city",
+                "section": section,
+                "ok": state.ok,
+                "phase": "city_picker_readiness",
+                "attempt": attempt,
+                "reason": reason,
+            }
+        )
+        if not state.ok:
+            raise OpenCliBrowserError(state.safe_reason_code)
+        if reason == "requested_city_already_applied":
+            events.append(
+                {
+                    "action_kind": "verify_native_filter",
+                    "filter": "city",
+                    "section": section,
+                    "value": label,
+                    "ok": True,
+                    "already_applied": True,
+                }
+            )
+        if reason != "city_picker_not_ready":
+            return state
+    raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
 
 
 def find_liepin_city_filter_option(
@@ -33,7 +87,9 @@ def find_liepin_city_filter_option(
         )
         state = _observe_city_option(site, section=section, label=label, phase="search", events=events)
         state_text = _opencli_result_text(state)
-        if native_filter_option_visible_in_section(state_text, section=section, label=label):
+        if native_filter_city_search_input_matches(
+            state_text, label=label
+        ) and native_filter_option_visible_in_section(state_text, section=section, label=label):
             return state
     if (overseas_ref := native_filter_city_overseas_tab_ref(state_text)) is not None:
         site._click_native_filter_ref(overseas_ref)
@@ -41,9 +97,10 @@ def find_liepin_city_filter_option(
             {"action_kind": "open_native_city_overseas_tab", "filter": "city", "value": label, "ok": True}
         )
         state = _observe_city_option(site, section=section, label=label, phase="overseas", events=events)
-        if native_filter_option_visible_in_section(
-            _opencli_result_text(state), section=section, label=label
-        ):
+        state_text = _opencli_result_text(state)
+        if native_filter_city_search_input_matches(
+            state_text, label=label
+        ) and native_filter_option_visible_in_section(state_text, section=section, label=label):
             return state
     raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
 
@@ -70,8 +127,10 @@ def _observe_city_option(
         )
         if not state.ok:
             raise OpenCliBrowserError(state.safe_reason_code)
-        if native_filter_option_visible_in_section(
-            _opencli_result_text(state), section=section, label=label
+        state_text = _opencli_result_text(state)
+        if (
+            native_filter_city_search_input_matches(state_text, label=label)
+            and native_filter_option_visible_in_section(state_text, section=section, label=label)
         ) or attempt == 2:
             return state
     raise AssertionError("unreachable")

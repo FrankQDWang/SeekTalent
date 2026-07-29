@@ -113,11 +113,9 @@ def native_filter_selection_applied(state_text: str, *, section: str, label: str
     accepted_labels = {normalized_label}
     if section == "recruitment_type" and normalized_label == "统招本科":
         accepted_labels.add("统招")
-    normalized_sections = {
-        _normalize_liepin_filter_text(LIEPIN_FILTER_SECTION_LABELS.get(candidate) or "")
-        for candidate in _city_section_lookup_order(section)
-    }
+    normalized_sections = {_normalize_liepin_filter_text(LIEPIN_FILTER_SECTION_LABELS.get(section) or "")}
     normalized_sections = {candidate for candidate in normalized_sections if candidate}
+    exact_city_section = section in {"current", "expected"}
     lines = state_text.splitlines()
     in_target_section = False
     for index, raw_line in enumerate(lines):
@@ -137,7 +135,9 @@ def native_filter_selection_applied(state_text: str, *, section: str, label: str
                 if any(candidate in chip_text for candidate in accepted_labels):
                     return True
             continue
-        if line.startswith(("已选", "当前条件", "筛选条件")):
+        if line.startswith(("已选", "当前条件", "筛选条件")) and (
+            not exact_city_section or any(candidate in line for candidate in normalized_sections)
+        ):
             return True
         if any(normalized_section in line for normalized_section in normalized_sections) and "已选" in line:
             return True
@@ -155,16 +155,12 @@ def native_filter_option_ref_in_section(state_text: str, *, section: str, label:
         city_picker_open = native_filter_city_search_input_ref(state_text) is not None
         if city_picker_open:
             return _native_filter_city_result_option_ref(state_text, label)
-        for candidate_section in _city_section_lookup_order(section):
-            ref = _native_filter_option_ref_in_exact_section(
-                state_text,
-                section=candidate_section,
-                label=label,
-                city_picker_open=city_picker_open,
-            )
-            if ref is not None:
-                return ref
-        return None
+        return _native_filter_option_ref_in_exact_section(
+            state_text,
+            section=section,
+            label=label,
+            city_picker_open=city_picker_open,
+        )
     return _native_filter_option_ref_in_exact_section(
         state_text,
         section=section,
@@ -207,11 +203,7 @@ def native_filter_control_ref_in_section(state_text: str, *, section: str) -> st
     if section == "legacy":
         return None
     if section in {"current", "expected"}:
-        for candidate_section in _city_section_lookup_order(section):
-            ref = _native_filter_control_ref_in_exact_section(state_text, section=candidate_section)
-            if ref is not None:
-                return ref
-        return None
+        return _native_filter_control_ref_in_exact_section(state_text, section=section)
     return _native_filter_control_ref_in_exact_section(state_text, section=section)
 
 
@@ -247,14 +239,6 @@ def _native_filter_control_ref_in_exact_section(state_text: str, *, section: str
     return fallback_dropdown_ref
 
 
-def _city_section_lookup_order(section: str) -> tuple[str, ...]:
-    if section == "current":
-        return ("current", "expected")
-    if section == "expected":
-        return ("expected", "current")
-    return (section,)
-
-
 def native_filter_city_search_input_ref(state_text: str) -> str | None:
     for line in state_text.splitlines():
         if ("input" not in line and "combobox" not in line) or "城市" not in line:
@@ -263,6 +247,27 @@ def native_filter_city_search_input_ref(state_text: str) -> str | None:
         if match is not None:
             return match.group(1)
     return None
+
+
+def native_filter_city_search_input_matches(state_text: str, *, label: str) -> bool:
+    normalized_label = _normalize_liepin_filter_text(label)
+    if not normalized_label:
+        return False
+    for line in state_text.splitlines():
+        if ("input" not in line and "combobox" not in line) or "城市" not in line:
+            continue
+        match = re.search(r"\bvalue=(?:['\"]([^'\"]*)['\"]|([^\s>]+))", line)
+        if match is None:
+            return False
+        return _normalize_liepin_filter_text(match.group(1) or match.group(2) or "") == normalized_label
+    return False
+
+
+def native_filter_city_picker_option_visible(state_text: str, *, label: str) -> bool:
+    picker_markers = ("请选择城市", "suggest-list", "data-list", "已选（", "已选(")
+    if not any(marker in state_text for marker in picker_markers):
+        return False
+    return _native_filter_city_result_option_ref(state_text, label) is not None
 
 
 def native_filter_city_overseas_tab_ref(state_text: str) -> str | None:
@@ -277,6 +282,7 @@ def native_filter_city_overseas_tab_ref(state_text: str) -> str | None:
 
 def native_filter_city_confirm_ref(state_text: str) -> str | None:
     candidate_lines = _city_picker_candidate_lines(state_text)
+    refs: list[str] = []
     for index, line in enumerate(candidate_lines):
         if "<button" not in line:
             continue
@@ -285,8 +291,9 @@ def native_filter_city_confirm_ref(state_text: str) -> str | None:
             continue
         match = re.search(r"\[([A-Za-z0-9_-]{1,64})\]", line)
         if match is not None:
-            return match.group(1)
-    return None
+            refs.append(match.group(1))
+    unique_refs = tuple(dict.fromkeys(refs))
+    return unique_refs[0] if len(unique_refs) == 1 else None
 
 
 def native_filter_city_picker_selection_contains(state_text: str, *, label: str) -> bool:
@@ -296,6 +303,9 @@ def native_filter_city_picker_selection_contains(state_text: str, *, label: str)
     candidate_lines = _city_picker_candidate_lines(state_text)
     for index, line in enumerate(candidate_lines):
         if "已选" not in line:
+            continue
+        selected_count = re.search(r"已选[（(](\d+)", line)
+        if selected_count is None or int(selected_count.group(1)) < 1:
             continue
         selected_text = _normalize_liepin_filter_text("".join(candidate_lines[index : index + 10]))
         return normalized_label in selected_text
@@ -389,25 +399,41 @@ def _native_filter_option_ref(state_text: str, label: str) -> str | None:
 
 def _native_filter_city_result_option_ref(state_text: str, label: str) -> str | None:
     candidate_lines = _city_picker_candidate_lines(state_text)
-    exact_ref = _native_filter_option_ref("\n".join(candidate_lines), label)
-    if exact_ref is not None:
-        return exact_ref
     normalized_label = _normalize_liepin_filter_text(label)
     if not normalized_label:
         return None
-    candidates: list[tuple[int, int, str]] = []
+    candidates: list[tuple[int, int, int, str]] = []
+    context: str | None = None
     for line in candidate_lines:
+        lowered = line.lower()
+        if "suggest-list" in lowered:
+            context = "suggestion"
+        elif "data-list" in lowered:
+            context = "data"
+        elif "ant-city-menu-list" in lowered or re.search(r"\brole=['\"]?menu(?:['\"\s>]|$)", lowered):
+            context = "navigation"
+        elif "热门城市" in line:
+            context = "data"
         if "input" in line or "combobox" in line:
+            continue
+        if re.search(r"\brole=['\"]?menuitem(?:['\"\s>]|$)", lowered) or context == "navigation":
+            if "</ul>" in lowered:
+                context = None
             continue
         score = _city_result_match_score(line, normalized_label)
         if score is None:
+            if context is not None and re.search(r"</(?:div|ul)>", lowered):
+                context = None
             continue
         match = re.search(r"\[([A-Za-z0-9_-]{1,64})\]", line)
         if match is not None:
-            candidates.append((score, len(candidates), match.group(1)))
+            semantic_priority = 0 if context == "suggestion" else 1 if context == "data" else 2
+            candidates.append((semantic_priority, score, len(candidates), match.group(1)))
+        if context is not None and re.search(r"</(?:div|ul)>", lowered):
+            context = None
     if not candidates:
         return None
-    return min(candidates)[2]
+    return min(candidates)[3]
 
 
 def _city_result_match_score(line: str, normalized_label: str) -> int | None:

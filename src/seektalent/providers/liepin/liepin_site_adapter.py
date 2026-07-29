@@ -32,8 +32,8 @@ from seektalent.opencli_browser.lifecycle import browser_control_key
 from seektalent.opencli_browser.fault_isolation import isolated_call
 from seektalent.opencli_browser.reason_codes import OPENCLI_PAGE_NOT_READY
 from seektalent.opencli_browser.runtime import ALLOWED_BROWSER_COMMANDS, FORBIDDEN_BROWSER_COMMANDS
+from seektalent.providers.liepin import liepin_city_picker as city_picker
 from seektalent.providers.liepin.detail_payload_text import structured_liepin_detail_text
-from seektalent.providers.liepin.liepin_city_picker import find_liepin_city_filter_option
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimSearchContext
 from seektalent.providers.liepin.opencli_filter_planning import (
     LIEPIN_FILTER_SECTION_LABELS,
@@ -2805,29 +2805,28 @@ class LiepinSiteAdapter:
                             "ok": True,
                         }
                     )
-                    self._wait_for_text_condition(
-                        "请选择城市"
-                        if filter_name == "city" and section in {"current", "expected"}
-                        else label
-                    )
-                    state = self.state()
-                    events.append(
-                        {
-                            "action_kind": "observe_native_filter_menu",
-                            "filter": filter_name,
-                            "section": section,
-                            "ok": state.ok,
-                        }
-                    )
+                    if filter_name == "city" and section in {"current", "expected"}:
+                        state = city_picker.observe_picker_ready(self, section=section, label=label, events=events)
+                    else:
+                        self._wait_for_text_condition(label)
+                        state = self.state()
+                        events.append(
+                            dict(
+                                action_kind="observe_native_filter_menu", filter=filter_name,
+                                section=section, ok=state.ok,
+                            )
+                        )
                     if not state.ok:
                         raise OpenCliBrowserError(state.safe_reason_code)
                     state_text = _opencli_result_text(state)
+                    if native_filter_selection_applied(state_text, section=section, label=label):
+                        return state
                 if (
                     filter_name == "city"
                     and section in {"current", "expected"}
                     and not native_filter_option_visible_in_section(state_text, section=section, label=label)
                 ):
-                    state = find_liepin_city_filter_option(
+                    state = city_picker.find_liepin_city_filter_option(
                         self,
                         section=section,
                         label=label,
