@@ -108,6 +108,43 @@ def test_cards_operation_identity_and_hash_are_stable_across_delivery_attempts()
     )
 
 
+def test_cards_operation_deadline_uses_browser_effect_budget(
+    tmp_path: Path,
+) -> None:
+    store = _seed_running_store(tmp_path)
+    settings = AppSettings(
+        _env_file=None,
+        workspace_root=str(tmp_path),
+        runtime_control_path=str(store.path),
+        liepin_worker_timeout_seconds=0.01,
+        liepin_opencli_timeout_seconds=120,
+    )
+    executor = LiepinCardsSourceOperationExecutor(
+        settings=settings,
+        store=store,
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-1",
+        attempt_no=1,
+        accepted_requirement_revision_id="approved-1",
+        runtime_attempt_authority_ref="runtime_attempt_authority_ref_1",
+    )
+    request = _request(
+        runtime_run_id="runtime_run_1",
+        source_lane_run_id=(
+            "runtime_run_1:source:1:liepin:round:1:lane:1"
+        ),
+    )
+
+    identity = executor._identity(
+        request,
+        operation_id=stable_liepin_cards_operation_id(request),
+        request_hash=canonical_liepin_cards_request_hash(request),
+        existing=None,
+    )
+
+    assert identity.deadline.value == 120_000
+
+
 def test_cards_safe_retry_reuses_operation_identity_and_durable_cas_epoch() -> None:
     request = _request()
     original = _identity(request)

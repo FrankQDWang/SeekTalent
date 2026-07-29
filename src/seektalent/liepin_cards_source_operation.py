@@ -120,6 +120,19 @@ class _HistoryObserved:
     dispatch_intent_ref: str
 
 
+def _browser_effect_deadline(
+    settings: AppSettings,
+) -> RelativeMonotonicDeadlineV1:
+    return RelativeMonotonicDeadlineV1(
+        value=min(
+            900_000,
+            max(1, int(settings.liepin_opencli_timeout_seconds * 1000)),
+        ),
+        clock="relative_monotonic",
+        unit="milliseconds",
+    )
+
+
 class LiepinCardsSourceOperationExecutor:
     """One main authority and one supervised sidecar for cards operations."""
 
@@ -739,20 +752,7 @@ class LiepinCardsSourceOperationExecutor:
                 and expectation.browser_control_scope_id is not None
                 else f"cards-scope-{operation_id.removeprefix('cards_')}"
             ),
-            deadline=RelativeMonotonicDeadlineV1(
-                value=min(
-                    900_000,
-                    max(
-                        1,
-                        int(
-                            self._settings.liepin_worker_timeout_seconds
-                            * 1000
-                        ),
-                    ),
-                ),
-                clock="relative_monotonic",
-                unit="milliseconds",
-            ),
+            deadline=_browser_effect_deadline(self._settings),
             expected_source_operation_ledger_revision=(
                 existing.dispatch.expected_ledger_revision
                 if existing is not None
@@ -816,20 +816,7 @@ class LiepinCardsSourceOperationExecutor:
                 and expectation.browser_control_scope_id is not None
                 else f"details-scope-{suffix}"
             ),
-            deadline=RelativeMonotonicDeadlineV1(
-                value=min(
-                    900_000,
-                    max(
-                        1,
-                        int(
-                            self._settings.liepin_worker_timeout_seconds
-                            * 1000
-                        ),
-                    ),
-                ),
-                clock="relative_monotonic",
-                unit="milliseconds",
-            ),
+            deadline=_browser_effect_deadline(self._settings),
             expected_source_operation_ledger_revision=(
                 existing.dispatch.expected_ledger_revision
                 if existing is not None

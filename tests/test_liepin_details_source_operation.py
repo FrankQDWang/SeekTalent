@@ -63,6 +63,7 @@ from seektalent.source_port.operation_dispatch import (
     RelativeMonotonicDeadlineV1,
 )
 from seektalent_runtime_control.errors import RuntimeControlError
+from tests.test_runtime_control_checkpoint_v2 import _seed_running_store
 from tests.test_runtime_control_source_operations import _acceptance
 
 
@@ -163,6 +164,43 @@ def test_details_operation_identity_and_hash_are_stable() -> None:
     assert stable_liepin_details_operation_id(resolve) != (
         stable_liepin_details_operation_id(request)
     )
+
+
+def test_details_operation_deadline_uses_browser_effect_budget(
+    tmp_path: Path,
+) -> None:
+    store = _seed_running_store(tmp_path)
+    settings = AppSettings(
+        _env_file=None,
+        workspace_root=str(tmp_path),
+        runtime_control_path=str(store.path),
+        liepin_worker_timeout_seconds=0.01,
+        liepin_opencli_timeout_seconds=120,
+    )
+    executor = LiepinCardsSourceOperationExecutor(
+        settings=settings,
+        store=store,
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-1",
+        attempt_no=1,
+        accepted_requirement_revision_id="approved-1",
+        runtime_attempt_authority_ref="runtime_attempt_authority_ref_1",
+    )
+    request = _request(
+        runtime_run_id="runtime_run_1",
+        source_lane_run_id=(
+            "runtime_run_1:source:1:liepin:round:1:lane:1"
+        ),
+    )
+
+    identity = executor._details_identity(
+        request,
+        operation_id=stable_liepin_details_operation_id(request),
+        request_hash=canonical_liepin_details_request_hash(request),
+        existing=None,
+    )
+
+    assert identity.deadline.value == 120_000
 
 
 def test_details_frames_require_authenticated_ack_before_terminal() -> None:
