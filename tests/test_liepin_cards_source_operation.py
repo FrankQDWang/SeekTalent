@@ -251,10 +251,14 @@ def test_sidecar_cards_effect_owns_browser_control_scope() -> None:
     class Site:
         def _execute_liepin_cards_sidecar_effect(self, **_kwargs):
             events.append("effect")
-            return {"status": "succeeded", "cards_seen": 0}
-
-        def extract_structured_liepin_cards(self, **_kwargs):
-            return SimpleNamespace(ok=True, observation={"cards": []})
+            return (
+                {"status": "succeeded", "cards_seen": 0},
+                SimpleNamespace(
+                    ok=True,
+                    observation={"cards": []},
+                    safe_reason_code=None,
+                ),
+            )
 
     artifact = _execute_cards(
         Site(),
@@ -308,6 +312,16 @@ def test_sidecar_browser_scope_cleanup_failure_does_not_replace_effect_result(
         "_search_liepin_cards_once",
         lambda _self, **_kwargs: {"status": "succeeded"},
     )
+    structured = SimpleNamespace(
+        ok=True,
+        observation={"cards": []},
+        safe_reason_code=None,
+    )
+    monkeypatch.setattr(
+        LiepinSiteAdapter,
+        "extract_structured_liepin_cards",
+        lambda _self, **_kwargs: structured,
+    )
     monkeypatch.setattr(
         LiepinSiteAdapter,
         "_finish_browser_control_scope",
@@ -321,8 +335,57 @@ def test_sidecar_browser_scope_cleanup_failure_does_not_replace_effect_result(
         max_cards=10,
     )
 
-    assert result == {"status": "succeeded"}
+    assert result == ({"status": "succeeded"}, structured)
     assert "liepin_browser_scope_cleanup_failed" in caplog.text
+
+
+def test_sidecar_structured_observation_stays_inside_browser_scope(
+    monkeypatch,
+) -> None:
+    site = object.__new__(LiepinSiteAdapter)
+    events: list[str] = []
+    structured = SimpleNamespace(
+        ok=True,
+        observation={"cards": [{"provider_candidate_key": "candidate-1"}]},
+        safe_reason_code=None,
+    )
+    monkeypatch.setattr(
+        LiepinSiteAdapter,
+        "_begin_browser_control_scope",
+        lambda _self: events.append("begin"),
+    )
+    monkeypatch.setattr(
+        LiepinSiteAdapter,
+        "_search_liepin_cards_once",
+        lambda _self, **_kwargs: (
+            events.append("search")
+            or {"status": "succeeded", "cards_seen": 1}
+        ),
+    )
+    monkeypatch.setattr(
+        LiepinSiteAdapter,
+        "extract_structured_liepin_cards",
+        lambda _self, **_kwargs: (
+            events.append("extract")
+            or structured
+        ),
+    )
+    monkeypatch.setattr(
+        LiepinSiteAdapter,
+        "_finish_browser_control_scope",
+        lambda _self: events.append("finish"),
+    )
+
+    envelope, observation = site._execute_liepin_cards_sidecar_effect(
+        source_run_id="lane-1",
+        query="python",
+        max_pages=1,
+        max_cards=10,
+    )
+
+    assert envelope["status"] == "succeeded"
+    assert observation is structured
+    assert events == ["begin", "search", "extract", "finish"]
 
 
 def test_sidecar_browser_scope_cleanup_runs_when_effect_fails(
@@ -1246,7 +1309,7 @@ class _SidecarHarnessSite:
             else 0
         )
         self._counter_path.write_text(str(count + 1), encoding="utf-8")
-        return {
+        envelope = {
             "status": self._status,
             "cards_seen": 1 if self._status != "failed" else 0,
             "safe_reason_code": (
@@ -1255,20 +1318,21 @@ class _SidecarHarnessSite:
                 else "liepin_test_observed_failure"
             ),
         }
-
-    def extract_structured_liepin_cards(self, **_kwargs):
         cards = (
             [{"provider_candidate_key": "candidate-1"}]
             if self._status != "failed"
             else []
         )
-        return SimpleNamespace(
-            ok=self._status != "failed",
-            observation={"cards": cards},
-            safe_reason_code=(
-                None
-                if self._status != "failed"
-                else "liepin_test_observed_failure"
+        return (
+            envelope,
+            SimpleNamespace(
+                ok=self._status != "failed",
+                observation={"cards": cards},
+                safe_reason_code=(
+                    None
+                    if self._status != "failed"
+                    else "liepin_test_observed_failure"
+                ),
             ),
         )
 

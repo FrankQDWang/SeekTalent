@@ -291,7 +291,7 @@ def _inject_fault(
 
 def _execute_cards(site, submit) -> LiepinCardsArtifactV1:
     request = submit.request
-    envelope = site._execute_liepin_cards_sidecar_effect(
+    envelope, structured = site._execute_liepin_cards_sidecar_effect(
         source_run_id=request.source_lane_run_id,
         query=request.keyword_query,
         max_pages=request.max_pages,
@@ -304,12 +304,16 @@ def _execute_cards(site, submit) -> LiepinCardsArtifactV1:
     cards: tuple[dict[str, object], ...] = ()
     result_status = "failed"
     if status in {"succeeded", "partial"}:
-        structured = site.extract_structured_liepin_cards(
-            source_run_id=request.source_lane_run_id,
-            max_cards=request.max_cards,
+        raw_cards = (
+            structured.observation.get("cards", ())
+            if structured is not None
+            else ()
         )
-        raw_cards = structured.observation.get("cards", ())
-        if structured.ok and isinstance(raw_cards, list):
+        if (
+            structured is not None
+            and structured.ok
+            and isinstance(raw_cards, list)
+        ):
             cards = tuple(item for item in raw_cards if isinstance(item, dict))
             result_status = "succeeded" if status == "succeeded" else "partial"
             if result_status == "succeeded":
@@ -317,7 +321,11 @@ def _execute_cards(site, submit) -> LiepinCardsArtifactV1:
         else:
             result_status = "partial" if int(cards_seen or 0) > 0 else "failed"
             safe_reason = (
-                structured.safe_reason_code
+                (
+                    structured.safe_reason_code
+                    if structured is not None
+                    else None
+                )
                 or "liepin_opencli_cards_observation_unavailable"
             )
     return LiepinCardsArtifactV1.model_validate(

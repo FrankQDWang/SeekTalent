@@ -1415,11 +1415,11 @@ class LiepinSiteAdapter:
         max_pages: int,
         max_cards: int,
         native_filters: Mapping[str, object] | None = None,
-    ) -> dict[str, object]:
+    ) -> tuple[dict[str, object], OpenCliBrowserResult | None]:
         """Execute cards only for the Source Port sidecar browser owner."""
         try:
             self._begin_browser_control_scope()
-            return self._search_liepin_cards_once(
+            envelope = self._search_liepin_cards_once(
                 source_run_id=source_run_id,
                 query=query,
                 max_pages=max_pages,
@@ -1427,6 +1427,15 @@ class LiepinSiteAdapter:
                 native_filters=native_filters,
                 recovering_search_surface=False,
             )
+            structured = (
+                self.extract_structured_liepin_cards(
+                    source_run_id=source_run_id,
+                    max_cards=max_cards,
+                )
+                if envelope.get("status") in {"succeeded", "partial"}
+                else None
+            )
+            return envelope, structured
         finally:
             isolated_call(
                 self._finish_browser_control_scope,

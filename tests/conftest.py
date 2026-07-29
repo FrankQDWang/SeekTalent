@@ -21,8 +21,18 @@ def route_liepin_browser_primitive_tests(request, monkeypatch):
         LiepinSiteAdapter,
     )
 
+    def execute_browser_primitive(site, **kwargs):
+        envelope, structured = (
+            site._execute_liepin_cards_sidecar_effect(**kwargs)
+        )
+        if structured is not None:
+            site._remote_structured_cards[kwargs["source_run_id"]] = (
+                structured
+            )
+        return envelope
+
     monkeypatch.setattr(
         LiepinSiteAdapter,
         "search_liepin_cards",
-        LiepinSiteAdapter._execute_liepin_cards_sidecar_effect,
+        execute_browser_primitive,
     )
