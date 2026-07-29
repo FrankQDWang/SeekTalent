@@ -5,7 +5,7 @@ from typing import Literal
 
 from seektalent.dev_mode import DevModeStatus
 from seektalent.source_adapters import public_source_reason_code
-from seektalent.sources.liepin.reason_codes import public_source_problem_message
+from seektalent.failure_interpretation import public_source_problem_message
 from seektalent_ui.candidate_identity import public_identity_id
 from seektalent_ui.models import (
     WorkbenchCandidateEvidenceResponse,
@@ -366,7 +366,9 @@ def runtime_final_top_candidate_response(
     *,
     rank: int,
 ) -> WorkbenchFinalTopCandidateResponse:
-    identity_id = next((evidence.runtime_identity_id for evidence in item.evidence if evidence.runtime_identity_id), None)
+    identity_id = next(
+        (evidence.runtime_identity_id for evidence in item.evidence if evidence.runtime_identity_id), None
+    )
     return WorkbenchFinalTopCandidateResponse(
         reviewItemId=item.review_item_id,
         runtimeIdentityId=public_identity_id(f"identity:{identity_id}") if identity_id else item.review_item_id,

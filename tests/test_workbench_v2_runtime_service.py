@@ -14,6 +14,7 @@ import pytest
 from seektalent.models import HardConstraintSlots, QueryTermCandidate, RequirementSheet
 from seektalent.providers.liepin.client import LiepinWorkerModeError
 from seektalent.source_references import SourceReference
+from seektalent.source_contracts import SourceWorkerError
 from seektalent_runtime_control.models import (
     RuntimeControlCandidateEvidence,
     RuntimeControlCandidateIdentity,
@@ -27,6 +28,10 @@ from seektalent_workbench_v2.runtime_service import WorkbenchV2RuntimeService
 
 
 NOW = "2026-06-25T01:02:03.000004+00:00"
+
+
+def test_liepin_worker_error_implements_source_neutral_contract() -> None:
+    assert issubclass(LiepinWorkerModeError, SourceWorkerError)
 
 
 class RecordingRequirementExtractor:

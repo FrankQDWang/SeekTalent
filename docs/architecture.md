@@ -35,7 +35,8 @@ flowchart LR
 
     runtime --> req["RequirementExtractor\nrequirements/"]
     runtime --> controller["ReActController\ncontroller/"]
-    runtime --> source_contracts["Source contracts + registry\nsources/"]
+    runtime --> failure_interpretation["Failure interpretation\nfailure_interpretation.py"]
+    runtime --> source_contracts["Source contracts + registry\nsource_contracts/"]
     runtime --> retrieval["Retrieval planning\nretrieval/ + core/retrieval/"]
     runtime --> rescue["Rescue routing\nruntime/rescue_router.py"]
     runtime --> service_factory["Retrieval service factory\nretrieval/service_factory.py"]
@@ -215,7 +216,7 @@ See [Outputs](outputs.md) for the full file reference.
 - The controller returns structured decisions only. Python runtime code executes CTS, scoring fan-out, artifact writes, and stop rules.
 - Generic retrieval planning stays under `src/seektalent/retrieval/` and `src/seektalent/core/retrieval/`.
 - Runtime depends on source-neutral contracts under `src/seektalent/sources/`; it must not import concrete `seektalent.providers.*` modules.
-- Source adapters are the bridge between runtime/source contracts and provider-backed execution. CTS projection lives under `src/seektalent/sources/cts/`; Liepin runtime lane, smoke CLI, and safe reason-code mapping live under `src/seektalent/sources/liepin/`.
+- Source adapters are the bridge between runtime/source contracts and provider-backed execution. CTS projection lives under `src/seektalent/sources/cts/`; Liepin runtime-lane and smoke behavior live under `src/seektalent/sources/liepin/`; stable public problem and failure-cause interpretation lives in `src/seektalent/failure_interpretation.py`.
 - Provider-specific request details stay under `src/seektalent/providers/`. Providers may depend on clients, core retrieval contracts, retrieval primitives, and source contracts, but not runtime DTOs.
 - Provider registry construction is outside runtime in `src/seektalent/retrieval/service_factory.py`; runtime receives provider access through retrieval/source boundaries.
 - CTS transport details stay inside `src/seektalent/clients/cts_client.py`, behind `src/seektalent/providers/cts/adapter.py`.

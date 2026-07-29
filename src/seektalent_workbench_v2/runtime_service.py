@@ -11,9 +11,9 @@ from uuid import uuid4
 
 from seektalent.config import AppSettings
 from seektalent.candidate_quality import is_recommendation_eligible
+from seektalent.failure_interpretation import public_source_problem_message
 from seektalent.models import RequirementSheet
-from seektalent.providers.liepin.client import LiepinWorkerModeError
-from seektalent.sources.liepin.reason_codes import public_source_problem_message
+from seektalent.source_contracts import SourceWorkerError
 from seektalent_runtime_control.commands import RuntimeCommandService
 from seektalent_runtime_control.detail import RuntimeDetailService
 from seektalent_runtime_control.errors import RuntimeControlError
@@ -318,7 +318,7 @@ class WorkbenchV2RuntimeService:
             raise RuntimeControlError("workbench_v2_runtime_not_recoverable")
         try:
             await self._recheck_liepin_readiness()
-        except LiepinWorkerModeError as exc:
+        except SourceWorkerError as exc:
             return WorkbenchV2RuntimeRecoveryResult(
                 outcome="readiness_blocked",
                 runtime_run=current,

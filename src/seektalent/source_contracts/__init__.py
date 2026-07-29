@@ -10,6 +10,7 @@ from seektalent.source_contracts.contracts import (
     SourcePlanBuilder,
     UnsupportedSourceFilter,
 )
+from seektalent.source_contracts.errors import SourceWorkerError
 from seektalent.source_contracts.logical_query import LogicalQueryDispatch
 from seektalent.source_contracts.registry import SourceRegistry
 from seektalent.source_contracts.runtime_lanes import (
@@ -43,6 +44,7 @@ __all__ = [
     "SourcePlan",
     "SourcePlanBuilder",
     "SourceRegistry",
+    "SourceWorkerError",
     "UnsupportedSourceFilter",
     "DEFAULT_RUNTIME_SOURCE_BUDGET_POLICY",
     "RuntimeApprovedDetailLease",

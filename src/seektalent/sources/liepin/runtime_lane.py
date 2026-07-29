@@ -37,7 +37,7 @@ from seektalent.providers.liepin.filter_compiler import LiepinSourceQueryIntent
 from seektalent.providers.liepin.source_compiler import LiepinCompiledQuery, compile_liepin_source_query_intents
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerPartialSearchError
-from seektalent.sources.liepin.reason_codes import (
+from seektalent.failure_interpretation import (
     legacy_lane_retryable_metadata,
     public_source_problem_code,
 )

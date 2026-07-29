@@ -177,6 +177,12 @@ def test_tach_config_tracks_provider_boundary() -> None:
     module_paths = {module["path"] for module in payload["modules"]}
 
     assert "seektalent.providers" in module_paths
+    assert "seektalent.failure_interpretation" in module_paths
+    assert "seektalent.failure_interpretation" in next(
+        module["depends_on"]
+        for module in payload["modules"]
+        if module["path"] == "seektalent.runtime"
+    )
     assert "Provider boundary is a red-zone integration surface" in tach_config
     assert "Red-zone refactors require a structured review manifest" in tach_config
 

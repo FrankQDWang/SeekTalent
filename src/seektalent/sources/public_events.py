@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from seektalent.sources.liepin.reason_codes import PUBLIC_SOURCE_REASON_CODES
+from seektalent.failure_interpretation import PUBLIC_SOURCE_REASON_CODES
 
 
 def require_public_source_reason_code(reason_code: str | None) -> str | None:

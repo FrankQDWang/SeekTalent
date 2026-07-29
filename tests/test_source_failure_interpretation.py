@@ -4,14 +4,15 @@ from pathlib import Path
 
 import pytest
 
-from seektalent.source_contracts.safe_serialization import sanitize_reason_code
-from seektalent.sources.liepin.reason_codes import (
+from seektalent.failure_interpretation import (
     LIEPIN_FAILURE_POLICIES,
     LIEPIN_PRODUCTION_FAILURE_REASON_CODES,
     PUBLIC_SOURCE_PROBLEMS,
+    public_source_failure_cause_code,
     public_source_problem_code,
     public_source_problem_message,
 )
+from seektalent.source_contracts.safe_serialization import sanitize_reason_code
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -58,6 +59,13 @@ def test_unknown_internal_reason_fails_closed_without_leaking_raw_reason() -> No
     assert public_problem == "source_unknown"
     assert message is not None
     assert internal_reason not in message
+
+
+def test_failure_cause_publication_is_scoped_by_source() -> None:
+    reason = "liepin_opencli_extension_disconnected"
+
+    assert public_source_failure_cause_code("liepin", reason) == reason
+    assert public_source_failure_cause_code("fixture_source", reason) is None
 
 
 @pytest.mark.parametrize(
@@ -239,9 +247,9 @@ def test_production_consumers_do_not_depend_on_removed_duplicate_maps_or_scaffol
         for symbol in forbidden:
             assert symbol not in source, f"{path.relative_to(ROOT)} still uses {symbol}"
 
-    policy_source = (
-        ROOT / "src/seektalent/sources/liepin/reason_codes.py"
-    ).read_text(encoding="utf-8")
+    policy_source = (ROOT / "src/seektalent/failure_interpretation.py").read_text(
+        encoding="utf-8"
+    )
     assert "SourceOperationDisposition" not in policy_source
     assert "source_operation_disposition" not in policy_source
     assert "source_lane_reason_code" not in policy_source

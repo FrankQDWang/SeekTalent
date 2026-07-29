@@ -43,14 +43,15 @@ Use this map to orient AI coding sessions before moving code. Directory placemen
 
 | Directory | Owns | Does not own |
 | --- | --- | --- |
+| `src/seektalent/failure_interpretation.py` | Stable public source problems, source failure-cause interpretation, user-action mapping, and recovery guidance | source execution, retry authority, provider transport, runtime orchestration |
 | `src/seektalent/runtime/` | Source-neutral workflow orchestration, budgets, source plans, scoring, finalization, runtime public events | concrete provider clients, browser automation, BFF response DTOs |
-| `src/seektalent/source_contracts/` | Thin source contract layer: DTO/dataclass shapes, protocols/callable signatures, `SourceRegistry`, safe serialization | orchestration, source-specific budget/query/reason-code rules, provider calls, runtime merge or scheduling logic |
+| `src/seektalent/source_contracts/` | Thin source contract layer: DTO/dataclass shapes, protocols/callable signatures, source-neutral worker failures, `SourceRegistry`, safe serialization | orchestration, source-specific budget/query/reason-code rules, provider calls, runtime merge or scheduling logic |
 | `src/seektalent/sources/` | Source adapter bridge between runtime/source contracts and provider-backed execution | concrete provider transport except through provider boundaries |
 | `src/seektalent/sources/cts/` | CTS source projection and source-specific planning glue | runtime orchestration or generic contract definitions |
-| `src/seektalent/sources/liepin/` | Liepin source-lane bridge, runtime Liepin context normalization, safe public reason-code mapping, Liepin smoke entrypoint | Playwright/browser server implementation or Workbench login UI |
-| `src/seektalent/opencli_browser/` | Generic OpenCLI browser command/session automation, command-shape validation, subprocess execution, Chrome window helpers, and generic `opencli_*` internal reason codes | provider page semantics, Liepin URLs, Liepin public reason-code mapping, source/runtime orchestration, or UI behavior |
+| `src/seektalent/sources/liepin/` | Liepin source-lane bridge, runtime Liepin context normalization, and Liepin smoke entrypoint | product failure interpretation, Playwright/browser server implementation, or Workbench login UI |
+| `src/seektalent/opencli_browser/` | Generic OpenCLI browser command/session automation, command-shape validation, subprocess execution, Chrome window helpers, and generic `opencli_*` internal reason codes | provider page semantics, Liepin URLs, product failure interpretation, source/runtime orchestration, or UI behavior |
 | `src/seektalent/providers/` | Provider registry and provider-owned integration code | runtime DTO imports or Workbench response projection |
-| `src/seektalent/providers/liepin/` | Liepin provider transport, worker-compatible HTTP client, provider DTOs, mapping, filters, safety, detail grants, Liepin site adapter, Liepin site config, Liepin OpenCLI public reason mapping, Liepin Chrome tab reuse fragments, and local drift classification | generic OpenCLI command/session automation, source-neutral runtime orchestration, cloud drift scheduling, or React UI |
+| `src/seektalent/providers/liepin/` | Liepin provider transport, worker-compatible HTTP client, provider DTOs, mapping, filters, safety, detail grants, Liepin site adapter, Liepin site config, generic OpenCLI-to-Liepin failure-cause mapping, Liepin Chrome tab reuse fragments, and local drift classification | generic OpenCLI command/session automation, source-neutral runtime orchestration, product failure interpretation, cloud drift scheduling, or React UI |
 | `src/seektalent_ui/` | Local Workbench BFF/API, local actor ownership, persistence, source-connection routes, packaged Workbench static serving | provider adapters, runtime control internals, or remote user identity |
 | `apps/web-react/` | React Agent Workbench UI, API adapter calls, generated OpenAPI TypeScript types, frontend state/query/event handling | Python backend imports, core runtime/provider payloads, or backend business logic |
 
@@ -64,10 +65,11 @@ For AI-heavy work, prefer this document as the lookup table and keep `AGENTS.md`
 - `sources/registry.py` supports registered source ids beyond the built-in CTS/Liepin pair.
 - `sources/filter_plan.py` owns canonical filter-plan normalization.
 - `sources/cts/filter_projection.py` owns CTS source projection.
-- `sources/liepin/runtime_lane.py`, `smoke_cli.py`, and `reason_codes.py` own Liepin runtime bridge behavior and provider-safe public codes.
+- `failure_interpretation.py` owns the stable translation from source failure causes to public problems, optional user actions, and recovery guidance.
+- `sources/liepin/runtime_lane.py` and `smoke_cli.py` own Liepin runtime bridge behavior; `sources/liepin/reason_codes.py` only preserves the former import path.
 - `sources/provider_card_lane.py` routes provider-backed card searches through the source-neutral retrieval service.
 - `opencli_browser/` owns generic OpenCLI command/session behavior and returns generic `opencli_*` internal reason codes.
-- `providers/liepin/liepin_opencli_policy.py` owns Liepin OpenCLI URL constants, Liepin Chrome tab reuse fragments, and generic-to-Liepin public reason mapping.
+- `providers/liepin/liepin_opencli_policy.py` owns Liepin OpenCLI URL constants, Liepin Chrome tab reuse fragments, and generic OpenCLI-to-Liepin failure-cause mapping.
 - `providers/liepin/liepin_site_adapter.py` owns Liepin site config and Liepin page behavior over the generic OpenCLI automation port.
 - `providers/liepin/liepin_drift_smoke.py` owns local drift classification. Cloud scheduling is out of scope for the provider package.
 
@@ -77,7 +79,7 @@ This bridge is why `seektalent.sources` may depend on runtime contracts and prov
 
 The coarse Tach modules are package-folder boundaries under `src/`. The current notable allowances are:
 
-- `seektalent.runtime` may depend on `seektalent.sources`, retrieval/core contracts, and runtime-owned agent stages.
+- `seektalent.runtime` may depend on the source-neutral failure-interpretation and source-contract boundaries, retrieval/core contracts, and runtime-owned agent stages; it may not depend on concrete sources or providers.
 - `seektalent.sources` may depend on `seektalent.runtime` and `seektalent.providers` because it is the integration bridge.
 - `seektalent.retrieval` may depend on `seektalent.providers` only for service construction and provider-backed retrieval boundaries.
 - `seektalent.opencli_browser` may not depend on provider, source, runtime, source-adapter, or UI packages.

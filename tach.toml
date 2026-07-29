@@ -29,6 +29,10 @@ path = "seektalent.candidate_feedback"
 depends_on = ["seektalent.candidate_quality"]
 
 [[modules]]
+path = "seektalent.failure_interpretation"
+depends_on = []
+
+[[modules]]
 path = "seektalent.cache"
 depends_on = []
 
@@ -87,6 +91,7 @@ depends_on = [
   "seektalent.controller",
   "seektalent.core",
   "seektalent.finalize",
+  "seektalent.failure_interpretation",
   "seektalent.reflection",
   "seektalent.requirements",
   "seektalent.retrieval",
@@ -103,7 +108,9 @@ depends_on = [
 
 [[modules]]
 path = "seektalent.source_contracts"
-depends_on = []
+depends_on = [
+  "seektalent.failure_interpretation",
+]
 
 [[modules]]
 path = "seektalent.source_port"
@@ -113,6 +120,7 @@ depends_on = []
 path = "seektalent.source_adapters"
 depends_on = [
   "seektalent.core",
+  "seektalent.failure_interpretation",
   "seektalent.providers",
   "seektalent.retrieval",
   "seektalent.runtime",
@@ -123,6 +131,7 @@ depends_on = [
 [[modules]]
 path = "seektalent_runtime_control"
 depends_on = [
+  "seektalent.failure_interpretation",
   "seektalent.runtime",
   "seektalent.source_adapters",
   "seektalent.source_contracts",
@@ -143,6 +152,7 @@ depends_on = []
 path = "seektalent.sources"
 depends_on = [
   "seektalent.core",
+  "seektalent.failure_interpretation",
   "seektalent.providers",
   "seektalent.source_contracts",
 ]
@@ -151,6 +161,7 @@ depends_on = [
 path = "seektalent_ui"
 depends_on = [
   "seektalent.candidate_quality",
+  "seektalent.failure_interpretation",
   "seektalent_agent_memory",
   "seektalent_conversation_agent",
   "seektalent_runtime_control",
@@ -165,5 +176,7 @@ depends_on = [
 path = "seektalent_workbench_v2"
 depends_on = [
   "seektalent.candidate_quality",
+  "seektalent.failure_interpretation",
+  "seektalent.source_contracts",
   "seektalent_runtime_control",
 ]

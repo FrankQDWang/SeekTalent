@@ -13,12 +13,12 @@ from typing import Literal, Protocol, cast
 from uuid import uuid4
 
 from anyio import to_thread
-from seektalent.models import RequirementSheet
-from seektalent.providers.liepin.client import LiepinWorkerModeError
-from seektalent.sources.liepin.reason_codes import (
+from seektalent.failure_interpretation import (
     public_liepin_failure_cause_code,
     public_source_problem_code,
 )
+from seektalent.models import RequirementSheet
+from seektalent.source_contracts import SourceWorkerError
 from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.requirements import (
     RequirementDraft,
@@ -475,7 +475,7 @@ class WorkbenchV2Service:
                 runtime_run_id,
                 idempotency_key=idempotency_key,
             )
-        except LiepinWorkerModeError as exc:
+        except SourceWorkerError as exc:
             cause = public_liepin_failure_cause_code(exc.code)
             if cause is None:
                 self._append_service_error(

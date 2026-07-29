@@ -1,0 +1,43 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "source-decoupling-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Restore the zero-violation source dependency baseline without weakening architecture gates.",
+  "rationale": "Public source failure interpretation was owned by the concrete Liepin source package, forcing runtime, runtime control, Workbench, UI, and source contracts to depend on a source implementation. The same inversion exposed the Liepin provider worker exception directly to Workbench v2. This change moves the shared product policy to an explicit neutral module, introduces a source-neutral worker error contract, and migrates every production consumer in one bounded compatibility-preserving slice.",
+  "touched_layers": [
+    "bff",
+    "other",
+    "provider",
+    "runtime",
+    "sources"
+  ],
+  "red_files": [
+    "src/seektalent/providers/liepin/worker_contracts.py",
+    "src/seektalent/runtime/public_events.py"
+  ],
+  "dependency_files": [
+    "tach.toml"
+  ],
+  "dependency_rationale": "Tach explicitly models the new stable failure-interpretation boundary and the consumers that are allowed to depend on it; the baseline remains empty and no forbidden dependency is accepted.",
+  "verification": [
+    "uv run python tools/check_source_boundaries.py",
+    "scripts/verify-source-decoupling.sh",
+    "scripts/verify-red-zone.sh",
+    "scripts/verify-dev-workbench.sh",
+    "uv run pytest",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev ty check src tests tools",
+    "uv run python tools/check_tach_baseline.py",
+    "uv run python tools/check_pr_governance.py --base origin/main"
+  ],
+  "deletion_targets": [
+    "Runtime and product surfaces importing concrete Liepin failure-policy code",
+    "Workbench v2 catching a concrete Liepin provider exception",
+    "Runtime branching on the concrete Liepin source id to publish failure causes"
+  ],
+  "risks": [
+    "The compatibility module must remain a pure re-export so new production imports do not drift back to the concrete source package.",
+    "Failure causes must remain source-scoped so one source cannot publish another source's diagnostic codes.",
+    "Moving policy ownership must not change public problem codes, messages, user actions, or retry authority."
+  ]
+}
