@@ -27,6 +27,7 @@ from seektalent.liepin_cards_source_operation import (
     LiepinCardsSourceOperationExecutor,
     _HistoryUnknown,
     _authorization_from_acceptance,
+    _sidecar_environment,
     _spawn_sidecar,
 )
 from seektalent.liepin_cards_sidecar import (
@@ -64,6 +65,22 @@ from tests.test_runtime_multi_source_round_dispatch import _run_state
 
 
 NOW = datetime(2026, 7, 28, 0, 5, tzinfo=UTC)
+
+
+def test_sidecar_environment_pins_the_current_release_import_root(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("PYTHONPATH", "/ambient/source/must/not/win")
+
+    environment = _sidecar_environment(
+        {"PYTHONPATH": "/override/source/must/not/win"},
+    )
+
+    import_root = Path(environment["PYTHONPATH"])
+    assert import_root == Path(__file__).resolve().parents[1] / "src"
+    assert (
+        import_root / "seektalent" / "liepin_cards_sidecar.py"
+    ).is_file()
 
 
 def _request(**updates: object) -> LiepinCardsOperationRequestV1:

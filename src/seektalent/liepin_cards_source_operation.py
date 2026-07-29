@@ -1178,11 +1178,7 @@ def _spawn_sidecar(
     ]
     if history_only:
         command.append("--history-only")
-    environment = dict(os.environ)
-    environment.pop("PYTHONPATH", None)
-    environment["SEEKTALENT_RUNTIME_ARTIFACT_OUTPUT_MODE"] = "prod"
-    if environment_overrides is not None:
-        environment.update(environment_overrides)
+    environment = _sidecar_environment(environment_overrides)
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -1240,6 +1236,18 @@ def _spawn_sidecar(
         cards_session=cards_session,
         history_session=history_session,
     )
+
+
+def _sidecar_environment(
+    environment_overrides: dict[str, str] | None,
+) -> dict[str, str]:
+    environment = dict(os.environ)
+    environment.pop("PYTHONPATH", None)
+    environment["SEEKTALENT_RUNTIME_ARTIFACT_OUTPUT_MODE"] = "prod"
+    if environment_overrides is not None:
+        environment.update(environment_overrides)
+    environment["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    return environment
 
 
 def _authorization_from_acceptance(identity, dispatch):
