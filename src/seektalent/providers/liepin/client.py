@@ -383,26 +383,67 @@ class ExternalHttpLiepinWorkerClient:
         )
 
 
-def build_liepin_worker_client(settings: AppSettings) -> LiepinWorkerClient:
+def build_liepin_worker_client(
+    settings: AppSettings,
+    *,
+    cards_operation_executor=None,
+) -> LiepinWorkerClient:
     if settings.liepin_worker_mode == "fake_fixture":
         return FakeLiepinWorkerClient(settings)
     if settings.liepin_worker_mode == "external_http":
         return ExternalHttpLiepinWorkerClient(settings)
     if settings.liepin_worker_mode == "opencli":
-        return build_liepin_opencli_worker_client(settings)
+        return build_liepin_opencli_worker_client(
+            settings,
+            cards_operation_executor=cards_operation_executor,
+        )
     raise LiepinWorkerModeError(
         "Liepin worker mode is disabled; no worker client can be built.",
         setup_status="disabled",
     )
 
 
-def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerClient:
-    from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
-    from seektalent.opencli_browser.contracts import OpenCliBrowserConfig, OpenCliBrowserError
-    from seektalent.opencli_browser.daemon_process import connect_installed_opencli_daemon
-    from seektalent.opencli_launcher import BootstrapError, ensure_opencli_runtime
+def build_liepin_opencli_worker_client(
+    settings: AppSettings,
+    *,
+    cards_operation_executor=None,
+) -> LiepinWorkerClient:
+    from seektalent.opencli_browser.contracts import OpenCliBrowserError
+    from seektalent.opencli_launcher import BootstrapError
     from seektalent.providers.liepin.opencli_retriever import LiepinOpenCliResumeRetriever
     from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
+
+    def build_retriever() -> LiepinOpenCliResumeRetriever:
+        try:
+            site = build_liepin_opencli_site_adapter(
+                settings,
+                cards_operation_executor=cards_operation_executor,
+            )
+        except (BootstrapError, OpenCliBrowserError) as exc:
+            raise _liepin_opencli_setup_error(exc) from exc
+        return LiepinOpenCliResumeRetriever(
+            runner=site
+        )
+
+    return LiepinOpenCliWorkerClient(
+        retriever_factory=build_retriever,
+        connection_id="liepin-opencli",
+        provider_account_hash="liepin-opencli-local",
+    )
+
+
+def build_liepin_opencli_site_adapter(
+    settings: AppSettings,
+    *,
+    cards_operation_executor=None,
+):
+    """Build the real installed-WTSCLI site adapter for its owning process."""
+    from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
+    from seektalent.opencli_browser.contracts import OpenCliBrowserConfig
+    from seektalent.opencli_browser.daemon_process import (
+        connect_installed_opencli_daemon,
+    )
+    from seektalent.opencli_launcher import ensure_opencli_runtime
     from seektalent.providers.liepin.liepin_site_adapter import (
         LiepinOpenCliSiteConfig,
         LiepinOpenCliTimingRecorder,
@@ -426,34 +467,22 @@ def build_liepin_opencli_worker_client(settings: AppSettings) -> LiepinWorkerCli
         lease_dir=settings.project_root / ".seektalent" / "opencli_leases",
         artifact_root=settings.artifacts_path,
     )
-
-    def build_retriever() -> LiepinOpenCliResumeRetriever:
-        try:
-            runtime = ensure_opencli_runtime()
-            daemon = connect_installed_opencli_daemon(runtime)
-        except (BootstrapError, OpenCliBrowserError) as exc:
-            raise _liepin_opencli_setup_error(exc) from exc
-        return LiepinOpenCliResumeRetriever(
-            runner=LiepinSiteAdapter(
-                browser_config=browser_config,
-                site_config=site_config,
-                automation=OpenCliBrowserAutomation(
-                    config=browser_config,
-                    daemon=daemon,
-                    timing_recorder=LiepinOpenCliTimingRecorder(
-                        artifact_root=site_config.artifact_root,
-                        writes_local_debug_artifacts=(
-                            settings.runtime_artifact_output_mode != "prod"
-                        ),
-                    ),
+    runtime = ensure_opencli_runtime()
+    daemon = connect_installed_opencli_daemon(runtime)
+    return LiepinSiteAdapter(
+        browser_config=browser_config,
+        site_config=site_config,
+        automation=OpenCliBrowserAutomation(
+            config=browser_config,
+            daemon=daemon,
+            timing_recorder=LiepinOpenCliTimingRecorder(
+                artifact_root=site_config.artifact_root,
+                writes_local_debug_artifacts=(
+                    settings.runtime_artifact_output_mode != "prod"
                 ),
-            )
-        )
-
-    return LiepinOpenCliWorkerClient(
-        retriever_factory=build_retriever,
-        connection_id="liepin-opencli",
-        provider_account_hash="liepin-opencli-local",
+            ),
+        ),
+        cards_operation_executor=cards_operation_executor,
     )
 
 

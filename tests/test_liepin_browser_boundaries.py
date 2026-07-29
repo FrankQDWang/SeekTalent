@@ -17,7 +17,12 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserError,
 )
 from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_URL
-from seektalent.providers.liepin.liepin_site_adapter import LiepinOpenCliSiteConfig, LiepinSiteAdapter
+from seektalent.providers.liepin.liepin_site_adapter import (
+    LiepinOpenCliSiteConfig,
+    LiepinSiteAdapter,
+    _search_readiness_evidence,
+)
+from seektalent.providers.liepin.liepin_state_machine import LiepinStateSnapshot
 from tools.check_liepin_browser_boundaries import (
     collect_python_boundary_scan_files,
     find_forbidden_python_boundary_patterns,
@@ -334,10 +339,9 @@ def test_opencli_extension_exposes_only_restricted_tools() -> None:
     )
 
     assert "seektalent_opencli_status" in text
-    assert "seektalent_opencli_search_liepin_cards" in text
+    assert "seektalent_opencli_search_liepin_cards" not in text
     assert "seektalent_opencli_extract_structured_liepin_cards" in text
     assert "seektalent_opencli_extract_visible_liepin_cards" in text
-    assert "Never use this tool for liepin.search_resumes" in text
     assert "seektalent_opencli_capabilities" in text
     assert "seektalent_opencli_state" in text
     assert "seektalent_opencli_open_liepin_tab" in text
@@ -360,8 +364,7 @@ def test_opencli_extension_exposes_only_restricted_tools() -> None:
     assert "requires a fresh non-terminal state" in text
     assert "details: {}" in text
     assert "SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS" in text
-    assert 'process.env.SEEKTALENT_LIEPIN_OPENCLI_TASK === "liepin.search_resumes"' in text
-    assert 'action === "search_cards"' in text
+    assert 'action === "search_cards"' not in text
 
 
 def test_opencli_extension_marks_card_extractors_as_fresh_state() -> None:
@@ -377,15 +380,36 @@ def test_opencli_extension_marks_card_extractors_as_fresh_state() -> None:
     assert "terminalReason = null" in extract_branch
 
 
-def test_opencli_python_helper_exposes_single_deterministic_resume_search_action() -> None:
-    action = "search_resumes"
+def test_opencli_python_helper_exposes_no_direct_cards_or_resume_search_action() -> None:
     site_text = Path("src/seektalent/providers/liepin/liepin_site_adapter.py").read_text(encoding="utf-8")
     cli_text = Path("src/seektalent/providers/liepin/opencli_browser_cli.py").read_text(encoding="utf-8")
 
     assert hasattr(LiepinSiteAdapter, "search_liepin_resumes")
     assert "def search_liepin_resumes(" in site_text
-    assert f'action == "{action}"' in cli_text
-    assert "runner.search_liepin_resumes(" in cli_text
+    assert 'action == "search_cards"' not in cli_text
+    assert 'action == "search_resumes"' not in cli_text
+    assert "runner.search_liepin_cards(" not in cli_text
+    assert "runner.search_liepin_resumes(" not in cli_text
+
+
+def test_search_readiness_evidence_exposes_only_safe_surface_state() -> None:
+    evidence = _search_readiness_evidence(
+        LiepinStateSnapshot(
+            ok=True,
+            url="https://h.liepin.com/search/getConditionItem",
+            text="[11]<input type=search role=combobox id=rc_select_0 />",
+        )
+    )
+
+    assert evidence == {
+        "state_ok": True,
+        "url_host": "h.liepin.com",
+        "url_path": "/search/getConditionItem",
+        "search_surface_url": True,
+        "search_input_ref_present": False,
+        "search_button_ref_present": False,
+        "terminal_reason": None,
+    }
 
 
 def test_liepin_opencli_policy_rejects_api_ajax_graphql_download_and_export_routes() -> None:

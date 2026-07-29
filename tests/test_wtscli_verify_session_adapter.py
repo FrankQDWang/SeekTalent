@@ -1200,11 +1200,8 @@ def test_adapter_module_has_one_direct_production_gate_without_old_readiness_sea
         1,
     )[1].split("        else:", 1)[0]
 
-    assert callers == [
-        "src/seektalent/liepin_verify_session_gate.py",
-        "src/seektalent/wtscli_verify_session_composition.py",
-    ]
-    assert factory_callers == ["src/seektalent/wtscli_verify_session_composition.py"]
+    assert callers == ["src/seektalent/liepin_verify_session_gate.py"]
+    assert factory_callers == []
     composition_callers = [
         path.relative_to(project_root).as_posix()
         for path in (project_root / "src").rglob("*.py")
@@ -1231,7 +1228,7 @@ def test_adapter_module_has_one_direct_production_gate_without_old_readiness_sea
     assert "wtscli-placeholder" in packaged_builder
     assert "wtscli_verify_session_adapter" not in packaged_builder
     assert "wtscli_verify_session_adapter" not in packaged_bootstrap
-    assert "deterministic test facts without WTSCLI" in packaged_bootstrap
+    assert "deterministic test facts without WTSCLI" not in packaged_bootstrap
 
 
 def test_adapter_result_is_strictly_closed_data_without_raw_daemon_payload() -> None:

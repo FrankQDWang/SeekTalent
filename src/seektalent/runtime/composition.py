@@ -24,6 +24,7 @@ class RuntimeComposition:
     source_first_page_expander_provider: RuntimeSourceFirstPageExpanderProvider
     source_query_policy_provider: RuntimeSourceQueryPolicyProvider
     retrieval_service: RetrievalService
+    source_operation_executor: object | None = None
     judge_limiter: AsyncJudgeLimiter | None = None
     eval_remote_logging: bool = True
 
@@ -37,6 +38,7 @@ def build_workflow_runtime(composition: RuntimeComposition) -> WorkflowRuntime:
         source_first_page_expander_provider=composition.source_first_page_expander_provider,
         source_query_policy_provider=composition.source_query_policy_provider,
         retrieval_service=composition.retrieval_service,
+        source_operation_executor=composition.source_operation_executor,
         judge_limiter=composition.judge_limiter,
         eval_remote_logging=composition.eval_remote_logging,
     )

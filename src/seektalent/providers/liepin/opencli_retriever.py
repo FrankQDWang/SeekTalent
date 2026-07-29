@@ -198,8 +198,6 @@ class LiepinOpenCliResumeRetriever:
     ) -> LiepinResumeSearchResponse:
         self.ensure_ready()
         envelope = self._run_in_browser_control_scope(lambda: search(request))
-        if _envelope_reason(envelope) in _RECOVERABLE_OPENCLI_READY_REASONS and self._recover_connection():
-            envelope = self._run_in_browser_control_scope(lambda: search(request))
         return _response_from_opencli_envelope(envelope)
 
     def _run_in_browser_control_scope(self, action: Callable[[], _T]) -> _T:

@@ -962,6 +962,33 @@ def _require_head(
 
 
 def _require_no_identity_collision(connection: sqlite3.Connection, accepted: AcceptedCommand) -> None:
+    if accepted.dispatch_authorization_ordinal > 1:
+        _require_safe_retry_predecessor(connection, accepted)
+        collision = connection.execute(
+            """
+            SELECT 1 FROM source_history_heads
+            WHERE (
+                    (run_id = ? AND idempotency_key = ?)
+                 OR (operation_id = ? AND idempotency_key = ?)
+                  )
+            AND NOT (
+                    run_id = ? AND operation_id = ?
+                  )
+            """,
+            (
+                accepted.run_id,
+                accepted.idempotency_key,
+                accepted.operation_id,
+                accepted.idempotency_key,
+                accepted.run_id,
+                accepted.operation_id,
+            ),
+        ).fetchone()
+        if collision is not None:
+            raise CommandJournalConflict(
+                CommandJournalConflictReason.IDENTITY_CONFLICT
+            )
+        return
     lookups = (
         (
             """
@@ -988,6 +1015,47 @@ def _require_no_identity_collision(connection: sqlite3.Connection, accepted: Acc
     for statement, parameters in lookups:
         if connection.execute(statement, parameters).fetchone() is not None:
             raise CommandJournalConflict(CommandJournalConflictReason.IDENTITY_CONFLICT)
+
+
+def _require_safe_retry_predecessor(
+    connection: sqlite3.Connection,
+    accepted: AcceptedCommand,
+) -> None:
+    predecessor = connection.execute(
+        """
+        SELECT * FROM source_history_heads
+        WHERE run_id = ? AND operation_id = ?
+        ORDER BY dispatch_authorization_ordinal DESC
+        LIMIT 1
+        """,
+        (accepted.run_id, accepted.operation_id),
+    ).fetchone()
+    if (
+        predecessor is None
+        or int(predecessor["dispatch_authorization_ordinal"])
+        != accepted.dispatch_authorization_ordinal - 1
+        or predecessor["phase"] != "accepted"
+        or any(
+            predecessor[name] != value
+            for name, value in (
+                ("source", accepted.source),
+                ("operation_kind", accepted.operation_kind),
+                ("idempotency_key", accepted.idempotency_key),
+                ("request_hash", accepted.request_hash),
+                (
+                    "accepted_requirement_revision_id",
+                    accepted.accepted_requirement_revision_id,
+                ),
+            )
+        )
+        or int(predecessor["expected_source_operation_ledger_revision"])
+        >= accepted.expected_source_operation_ledger_revision
+        or int(predecessor["expected_reconciliation_revision"])
+        >= accepted.expected_reconciliation_revision
+    ):
+        raise CommandJournalConflict(
+            CommandJournalConflictReason.IDENTITY_CONFLICT
+        )
 
 
 def _same_accepted_identity(
@@ -1072,8 +1140,24 @@ def _allocate_revision(connection: sqlite3.Connection) -> int:
 
 
 def _validate_accepted_input(accepted: AcceptedCommand, *, generation: int) -> None:
-    if type(accepted.dispatch_authorization_ordinal) is not int or accepted.dispatch_authorization_ordinal != 1:
+    if (
+        type(accepted.dispatch_authorization_ordinal) is not int
+        or accepted.dispatch_authorization_ordinal < 1
+    ):
         raise ValueError("command_journal_invalid_dispatch_authorization_ordinal")
+    if accepted.dispatch_authorization_ordinal == 1:
+        if (
+            accepted.safe_retry_commit_ref is not None
+            or accepted.expected_source_operation_ledger_revision != 1
+            or accepted.expected_reconciliation_revision != 0
+        ):
+            raise ValueError("command_journal_invalid_initial_authorization")
+    elif (
+        not accepted.safe_retry_commit_ref
+        or accepted.expected_source_operation_ledger_revision <= 1
+        or accepted.expected_reconciliation_revision < 1
+    ):
+        raise ValueError("command_journal_invalid_safe_retry_authorization")
     AcceptedNoDispatchFact.model_validate(
         {
             **_accepted_fact_values(accepted),
@@ -1099,9 +1183,13 @@ def _accepted_fact_values(accepted: AcceptedCommand) -> dict[str, object]:
         "accepted_requirement_revision_id": accepted.accepted_requirement_revision_id,
         "runtime_attempt_fence_ref": accepted.runtime_attempt_fence_ref,
         "dispatch_authorization_ordinal": accepted.dispatch_authorization_ordinal,
-        "safe_retry_commit_ref": None,
-        "expected_source_operation_ledger_revision": 1,
-        "expected_reconciliation_revision": 0,
+        "safe_retry_commit_ref": accepted.safe_retry_commit_ref,
+        "expected_source_operation_ledger_revision": (
+            accepted.expected_source_operation_ledger_revision
+        ),
+        "expected_reconciliation_revision": (
+            accepted.expected_reconciliation_revision
+        ),
         "authorized_dispatch_intent_id": accepted.authorized_dispatch_intent_id,
         "authorized_dispatch_intent_revision": accepted.authorized_dispatch_intent_revision,
         "authorized_dispatch_intent_digest": accepted.authorized_dispatch_intent_digest,

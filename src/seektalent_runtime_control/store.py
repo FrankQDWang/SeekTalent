@@ -113,6 +113,7 @@ from seektalent_runtime_control.source_epoch_schema import (
 )
 from seektalent_runtime_control.source_operations import (
     AcceptedSourceOperation,
+    SOURCE_OPERATION_DISPOSITIONS,
     SourceDispatchMetadata,
     SourceOperationAdmissionExpectation,
     SourceOperationRecord,
@@ -657,6 +658,244 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
             if operation_row is None:
                 raise RuntimeControlLookupError("source_operation_not_found")
             return _source_operation_acceptance(conn, operation_row)
+
+    def record_owned_source_operation_observation(
+        self,
+        *,
+        runtime_run_id: str,
+        operation_id: str,
+        executor_id: str,
+        attempt_no: int,
+        expected_ledger_revision: int,
+        dispatch_intent_ref: str,
+        conclusive_observation_ref: str,
+        source_operation_disposition: str,
+        observed_at: str,
+    ) -> SourceOperationRecord:
+        """Commit one authenticated sidecar observation under the active executor fence."""
+        if source_operation_disposition not in SOURCE_OPERATION_DISPOSITIONS:
+            raise RuntimeControlError("source_operation_disposition_invalid")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                _require_active_executor(
+                    conn,
+                    runtime_run_id,
+                    executor_id,
+                    attempt_no=attempt_no,
+                    observed_at=observed_at,
+                )
+                row = _source_operation_row(conn, runtime_run_id, operation_id)
+                if row is None:
+                    raise RuntimeControlLookupError("source_operation_not_found")
+                operation = source_operation_from_row(row)
+                if (
+                    operation.operation_phase == "observed"
+                    and operation.dispatch_intent_ref == dispatch_intent_ref
+                    and operation.conclusive_observation_ref == conclusive_observation_ref
+                    and operation.source_operation_disposition
+                    == source_operation_disposition
+                ):
+                    return operation
+                if (
+                    operation.operation_phase not in {"accepted", "reconciled"}
+                    or operation.ledger_revision != expected_ledger_revision
+                    or operation.main_commit_ref is not None
+                    or operation.conclusive_observation_ref is not None
+                ):
+                    raise RuntimeControlError("source_operation_observation_conflict")
+                dispatch_row = _source_dispatch_row_for_operation(
+                    conn,
+                    runtime_run_id,
+                    operation_id,
+                )
+                if dispatch_row is None:
+                    raise RuntimeControlError("source_operation_acceptance_incomplete")
+                dispatch = source_dispatch_from_row(dispatch_row)
+                if dispatch.status != "acknowledged":
+                    raise RuntimeControlError("source_operation_dispatch_ack_missing")
+                updated = conn.execute(
+                    """
+                    UPDATE runtime_control_source_operations
+                    SET operation_phase = 'observed',
+                        dispatch_intent_ref = ?,
+                        conclusive_observation_ref = ?,
+                        source_operation_disposition = ?,
+                        retry_posture = 'no_retry',
+                        ledger_revision = ledger_revision + 1
+                    WHERE runtime_run_id = ? AND operation_id = ?
+                      AND operation_phase = ?
+                      AND ledger_revision = ?
+                      AND main_commit_ref IS NULL
+                      AND conclusive_observation_ref IS NULL
+                    """,
+                    (
+                        dispatch_intent_ref,
+                        conclusive_observation_ref,
+                        source_operation_disposition,
+                        runtime_run_id,
+                        operation_id,
+                        operation.operation_phase,
+                        expected_ledger_revision,
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise RuntimeControlError("source_operation_observation_conflict")
+                committed_row = _source_operation_row(conn, runtime_run_id, operation_id)
+                if committed_row is None:
+                    raise RuntimeControlError("source_operation_observation_incomplete")
+                committed = source_operation_from_row(committed_row)
+                conn.commit()
+            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise
+        return committed
+
+    def record_owned_source_reconciliation_unknown(
+        self,
+        *,
+        runtime_run_id: str,
+        operation_id: str,
+        executor_id: str,
+        attempt_no: int,
+        expected_ledger_revision: int,
+        expected_reconciliation_revision: int,
+        history_result_ref: str,
+        history_result_digest: str,
+        history_outcome: str,
+        history_conclusion: str | None,
+        dispatch_intent_ref: str | None,
+        committed_at: str,
+    ) -> SourceOperationRecord:
+        """Persist an authenticated inconclusive history result under the live owner."""
+        if history_outcome not in {
+            "matched",
+            "not_found",
+            "history_unavailable",
+        }:
+            raise RuntimeControlError("source_reconciliation_history_outcome_invalid")
+        if history_conclusion not in {
+            None,
+            "accepted_no_dispatch",
+            "dispatch_not_observed",
+        }:
+            raise RuntimeControlError("source_reconciliation_history_conclusion_invalid")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                _require_active_executor(
+                    conn,
+                    runtime_run_id,
+                    executor_id,
+                    attempt_no=attempt_no,
+                    observed_at=committed_at,
+                )
+                row = _source_operation_row(conn, runtime_run_id, operation_id)
+                if row is None:
+                    raise RuntimeControlLookupError("source_operation_not_found")
+                operation = source_operation_from_row(row)
+                reconciliation_id = f"source-history-{history_result_digest}"
+                existing = _source_reconciliation_row(conn, reconciliation_id)
+                if existing is not None:
+                    return source_operation_from_row(row)
+                if (
+                    operation.operation_phase != "accepted"
+                    or operation.ledger_revision != expected_ledger_revision
+                    or operation.reconciliation_revision
+                    != expected_reconciliation_revision
+                    or operation.main_commit_ref is not None
+                ):
+                    raise RuntimeControlError("source_reconciliation_revision_conflict")
+                committed_ledger_revision = operation.ledger_revision + 1
+                committed_reconciliation_revision = (
+                    operation.reconciliation_revision + 1
+                )
+                updated = conn.execute(
+                    """
+                    UPDATE runtime_control_source_operations
+                    SET operation_phase = 'reconciled',
+                        dispatch_intent_ref = ?,
+                        source_operation_disposition = 'reconciliation_unknown',
+                        retry_posture = 'reconcile_first',
+                        reconciliation_revision = ?,
+                        ledger_revision = ?
+                    WHERE runtime_run_id = ? AND operation_id = ?
+                      AND operation_phase = 'accepted'
+                      AND ledger_revision = ?
+                      AND reconciliation_revision = ?
+                      AND main_commit_ref IS NULL
+                    """,
+                    (
+                        dispatch_intent_ref,
+                        committed_reconciliation_revision,
+                        committed_ledger_revision,
+                        runtime_run_id,
+                        operation_id,
+                        expected_ledger_revision,
+                        expected_reconciliation_revision,
+                    ),
+                )
+                if updated.rowcount != 1:
+                    raise RuntimeControlError("source_reconciliation_revision_conflict")
+                conn.execute(
+                    """
+                    INSERT INTO runtime_control_source_reconciliations (
+                        reconciliation_id, runtime_run_id, operation_id,
+                        source_id, operation_kind, canonical_request_hash,
+                        idempotency_key, accepted_requirement_revision_id,
+                        runtime_attempt_no, runtime_attempt_authority_ref,
+                        history_result_ref, history_result_digest,
+                        decision_kind, history_outcome, history_conclusion,
+                        dispatch_intent_ref, conclusive_observation_ref,
+                        source_operation_disposition, retry_posture,
+                        expected_ledger_revision,
+                        expected_reconciliation_revision, committed_at,
+                        committed_operation_phase, committed_ledger_revision,
+                        committed_reconciliation_revision
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            'unresolved', ?, ?, ?, NULL,
+                            'reconciliation_unknown', 'reconcile_first',
+                            ?, ?, ?, 'reconciled', ?, ?)
+                    """,
+                    (
+                        reconciliation_id,
+                        operation.runtime_run_id,
+                        operation.operation_id,
+                        operation.source_id,
+                        operation.operation_kind,
+                        operation.canonical_request_hash,
+                        operation.idempotency_key,
+                        operation.accepted_requirement_revision_id,
+                        operation.runtime_attempt_no,
+                        operation.runtime_attempt_authority_ref,
+                        history_result_ref,
+                        history_result_digest,
+                        history_outcome,
+                        history_conclusion,
+                        dispatch_intent_ref,
+                        expected_ledger_revision,
+                        expected_reconciliation_revision,
+                        committed_at,
+                        committed_ledger_revision,
+                        committed_reconciliation_revision,
+                    ),
+                )
+                committed_row = _source_operation_row(
+                    conn,
+                    runtime_run_id,
+                    operation_id,
+                )
+                if committed_row is None:
+                    raise RuntimeControlError(
+                        "source_reconciliation_commit_incomplete"
+                    )
+                committed = source_operation_from_row(committed_row)
+                conn.commit()
+            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise
+        return committed
 
     def commit_no_owner_source_reconciliation(
         self,
@@ -2546,6 +2785,7 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
         artifact_manifest_ref: str | None = None,
         pending_commands: list[dict[str, object]] | None = None,
         continuation_cursor: dict[str, object] | None = None,
+        source_operation_ids: tuple[str, ...] = (),
     ) -> RuntimeCheckpoint:
         if projection.schema_version != RUNTIME_CHECKPOINT_SCHEMA_V2:
             raise RuntimeControlError("runtime_checkpoint_schema_unsupported")
@@ -2664,6 +2904,12 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
                     serialization_latency_ms=projection.serialization_latency_ms,
                     projection_latency_ms=projection.projection_latency_ms,
                     payload_size_bytes=projection.payload_size_bytes,
+                )
+                _commit_source_operations_with_checkpoint(
+                    conn,
+                    runtime_run_id=runtime_run_id,
+                    checkpoint_id=checkpoint_id,
+                    operation_ids=source_operation_ids,
                 )
                 write_checkpoint_participant(conn, checkpoint)
                 self._update_checkpoint_pointer(conn, checkpoint)
@@ -4040,6 +4286,51 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
 
 def _migration_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+
+
+def _commit_source_operations_with_checkpoint(
+    conn: sqlite3.Connection,
+    *,
+    runtime_run_id: str,
+    checkpoint_id: str,
+    operation_ids: tuple[str, ...],
+) -> None:
+    if len(operation_ids) != len(set(operation_ids)):
+        raise RuntimeControlError("source_operation_checkpoint_duplicate")
+    for operation_id in operation_ids:
+        row = _source_operation_row(conn, runtime_run_id, operation_id)
+        if row is None:
+            raise RuntimeControlLookupError("source_operation_not_found")
+        operation = source_operation_from_row(row)
+        if (
+            operation.operation_phase not in {"observed", "reconciled"}
+            or operation.conclusive_observation_ref is None
+            or operation.source_operation_disposition is None
+        ):
+            raise RuntimeControlError("source_operation_not_conclusive")
+        updated = conn.execute(
+            """
+            UPDATE runtime_control_source_operations
+            SET operation_phase = 'main_committed',
+                main_commit_ref = ?,
+                ledger_revision = ledger_revision + 1
+            WHERE runtime_run_id = ? AND operation_id = ?
+              AND operation_phase = ?
+              AND ledger_revision = ?
+              AND main_commit_ref IS NULL
+              AND conclusive_observation_ref IS NOT NULL
+              AND source_operation_disposition IS NOT NULL
+            """,
+            (
+                checkpoint_id,
+                runtime_run_id,
+                operation_id,
+                operation.operation_phase,
+                operation.ledger_revision,
+            ),
+        )
+        if updated.rowcount != 1:
+            raise RuntimeControlError("source_operation_checkpoint_conflict")
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:

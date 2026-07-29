@@ -23,6 +23,14 @@ from seektalent.source_port.authenticated_source_port_session import (
     PostHandshakeSourcePortSession,
     ReceivedSourcePortMessage,
 )
+from seektalent.source_port.authenticated_liepin_cards_frames import (
+    PostHandshakeLiepinCardsSession,
+    ReceivedLiepinCardsMessage,
+)
+from seektalent.source_port.authenticated_history_frames import (
+    PostHandshakeHistorySession,
+    ReceivedHistoryMessage,
+)
 from seektalent.source_port.sidecar_transport import (
     SourcePortEndpoint,
     _register_source_port_endpoint,
@@ -38,6 +46,8 @@ class _SidecarResultState:
     session_id: str
     protocol_minor: int
     source_port: PostHandshakeSourcePortSession
+    liepin_cards: PostHandshakeLiepinCardsSession
+    history: PostHandshakeHistorySession
     source_port_exchange_lock: threading.Lock
     source_port_exchange_in_flight: bool = False
     source_port_exchange_usable: bool = True
@@ -65,6 +75,41 @@ class SidecarHandshakeResult(SourcePortEndpoint):
 
     def source_port_session(self) -> PostHandshakeSourcePortSession:
         return _result_state(self).source_port
+
+    def liepin_cards_session(self) -> PostHandshakeLiepinCardsSession:
+        return _result_state(self).liepin_cards
+
+    def send_liepin_cards_frame(self, frame: bytes, *, deadline: float) -> None:
+        _result_state(self).transport.write_raw(frame, deadline)
+
+    def receive_liepin_cards_messages(
+        self,
+        *,
+        deadline: float,
+    ) -> tuple[ReceivedLiepinCardsMessage, ...]:
+        state = _result_state(self)
+        chunk = state.transport.read_history_chunk(deadline, None)
+        return state.liepin_cards.feed(chunk)
+
+    def cards_history_session(self) -> PostHandshakeHistorySession:
+        return _result_state(self).history
+
+    def send_cards_history_frame(
+        self,
+        frame: bytes,
+        *,
+        deadline: float,
+    ) -> None:
+        _result_state(self).transport.write_raw(frame, deadline)
+
+    def receive_cards_history_messages(
+        self,
+        *,
+        deadline: float,
+    ) -> tuple[ReceivedHistoryMessage, ...]:
+        state = _result_state(self)
+        chunk = state.transport.read_history_chunk(deadline, None)
+        return state.history.feed(chunk)
 
     def _send_source_port_frame(self, frame: bytes, deadline: float) -> None:
         _result_state(self).transport.write_raw(frame, deadline)
@@ -154,6 +199,19 @@ def _new_result(transport: _ProtocolTransport, material: _HandshakeMaterial) -> 
         session_id=material.session_id,
         protocol_minor=material.protocol_minor,
         source_port=PostHandshakeSourcePortSession.for_sidecar(
+            session_id=material.session_id,
+            protocol_minor=material.protocol_minor,
+            main_to_sidecar_key=material.main_to_sidecar_key,
+            sidecar_to_main_key=material.sidecar_to_main_key,
+        ),
+        liepin_cards=PostHandshakeLiepinCardsSession(
+            role="sidecar",
+            session_id=material.session_id,
+            protocol_minor=material.protocol_minor,
+            main_to_sidecar_key=material.main_to_sidecar_key,
+            sidecar_to_main_key=material.sidecar_to_main_key,
+        ),
+        history=PostHandshakeHistorySession.for_sidecar(
             session_id=material.session_id,
             protocol_minor=material.protocol_minor,
             main_to_sidecar_key=material.main_to_sidecar_key,

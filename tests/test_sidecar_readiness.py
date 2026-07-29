@@ -1301,17 +1301,17 @@ def test_history_database_argument_is_unreachable_for_non_test_sidecar_identity(
     )
     arguments = ("--test-only-source-history-database", str(tmp_path / "history.sqlite3"))
 
-    assert sidecar_bootstrap._test_source_port_paths(production_identity, ()) == (None, None)
+    assert sidecar_bootstrap._test_source_history_path(production_identity, ()) is None
     with pytest.raises(ValueError, match="test-only"):
-        sidecar_bootstrap._test_source_port_paths(production_identity, arguments)
+        sidecar_bootstrap._test_source_history_path(production_identity, arguments)
 
     test_identity = replace(
         production_identity,
         sidecar_build_id="test-only-liepin_execution_sidecar-source-deadbeef",
     )
-    assert sidecar_bootstrap._test_source_port_paths(test_identity, arguments) == (tmp_path / "history.sqlite3", None)
+    assert sidecar_bootstrap._test_source_history_path(test_identity, arguments) == tmp_path / "history.sqlite3"
     with pytest.raises(ValueError, match="absolute"):
-        sidecar_bootstrap._test_source_port_paths(
+        sidecar_bootstrap._test_source_history_path(
             test_identity,
             ("--test-only-source-history-database", "history.sqlite3"),
         )

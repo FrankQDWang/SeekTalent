@@ -828,20 +828,15 @@ def test_contract_stays_source_port_only_with_no_production_caller_or_json_parse
         ):
             callers.append(path.relative_to(PROJECT_ROOT).as_posix())
     assert set(callers) == {
-        "src/seektalent/source_history_reconciliation.py",
-        "src/seektalent/sidecar_bootstrap.py",
-        "src/seektalent/source_port/_safe_retry_continuity_store.py",
-        "src/seektalent/source_port/sidecar_transport.py",
-        "src/seektalent/source_port/verify_session_journal_effect.py",
-        "src/seektalent/source_port/verify_session_journal_effect_durable.py",
-            "src/seektalent/verify_session_closed_loop.py",
-            "src/seektalent_runtime_control/needs_attention_admission.py",
-            "src/seektalent_runtime_control/safe_retry_turnover.py",
-            "src/seektalent_runtime_control/user_action_mapping.py",
-        }
+        "src/seektalent/liepin_cards_source_operation.py",
+        "src/seektalent/source_port/authenticated_liepin_cards_frames.py",
+        "src/seektalent_runtime_control/needs_attention_admission.py",
+        "src/seektalent_runtime_control/safe_retry_turnover.py",
+        "src/seektalent_runtime_control/user_action_mapping.py",
+    }
 
 
-def test_sidecar_history_writer_supports_only_main_authorized_ordinals() -> None:
+def test_sidecar_history_writer_accepts_only_main_authorized_safe_retry_epochs() -> None:
     ordinal_one_sources = {
         "runtime_control": (PROJECT_ROOT / "src" / "seektalent_runtime_control" / "source_epoch_schema.py"),
         "runtime_control_validation": (PROJECT_ROOT / "src" / "seektalent_runtime_control" / "source_operations.py"),
@@ -849,27 +844,22 @@ def test_sidecar_history_writer_supports_only_main_authorized_ordinals() -> None
         "journal_engine": PROJECT_ROOT / "src" / "seektalent" / "source_port" / "_command_journal_engine.py",
         "history_contract": PROJECT_ROOT / "src" / "seektalent" / "source_port" / "history_contract.py",
         "history_reader": PROJECT_ROOT / "src" / "seektalent" / "source_port" / "history_sqlite_reader.py",
-        "reconciliation": PROJECT_ROOT / "src" / "seektalent" / "source_history_reconciliation.py",
     }
     source = {name: path.read_text(encoding="utf-8") for name, path in ordinal_one_sources.items()}
 
     assert "dispatch_authorization_ordinal BETWEEN 2 AND 9007199254740991" in source["runtime_control"]
     assert "dispatch.safe_retry_commit_ref is not None" in source["runtime_control_validation"]
-    assert "dispatch_authorization_ordinal: Literal[1] = 1" in source["journal_types"]
+    assert "dispatch_authorization_ordinal: int = 1" in source["journal_types"]
     assert "dispatch_authorization_ordinal = ?" in source["journal_engine"]
     assert "dispatch_authorization_ordinal: PositiveJsonInteger" in source["history_contract"]
     assert "dispatch_authorization_ordinal BETWEEN 1 AND" in source["history_reader"]
-    assert "query.authorization_selector.ordinal == dispatch.dispatch_authorization_ordinal" in source["reconciliation"]
-    assert "dispatch.dispatch_authorization_ordinal == 1" in source["reconciliation"]
 
     production_callers = [
         path.relative_to(PROJECT_ROOT).as_posix()
         for path in (PROJECT_ROOT / "src").rglob("*.py")
         if path != CONTRACT_PATH and "VerifySessionRequestV1.create(" in path.read_text(encoding="utf-8")
     ]
-    assert production_callers == [
-        "src/seektalent/verify_session_closed_loop.py",
-    ]
+    assert production_callers == []
     safe_retry_callers = []
     for path in (PROJECT_ROOT / "src").rglob("*.py"):
         if path in {
@@ -884,8 +874,9 @@ def test_sidecar_history_writer_supports_only_main_authorized_ordinals() -> None
         if "create_safe_retry(" in content or "safe_retry_commit_ref" in content:
             safe_retry_callers.append(path.relative_to(PROJECT_ROOT).as_posix())
     assert set(safe_retry_callers) == {
-        "src/seektalent/source_port/_safe_retry_continuity_store.py",
-        "src/seektalent/verify_session_closed_loop.py",
+        "src/seektalent/liepin_cards_source_operation.py",
+        "src/seektalent/liepin_cards_sidecar.py",
+        "src/seektalent/source_port/_command_journal_types.py",
         "src/seektalent_runtime_control/safe_retry_turnover.py",
         "src/seektalent_runtime_control/source_epoch_schema.py",
         "src/seektalent_runtime_control/source_operations.py",

@@ -3567,7 +3567,7 @@ def test_search_liepin_cards_reobserves_search_ref_after_stale_submit(tmp_path: 
     } in trace["events"]
 
 
-def test_search_liepin_cards_recovers_search_surface_after_stale_ref_exhaustion(tmp_path: Path) -> None:
+def test_search_liepin_cards_does_not_replay_after_stale_ref_exhaustion(tmp_path: Path) -> None:
     search_state = (
         "URL: https://h.liepin.com/search/getConditionItem#session\n"
         "<span>包含全部关键词</span>\n"
@@ -3614,11 +3614,10 @@ def test_search_liepin_cards_recovers_search_surface_after_stale_ref_exhaustion(
         native_filters={"city": "上海"},
     )
 
-    assert envelope["status"] == "succeeded"
-    assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "29")) == 4
-    assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "44")) == 1
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
-    assert {"action_kind": "recover_search_surface", "route_kind": "search"} in trace["events"]
+    assert envelope["status"] == "blocked"
+    assert envelope["safe_reason_code"] == "liepin_opencli_stale_ref"
+    assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "29")) == 3
+    assert ("opencli", "browser", "seektalent-liepin", "click", "44") not in commands.calls
 
 
 def test_search_liepin_cards_bounds_search_surface_recovery(tmp_path: Path) -> None:
@@ -3651,10 +3650,10 @@ def test_search_liepin_cards_bounds_search_surface_recovery(tmp_path: Path) -> N
 
     assert envelope["status"] == "blocked"
     assert envelope["safe_reason_code"] == "liepin_opencli_stale_ref"
-    assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "29")) == 6
+    assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "29")) == 3
 
 
-def test_search_liepin_cards_recovers_after_result_observation_stays_stale(tmp_path: Path) -> None:
+def test_search_liepin_cards_does_not_replay_when_result_observation_stays_stale(tmp_path: Path) -> None:
     search_state = (
         "URL: https://h.liepin.com/search/getConditionItem#session\n"
         "<span>包含全部关键词</span>\n"
@@ -3690,12 +3689,12 @@ def test_search_liepin_cards_recovers_after_result_observation_stays_stale(tmp_p
         max_cards=10,
     )
 
-    assert envelope["status"] == "succeeded"
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
-    assert {"action_kind": "recover_search_surface", "route_kind": "search"} in trace["events"]
+    assert envelope["status"] == "blocked"
+    assert envelope["safe_reason_code"] == "liepin_opencli_stale_ref"
+    assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "29")) == 1
 
 
-def test_search_liepin_cards_recovers_and_replays_city_after_filter_stale(
+def test_search_liepin_cards_does_not_replay_city_after_filter_stale(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3754,19 +3753,10 @@ def test_search_liepin_cards_recovers_and_replays_city_after_filter_stale(
         native_filters={"city": "上海"},
     )
 
-    assert envelope["status"] == "succeeded"
-    assert applied_filters == [
-        {"filter": "city", "section": "legacy", "label": "上海"},
-        {"filter": "city", "section": "legacy", "label": "上海"},
-    ]
-    assert ("opencli", "browser", "seektalent-liepin", "click", "44") in commands.calls
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
-    assert any(
-        event.get("action_kind") == "verify_native_filter"
-        and event.get("filter") == "city"
-        and event.get("ok") is True
-        for event in trace["events"]
-    )
+    assert envelope["status"] == "blocked"
+    assert envelope["safe_reason_code"] == "liepin_opencli_stale_ref"
+    assert applied_filters == [{"filter": "city", "section": "legacy", "label": "上海"}]
+    assert ("opencli", "browser", "seektalent-liepin", "click", "44") not in commands.calls
 
 
 def test_search_liepin_cards_retries_transient_status_after_search_click(tmp_path: Path) -> None:
@@ -6134,7 +6124,7 @@ def test_cli_rejects_removed_cleanup_env_config(
     assert payload["safeReasonCode"] == "liepin_opencli_removed_config"
 
 
-def test_cli_search_cards_prints_strict_envelope(
+def test_cli_rejects_direct_search_cards(
     capsys: pytest.CaptureFixture[str],
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -6152,11 +6142,10 @@ def test_cli_search_cards_prints_strict_envelope(
 
     rc = opencli_browser_cli.main()
 
-    assert rc == 0
+    assert rc == 1
     payload = json.loads(capsys.readouterr().out)
-    assert payload["schema_version"] == "seektalent.pi_liepin_cards.v1"
-    assert payload["status"] == "blocked"
-    assert payload["safe_reason_code"] == "liepin_opencli_timeout"
+    assert payload["action"] == "search_cards"
+    assert payload["safeReasonCode"] == "liepin_opencli_forbidden_command"
 
 
 def test_cli_runner_uses_shell_safe_command_parsing(monkeypatch: pytest.MonkeyPatch) -> None:

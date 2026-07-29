@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import hashlib
+import logging
 import os
 import random
 import re
@@ -13,7 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, cast
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
 from seektalent.providers.liepin.first_page_continuation import (
     CandidateState, LiepinFirstPageCandidate, LiepinFirstPageContinuationStore,
@@ -28,6 +29,7 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserTiming,
 )
 from seektalent.opencli_browser.lifecycle import browser_control_key
+from seektalent.opencli_browser.fault_isolation import isolated_call
 from seektalent.opencli_browser.reason_codes import OPENCLI_PAGE_NOT_READY
 from seektalent.opencli_browser.runtime import ALLOWED_BROWSER_COMMANDS, FORBIDDEN_BROWSER_COMMANDS
 from seektalent.providers.liepin.detail_payload_text import structured_liepin_detail_text
@@ -108,6 +110,8 @@ from seektalent.providers.liepin.liepin_site_parsing import (
     extract_liepin_search_button_ref,
     extract_liepin_search_input_ref,
 )
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def _is_provider_candidate_key_hash(value: object) -> bool:
@@ -315,6 +319,35 @@ def _search_form_ready(snapshot: LiepinStateSnapshot) -> bool:
     )
 
 
+def _search_readiness_evidence(snapshot: LiepinStateSnapshot) -> dict[str, object]:
+    parsed = urlparse(snapshot.url or "")
+    host = (parsed.hostname or "").casefold()
+    allowed_host = host in LIEPIN_OPENCLI_ALLOWED_HOSTS
+    search_surface_url = _search_url_ready(snapshot)
+    terminal_reason = (
+        classify_liepin_state(url=snapshot.url, text=snapshot.text)
+        if snapshot.url is not None
+        else snapshot.safe_reason_code
+    )
+    return {
+        "state_ok": snapshot.ok,
+        "url_host": host if allowed_host else ("other" if host else None),
+        "url_path": (
+            (unquote(parsed.path or "") or "/")
+            if search_surface_url
+            else ("other" if allowed_host else None)
+        ),
+        "search_surface_url": search_surface_url,
+        "search_input_ref_present": (
+            extract_liepin_search_input_ref(snapshot.text) is not None
+        ),
+        "search_button_ref_present": (
+            extract_liepin_search_button_ref(snapshot.text) is not None
+        ),
+        "terminal_reason": terminal_reason,
+    }
+
+
 def _search_query_matches(actual: str, expected: str) -> bool:
     return _normalized_search_query(actual) == _normalized_search_query(expected)
 
@@ -361,6 +394,8 @@ class LiepinSiteAdapter:
         browser_config: OpenCliBrowserConfig,
         site_config: LiepinOpenCliSiteConfig,
         automation: OpenCliBrowserAutomation,
+        cards_operation_executor: Callable[..., tuple[dict[str, object], dict[str, object]]]
+        | None = None,
     ) -> None:
         self._browser_config = browser_config
         self._site_config = site_config
@@ -368,6 +403,8 @@ class LiepinSiteAdapter:
         self._host_page_id: str | None = None
         self._native_filter_clear_signatures_by_scope: dict[str, str] = {}
         self._continuation_store: LiepinFirstPageContinuationStore | None = None
+        self._cards_operation_executor = cards_operation_executor
+        self._remote_structured_cards: dict[str, OpenCliBrowserResult] = {}
 
     def _first_page_continuation_store(self) -> LiepinFirstPageContinuationStore:
         root = self._site_config.artifact_root
@@ -903,6 +940,9 @@ class LiepinSiteAdapter:
             return OpenCliBrowserResult(ok=False, action="apply_liepin_filters", safe_reason_code=exc.safe_reason_code)
 
     def extract_structured_liepin_cards(self, *, source_run_id: str, max_cards: int) -> OpenCliBrowserResult:
+        remote = self._remote_structured_cards.pop(source_run_id, None)
+        if remote is not None:
+            return remote
         try:
             if max_cards < 1 or max_cards > 50:
                 raise OpenCliBrowserError("liepin_opencli_forbidden_command")
@@ -1343,24 +1383,96 @@ class LiepinSiteAdapter:
         max_cards: int,
         native_filters: Mapping[str, object] | None = None,
     ) -> dict[str, object]:
-        first_attempt = self._search_liepin_cards_once(
-            source_run_id=source_run_id,
-            query=query,
-            max_pages=max_pages,
-            max_cards=max_cards,
-            native_filters=native_filters,
-            recovering_search_surface=False,
-        )
-        if first_attempt.get("safe_reason_code") != "liepin_opencli_stale_ref":
-            return first_attempt
-        return self._search_liepin_cards_once(
-            source_run_id=source_run_id,
-            query=query,
-            max_pages=max_pages,
-            max_cards=max_cards,
-            native_filters=native_filters,
-            recovering_search_surface=True,
-        )
+        if self._cards_operation_executor is not None:
+            envelope, structured = self._cards_operation_executor(
+                source_run_id=source_run_id,
+                query=query,
+                max_pages=max_pages,
+                max_cards=max_cards,
+                native_filters=native_filters,
+            )
+            safe_reason = structured.get("safe_reason_code")
+            if not isinstance(safe_reason, str):
+                safe_reason = None
+            raw_counts = structured.get("counts")
+            counts = (
+                {
+                    key: value
+                    for key, value in raw_counts.items()
+                    if isinstance(key, str)
+                    and isinstance(value, int)
+                    and not isinstance(value, bool)
+                }
+                if isinstance(raw_counts, dict)
+                else {}
+            )
+            raw_observation = structured.get("observation")
+            observation = (
+                {
+                    key: value
+                    for key, value in raw_observation.items()
+                    if isinstance(key, str)
+                }
+                if isinstance(raw_observation, dict)
+                else {}
+            )
+            action = str(structured.get("action") or "")
+            if safe_reason is None:
+                remote = OpenCliBrowserResult(
+                    ok=structured.get("ok") is True,
+                    action=action,
+                    counts=counts,
+                    observation=observation,
+                )
+            else:
+                remote = OpenCliBrowserResult(
+                    ok=structured.get("ok") is True,
+                    action=action,
+                    safe_reason_code=safe_reason,
+                    counts=counts,
+                    observation=observation,
+                )
+            self._remote_structured_cards[source_run_id] = remote
+            return envelope
+        raise RuntimeError("liepin_cards_source_port_missing")
+
+    def _execute_liepin_cards_sidecar_effect(
+        self,
+        *,
+        source_run_id: str,
+        query: str,
+        max_pages: int,
+        max_cards: int,
+        native_filters: Mapping[str, object] | None = None,
+    ) -> tuple[dict[str, object], OpenCliBrowserResult | None]:
+        """Execute cards only for the Source Port sidecar browser owner."""
+        try:
+            self._begin_browser_control_scope()
+            envelope = self._search_liepin_cards_once(
+                source_run_id=source_run_id,
+                query=query,
+                max_pages=max_pages,
+                max_cards=max_cards,
+                native_filters=native_filters,
+                recovering_search_surface=False,
+            )
+            structured = (
+                self.extract_structured_liepin_cards(
+                    source_run_id=source_run_id,
+                    max_cards=max_cards,
+                )
+                if envelope.get("status") in {"succeeded", "partial"}
+                else None
+            )
+            return envelope, structured
+        finally:
+            isolated_call(
+                self._finish_browser_control_scope,
+                lambda exc: _LOGGER.warning(
+                    "liepin_browser_scope_cleanup_failed error=%s",
+                    type(exc).__name__,
+                ),
+            )
 
     def _search_liepin_cards_once(
         self,
@@ -1448,10 +1560,17 @@ class LiepinSiteAdapter:
                 retried_unready = False
                 while True:
                     first_state = self.state()
-                    events.append({"action_kind": "observe", "route_kind": "search", "ok": first_state.ok})
                     snapshot = replace(
                         _snapshot_from_result(first_state),
                         url=self._current_url_or_none(),
+                    )
+                    events.append(
+                        {
+                            "action_kind": "observe",
+                            "route_kind": "search",
+                            "ok": first_state.ok,
+                            **_search_readiness_evidence(snapshot),
+                        }
                     )
                     if _search_form_ready(snapshot):
                         return snapshot

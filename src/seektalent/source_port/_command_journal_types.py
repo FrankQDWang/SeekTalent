@@ -74,7 +74,7 @@ class CommandJournalTransitionResult:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class AcceptedCommand:
-    """Allowlisted command identity and acceptance facts for ordinal one."""
+    """Allowlisted command identity and one main-authorized dispatch epoch."""
 
     run_id: str
     operation_id: str
@@ -91,4 +91,7 @@ class AcceptedCommand:
     profile_binding_generation: int
     browser_control_scope_id: str | None = None
     controller_fence_ref: str | None = None
-    dispatch_authorization_ordinal: Literal[1] = 1
+    dispatch_authorization_ordinal: int = 1
+    safe_retry_commit_ref: str | None = None
+    expected_source_operation_ledger_revision: int = 1
+    expected_reconciliation_revision: int = 0

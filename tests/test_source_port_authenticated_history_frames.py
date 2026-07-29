@@ -715,9 +715,12 @@ def test_source_port_frame_kernel_has_no_project_side_effect_dependency_or_busin
         source = path.read_text(encoding="utf-8")
         if "authenticated_history_frames" in source:
             production_callers.append(path.relative_to(PROJECT_ROOT).as_posix())
-    # Reconciliation imports only canonical semantics; the mixed session owns framing.
+    # The cards operation owns production reconciliation; the retained mixed
+    # session and transport serve packaged-sidecar history compatibility.
     assert production_callers == [
-        "src/seektalent/source_history_reconciliation.py",
+        "src/seektalent/liepin_cards_source_operation.py",
+        "src/seektalent/liepin_cards_sidecar.py",
+        "src/seektalent/sidecar_child_session.py",
         "src/seektalent/source_port/authenticated_source_port_session.py",
         "src/seektalent/source_port/sidecar_transport.py",
     ]

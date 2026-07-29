@@ -125,6 +125,7 @@ async def run_liepin_source_lane(
     worker_client: LiepinWorkerClient | None = None,
     compiled_search_request: SearchRequest | None = None,
     detail_open_claim_ledger: DetailOpenClaimLedger | None = None,
+    cards_operation_executor=None,
 ) -> RuntimeSourceLaneResult:
     runtime_run_id = request.runtime_run_id or f"runtime-source-lane:{request.source}"
     source_plan_id = request.source_plan_id or f"{runtime_run_id}:source:0:liepin"
@@ -155,12 +156,27 @@ async def run_liepin_source_lane(
             source_plan_id=source_plan_id,
             source_lane_run_id=source_lane_run_id,
             worker_client=worker_client,
+            cards_operation_executor=cards_operation_executor,
         )
     if request.lane_mode != "card":
         raise ValueError(f"Unsupported Liepin source lane mode: {request.lane_mode}")
 
     context = normalize_runtime_liepin_context(request.source_context)
-    client = worker_client or build_liepin_worker_client(settings)
+    if cards_operation_executor is not None:
+        bind_lane = getattr(cards_operation_executor, "bind_lane", None)
+        if callable(bind_lane):
+            bind_lane(
+                source_lane_run_id,
+                request.logical_query_instance_id or source_lane_run_id,
+            )
+    client = worker_client or (
+        build_liepin_worker_client(
+            settings,
+            cards_operation_executor=cards_operation_executor,
+        )
+        if cards_operation_executor is not None
+        else build_liepin_worker_client(settings)
+    )
     query_started = False
 
     def mark_query_started() -> None:
@@ -293,6 +309,7 @@ async def run_liepin_logical_query_bundle(
     source_query_intents: tuple[LiepinSourceQueryIntent, ...] | None = None,
     worker_client: LiepinWorkerClient | None = None,
     detail_open_claim_ledger: DetailOpenClaimLedger | None = None,
+    cards_operation_executor=None,
 ) -> RuntimeSourceLaneResult:
     if not logical_queries:
         raise ValueError("Liepin logical query bundle requires at least one logical query.")
@@ -301,7 +318,14 @@ async def run_liepin_logical_query_bundle(
     )
     compiled_queries = compiled_bundle.queries if compiled_bundle is not None else ()
     context = normalize_runtime_liepin_context(liepin_context)
-    bundle_worker_client = worker_client or build_liepin_worker_client(settings)
+    bundle_worker_client = worker_client or (
+        build_liepin_worker_client(
+            settings,
+            cards_operation_executor=cards_operation_executor,
+        )
+        if cards_operation_executor is not None
+        else build_liepin_worker_client(settings)
+    )
 
     async def run_logical_query(index: int, logical_query: LogicalQueryDispatch) -> RuntimeSourceLaneResult:
         logical_compiled_queries = tuple(
@@ -367,6 +391,7 @@ async def run_liepin_logical_query_bundle(
                 worker_client=bundle_worker_client,
                 compiled_search_request=compiled_request,
                 detail_open_claim_ledger=detail_open_claim_ledger,
+                cards_operation_executor=cards_operation_executor,
             )
             result = _with_liepin_executed_query_package(
                 result,
@@ -683,10 +708,21 @@ async def _run_detail_lane(
     source_plan_id: str,
     source_lane_run_id: str,
     worker_client: LiepinWorkerClient | None,
+    cards_operation_executor,
 ) -> RuntimeSourceLaneResult:
     context = normalize_runtime_liepin_context(request.source_context)
     query_terms = list(request.source_query_terms or _basic_source_query_terms(request))
-    client = worker_client or build_liepin_worker_client(settings)
+    if cards_operation_executor is not None:
+        bind_lane = getattr(cards_operation_executor, "bind_lane", None)
+        if callable(bind_lane):
+            bind_lane(
+                source_lane_run_id,
+                request.logical_query_instance_id or source_lane_run_id,
+            )
+    client = worker_client or build_liepin_worker_client(
+        settings,
+        cards_operation_executor=cards_operation_executor,
+    )
     provider = _build_provider(settings=settings, worker_client=client)
     search_result = await provider.search(
         SearchRequest(
