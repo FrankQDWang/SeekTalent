@@ -11,7 +11,6 @@ import time
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
-from typing import Literal
 
 from seektalent.config import AppSettings
 from seektalent.sidecar_handshake_protocol import (
@@ -26,7 +25,6 @@ from seektalent.source_port.authenticated_history_frames import (
 )
 from seektalent.source_port.authenticated_liepin_cards_frames import (
     LiepinCardsAcceptedAckV1,
-    LiepinCardsResultV1,
     LiepinCardsSubmitV1,
     PostHandshakeLiepinCardsSession,
     ReceivedLiepinCardsAcceptedAck,
@@ -49,7 +47,6 @@ from seektalent.source_port.liepin_cards_artifacts import (
     read_liepin_cards_artifact,
 )
 from seektalent.source_port.liepin_cards_contract import (
-    LiepinCardsObservationV1,
     LiepinCardsOperationRequestV1,
     canonical_liepin_cards_request_hash,
     stable_liepin_cards_operation_id,
@@ -93,6 +90,11 @@ class _HistoryUnknown:
     result: SourceHistoryQueryResultV1
     history_conclusion: str | None
     dispatch_intent_ref: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class _HistoryObserved:
+    ack: LiepinCardsAcceptedAckV1
 
 
 class LiepinCardsSourceOperationExecutor:
@@ -279,6 +281,11 @@ class LiepinCardsSourceOperationExecutor:
                 return _unknown_result()
             if isinstance(recovered, _HistoryUnknown):
                 ack, terminal = recovered.ack, recovered
+            elif isinstance(recovered, _HistoryObserved):
+                replayed = self._replay_observed_terminal(submit)
+                if replayed is None:
+                    return _unknown_result()
+                ack, terminal = replayed
             else:
                 ack, terminal = recovered
         if ack is not None and accepted.dispatch.status == "pending":
@@ -322,8 +329,15 @@ class LiepinCardsSourceOperationExecutor:
                     operation_id,
                 )
                 return _unknown_result()
-            recovered_ack, terminal = recovered
-            ack = ack or recovered_ack
+            if isinstance(recovered, _HistoryObserved):
+                replayed = self._replay_observed_terminal(submit)
+                if replayed is None:
+                    return _unknown_result()
+                recovered_ack, terminal = replayed
+                ack = ack or recovered_ack
+            else:
+                recovered_ack, terminal = recovered
+                ack = ack or recovered_ack
         observation = terminal.payload.observation
         artifact = read_liepin_cards_artifact(
             self._artifact_root,
@@ -613,37 +627,6 @@ class LiepinCardsSourceOperationExecutor:
                         (ObservedResultFact, ObservedFailureFact),
                     ):
                         continue
-                    artifact_ref = (
-                        fact.result_ref
-                        if isinstance(fact, ObservedResultFact)
-                        else fact.failure_ref
-                    )
-                    artifact_hash = (
-                        fact.result_hash
-                        if isinstance(fact, ObservedResultFact)
-                        else fact.failure_hash
-                    )
-                    artifact = read_liepin_cards_artifact(
-                        self._artifact_root,
-                        artifact_ref,
-                        expected_hash=artifact_hash,
-                    )
-                    observation = LiepinCardsObservationV1(
-                        contract_version=(
-                            "seektalent.source.liepin-cards.observation/v1"
-                        ),
-                        operation_id=identity.operation_id,
-                        canonical_request_hash=identity.request_hash,
-                        disposition=_artifact_disposition(
-                            artifact.status
-                        ),
-                        artifact_ref=artifact_ref,
-                        artifact_hash=artifact_hash,
-                        cards_seen=artifact.cards_seen,
-                        card_count=len(artifact.cards),
-                        safe_reason_code=artifact.safe_reason_code,
-                        producer_generation=fact.head_generation,
-                    )
                     recovered_ack = LiepinCardsAcceptedAckV1(
                         contract_version=(
                             "seektalent.source.liepin-cards.ack/v1"
@@ -663,24 +646,25 @@ class LiepinCardsSourceOperationExecutor:
                             fact.durable_dispatch_intent_ref
                         ),
                     )
-                    return (
-                        recovered_ack,
-                        ReceivedLiepinCardsResult(
-                            message_id=result_message.message_id,
-                            reply_to=result_message.reply_to,
-                            correlation_id=result_message.correlation_id,
-                            payload=LiepinCardsResultV1(
-                                contract_version=(
-                                    "seektalent.source.liepin-cards.result/v1"
-                                ),
-                                identity=identity,
-                                observation=observation,
-                            ),
-                        ),
-                    )
+                    return _HistoryObserved(ack=recovered_ack)
                 return None
         finally:
             process.close()
+
+    def _replay_observed_terminal(
+        self,
+        submit: LiepinCardsSubmitV1,
+    ):
+        process, self._process = self._process, None
+        if process is not None:
+            process.close()
+        try:
+            ack, terminal = self._exchange(submit)
+        except (OSError, RuntimeError, SidecarReadinessError):
+            return None
+        if not isinstance(terminal, ReceivedLiepinCardsResult):
+            return None
+        return ack, terminal
 
     def _record_reconciliation_unknown(
         self,
@@ -874,16 +858,6 @@ def _workflow_result(request, artifact, observation):
         },
     }
     return envelope, structured
-
-
-def _artifact_disposition(
-    status: str,
-) -> Literal["completed", "partial", "failed"]:
-    if status == "succeeded":
-        return "completed"
-    if status == "partial":
-        return "partial"
-    return "failed"
 
 
 def _unknown_result():

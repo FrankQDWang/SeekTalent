@@ -20,6 +20,7 @@ from seektalent.source_port.liepin_cards_artifacts import (
     write_liepin_cards_artifact,
 )
 from seektalent.liepin_cards_source_operation import (
+    LiepinCardsSourceOperationExecutor,
     _authorization_from_acceptance,
     _spawn_sidecar,
 )
@@ -232,6 +233,56 @@ def test_cards_terminal_journal_digest_binds_terminal_reply_not_artifact() -> No
     assert _terminal_observation_digest(terminal_reply) == sha256(
         terminal_reply
     ).hexdigest()
+
+
+def test_observed_history_replay_closes_stale_process_before_exact_redelivery(
+    monkeypatch,
+) -> None:
+    executor = object.__new__(LiepinCardsSourceOperationExecutor)
+    closed = []
+    executor._process = SimpleNamespace(close=lambda: closed.append(True))
+    request = _request()
+    identity = _identity(request)
+    ack = LiepinCardsAcceptedAckV1(
+        contract_version="seektalent.source.liepin-cards.ack/v1",
+        identity=identity,
+        sidecar_generation=2,
+        accepted_journal_revision=3,
+        ack_kind="new_logical_operation",
+        dispatch_intent_ref="source-dispatch://cards/1",
+    )
+    observation = LiepinCardsObservationV1(
+        contract_version="seektalent.source.liepin-cards.observation/v1",
+        operation_id=identity.operation_id,
+        canonical_request_hash=identity.request_hash,
+        disposition="completed",
+        artifact_ref="liepin-cards://sha256/" + "d" * 64,
+        artifact_hash="d" * 64,
+        cards_seen=1,
+        card_count=1,
+        producer_generation=2,
+    )
+    terminal = ReceivedLiepinCardsResult(
+        message_id="result-cards-1",
+        reply_to="submit-cards-1",
+        correlation_id=identity.correlation_id,
+        payload=LiepinCardsResultV1(
+            contract_version="seektalent.source.liepin-cards.result/v1",
+            identity=identity,
+            observation=observation,
+        ),
+    )
+    monkeypatch.setattr(
+        executor,
+        "_exchange",
+        lambda _submit: (ack, terminal),
+    )
+
+    replayed = executor._replay_observed_terminal(SimpleNamespace())
+
+    assert replayed == (ack, terminal)
+    assert closed == [True]
+    assert executor._process is None
 
 
 def test_cards_history_sidecar_is_authenticated_supervised_child(
