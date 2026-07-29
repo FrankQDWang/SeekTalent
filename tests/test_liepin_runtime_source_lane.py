@@ -312,12 +312,15 @@ class _DeterministicPrivateClaimWorkflowSite:
                     "status": "failed",
                     "detail_url": None,
                     "provider_candidate_key_hash": None,
+                    "action_attempted": 0,
+                    "effect_posture": "not_attempted",
                     "safe_reason_code": "liepin_opencli_detail_not_opened",
                 }
                 return envelope, OpenCliBrowserResult(
                     ok=False,
                     action="resolve_locator",
                     safe_reason_code="liepin_opencli_detail_not_opened",
+                    counts={"rank": rank, "action_attempted": 0},
                 )
             key_hash = stable_liepin_detail_candidate_key_hash(detail_url)
             assert key_hash is not None
@@ -325,9 +328,15 @@ class _DeterministicPrivateClaimWorkflowSite:
                 "status": "succeeded",
                 "detail_url": detail_url,
                 "provider_candidate_key_hash": key_hash,
+                "action_attempted": 0,
+                "effect_posture": "not_attempted",
                 "safe_reason_code": None,
             }
-            return envelope, OpenCliBrowserResult(ok=True, action="resolve_locator")
+            return envelope, OpenCliBrowserResult(
+                ok=True,
+                action="resolve_locator",
+                counts={"rank": rank, "action_attempted": 0},
+            )
 
         if open_mode == "cached_locator":
             detail_url = self._resolve_detail_url_for_ref(card_ref)
@@ -342,9 +351,14 @@ class _DeterministicPrivateClaimWorkflowSite:
                     {
                         "status": "failed",
                         "detail_url": detail_url,
+                        "action_attempted": 1,
+                        "effect_posture": "attempted",
                         "safe_reason_code": open_result.safe_reason_code,
                     },
-                    open_result,
+                    replace(
+                        open_result,
+                        counts={**open_result.counts, "rank": rank, "action_attempted": 1},
+                    ),
                 )
             wait_result = self.wait_liepin_detail_ready(source_run_id=source_run_id, rank=rank)
             if not wait_result.ok:
@@ -352,9 +366,14 @@ class _DeterministicPrivateClaimWorkflowSite:
                     {
                         "status": "failed",
                         "detail_url": detail_url,
+                        "action_attempted": 1,
+                        "effect_posture": "attempted",
                         "safe_reason_code": wait_result.safe_reason_code,
                     },
-                    wait_result,
+                    replace(
+                        wait_result,
+                        counts={**wait_result.counts, "rank": rank, "action_attempted": 1},
+                    ),
                 )
             assert expected_provider_candidate_key_hash is not None
             capture_result = self._capture_liepin_detail_resume_claim_aware(
@@ -369,9 +388,14 @@ class _DeterministicPrivateClaimWorkflowSite:
                     "status": status,
                     "detail_url": detail_url,
                     "provider_candidate_key_hash": expected_provider_candidate_key_hash,
+                    "action_attempted": 1,
+                    "effect_posture": "attempted",
                     "safe_reason_code": capture_result.safe_reason_code,
                 },
-                capture_result,
+                replace(
+                    capture_result,
+                    counts={**capture_result.counts, "rank": rank, "action_attempted": 1},
+                ),
             )
 
         raise RuntimeError("liepin_details_open_mode_invalid")

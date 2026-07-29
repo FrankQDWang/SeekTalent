@@ -32,7 +32,7 @@ class LiepinDetailsOperationRequestV1(_DetailsModel):
     query_instance_id: Annotated[str, Field(min_length=1, max_length=96)]
     card_ref: Annotated[str, Field(min_length=1, max_length=96)]
     rank: Annotated[int, Field(ge=1, le=100)]
-    open_mode: Literal["resolve_locator", "visible_card", "cached_locator"]
+    open_mode: Literal["resolve_locator", "cached_locator"]
     provider_candidate_key_hash: Annotated[
         str, Field(pattern=r"^[0-9a-f]{64}$")
     ] | None = None
@@ -68,7 +68,7 @@ class LiepinDetailsArtifactV1(_DetailsModel):
     operation_id: Annotated[str, Field(min_length=1, max_length=96)]
     canonical_request_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")]
     status: Literal["succeeded", "partial", "failed"]
-    open_mode: Literal["resolve_locator", "visible_card", "cached_locator"]
+    open_mode: Literal["resolve_locator", "cached_locator"]
     provider_candidate_key_hash: Annotated[
         str, Field(pattern=r"^[0-9a-f]{64}$")
     ] | None = None
@@ -77,6 +77,7 @@ class LiepinDetailsArtifactV1(_DetailsModel):
     detail_url: Annotated[str, Field(min_length=1, max_length=2048)] | None = None
     resume: dict[str, JsonValue] | None = None
     action_attempted: Annotated[int, Field(ge=0, le=10)] = 0
+    effect_posture: Literal["not_attempted", "attempted", "unknown"]
     safe_reason_code: Annotated[str, Field(min_length=1, max_length=160)] | None = None
 
 
@@ -89,12 +90,13 @@ class LiepinDetailsObservationV1(_DetailsModel):
     disposition: Literal["completed", "partial", "failed", "reconciliation_unknown"]
     artifact_ref: Annotated[str, Field(min_length=1, max_length=256)] | None = None
     artifact_hash: Annotated[str, Field(pattern=r"^[0-9a-f]{64}$")] | None = None
-    open_mode: Literal["resolve_locator", "visible_card", "cached_locator"]
+    open_mode: Literal["resolve_locator", "cached_locator"]
     provider_candidate_key_hash: Annotated[
         str, Field(pattern=r"^[0-9a-f]{64}$")
     ] | None = None
     rank: Annotated[int, Field(ge=1, le=100)] = 1
     action_attempted: Annotated[int, Field(ge=0, le=10)] = 0
+    effect_posture: Literal["not_attempted", "attempted", "unknown"]
     safe_reason_code: Annotated[str, Field(min_length=1, max_length=160)] | None = None
     producer_generation: Annotated[int, Field(ge=1)]
 

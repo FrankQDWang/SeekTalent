@@ -13,7 +13,7 @@ import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Literal, cast
+from typing import Literal, TypeGuard, cast
 from urllib.parse import unquote, urlparse
 from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
 from seektalent.providers.liepin.first_page_continuation import (
@@ -113,17 +113,16 @@ from seektalent.providers.liepin.liepin_site_parsing import (
 
 _LOGGER = logging.getLogger(__name__)
 
-_DETAIL_OPEN_MAX_ATTEMPTS = 2
-_DETAIL_OPEN_RETRYABLE_REASON_CODES = frozenset(
-    {
-        "liepin_opencli_detail_not_opened",
-        "liepin_opencli_timeout",
-    }
-)
-
-
-def _is_provider_candidate_key_hash(value: object) -> bool:
+def _is_provider_candidate_key_hash(value: object) -> TypeGuard[str]:
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+
+
+@dataclass(frozen=True, slots=True)
+class _SidecarDetailObservation:
+    """Sidecar-owned detail probe result; no main artifact is written."""
+
+    resume: dict[str, object] | None
+    safe_reason_code: str | None
 
 
 def _details_sidecar_effect_result(
@@ -133,6 +132,7 @@ def _details_sidecar_effect_result(
     detail_url: str | None,
     resume: dict[str, object] | None,
     action_attempted: int,
+    effect_posture: str,
     safe_reason_code: str | None,
 ) -> dict[str, object]:
     return {
@@ -141,6 +141,7 @@ def _details_sidecar_effect_result(
         "detail_url": detail_url,
         "resume": resume,
         "action_attempted": action_attempted,
+        "effect_posture": effect_posture,
         "safe_reason_code": safe_reason_code,
     }
 
@@ -1173,6 +1174,18 @@ class LiepinSiteAdapter:
     def wait_liepin_detail_ready(self, *, source_run_id: str, rank: int) -> OpenCliBrowserResult:
         if self._cards_operation_executor is not None:
             raise RuntimeError("liepin_details_direct_browser_forbidden")
+        return self._wait_liepin_detail_ready_unchecked(
+            source_run_id=source_run_id,
+            rank=rank,
+        )
+
+    def _wait_liepin_detail_ready_unchecked(
+        self,
+        *,
+        source_run_id: str,
+        rank: int,
+    ) -> OpenCliBrowserResult:
+        del source_run_id
         try:
             if rank < 1 or rank > 100:
                 raise OpenCliBrowserError("liepin_opencli_forbidden_command")
@@ -1319,6 +1332,60 @@ class LiepinSiteAdapter:
             claim_aware=True,
             expected_provider_candidate_key_hash=expected_provider_candidate_key_hash,
         )
+
+    def _observe_liepin_detail_resume_for_sidecar(
+        self,
+        *,
+        rank: int,
+        expected_provider_candidate_key_hash: str | None,
+    ) -> _SidecarDetailObservation:
+        """Probe one detail resume without writing any main product projection."""
+        try:
+            if rank < 1 or rank > 100:
+                raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+            detail_payload_text = self._run_fixed_readonly_eval_probe(
+                probe_name="liepin_detail_resume_payload",
+                ref="current",
+            )
+            payload = _safe_detail_payload_from_probe_output(detail_payload_text)
+            url_result = self.get_url()
+            page_url_hash: str | None = None
+            source_url: str | None = None
+            if url_result.ok:
+                current_url = url_result.private_output.strip()
+                page_url_hash = hashlib.sha256(current_url.encode("utf-8")).hexdigest()
+                if _is_liepin_detail_url(current_url):
+                    source_url = current_url
+            detail_payload = dict(payload)
+            resume: dict[str, object] = {
+                "provider_rank": rank,
+                "page_url_hash": page_url_hash,
+                "normalized_text": structured_liepin_detail_text(payload),
+            }
+            if expected_provider_candidate_key_hash is not None:
+                if source_url is None or not _is_provider_candidate_key_hash(
+                    expected_provider_candidate_key_hash
+                ):
+                    raise OpenCliBrowserError("liepin_opencli_candidate_identity_mismatch")
+                observed_key_hash = stable_liepin_detail_candidate_key_hash(source_url)
+                canonical_source_url = canonical_liepin_detail_source_url(source_url)
+                if (
+                    observed_key_hash != expected_provider_candidate_key_hash
+                    or canonical_source_url is None
+                ):
+                    raise OpenCliBrowserError("liepin_opencli_candidate_identity_mismatch")
+                detail_payload["sourceUrl"] = canonical_source_url
+                resume["provider_candidate_key_hash"] = observed_key_hash
+                resume["claim_aware"] = True
+            elif source_url is not None:
+                detail_payload["sourceUrl"] = source_url
+            resume["detail_payload"] = detail_payload
+            return _SidecarDetailObservation(resume=resume, safe_reason_code=None)
+        except OpenCliBrowserError as exc:
+            return _SidecarDetailObservation(
+                resume=None,
+                safe_reason_code=exc.safe_reason_code,
+            )
 
     def _discard_collected_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> None:
         if rank < 1 or rank > 100:
@@ -1524,14 +1591,103 @@ class LiepinSiteAdapter:
             else {}
         )
         action = str(structured.get("action") or "capture_liepin_detail_resume")
-        result = OpenCliBrowserResult(
-            ok=structured.get("ok") is True,
-            action=action,
-            safe_reason_code=safe_reason,
-            counts=counts,
-            observation=observation,
-        )
+        if safe_reason is None:
+            result = OpenCliBrowserResult(
+                ok=structured.get("ok") is True,
+                action=action,
+                counts=counts,
+                observation=observation,
+            )
+        else:
+            result = OpenCliBrowserResult(
+                ok=structured.get("ok") is True,
+                action=action,
+                safe_reason_code=safe_reason,
+                counts=counts,
+                observation=observation,
+            )
+        if result.ok and structured.get("ingest_ready") is True:
+            resume = structured.get("resume")
+            if isinstance(resume, Mapping):
+                self.ingest_liepin_detail_resume_from_source_artifact(
+                    source_run_id=source_run_id,
+                    rank=rank,
+                    resume=resume,
+                )
         return envelope, result
+
+    def ingest_liepin_detail_resume_from_source_artifact(
+        self,
+        *,
+        source_run_id: str,
+        rank: int,
+        resume: Mapping[str, object],
+    ) -> None:
+        """Write main-owned product projections for one validated details resume."""
+        if rank < 1 or rank > 100:
+            raise OpenCliBrowserError("liepin_opencli_forbidden_command")
+        safe_run_id = _safe_artifact_segment(source_run_id)
+        detail_payload = resume.get("detail_payload")
+        normalized_text = resume.get("normalized_text")
+        page_url_hash = resume.get("page_url_hash")
+        if (
+            not isinstance(detail_payload, Mapping)
+            or not isinstance(normalized_text, str)
+            or not (page_url_hash is None or isinstance(page_url_hash, str))
+        ):
+            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+        normalized_payload = {
+            str(key): value
+            for key, value in detail_payload.items()
+            if key != "sourceUrl"
+        }
+        raw_snapshot_ref = self._write_pi_artifact(
+            "protected",
+            f"liepin-opencli/raw/{safe_run_id}/{rank}.json",
+            {
+                "schema_version": "seektalent.liepin_opencli_detail_raw.v1",
+                "source_run_id": source_run_id,
+                "provider_rank": rank,
+                "page_url_hash": page_url_hash,
+            },
+        )
+        normalized_snapshot_ref = self._write_pi_artifact(
+            "protected",
+            f"liepin-opencli/normalized/{safe_run_id}/{rank}.json",
+            {
+                "schema_version": "seektalent.liepin_opencli_detail_normalized.v1",
+                "source_run_id": source_run_id,
+                "provider_rank": rank,
+                **normalized_payload,
+            },
+        )
+        projected: dict[str, object] = {
+            "provider_rank": rank,
+            "protected_snapshot_ref": raw_snapshot_ref,
+            "normalized_snapshot_ref": normalized_snapshot_ref,
+            "detail_payload": {str(key): value for key, value in detail_payload.items()},
+            "normalized_text": normalized_text,
+        }
+        if resume.get("claim_aware") is True:
+            provider_candidate_key_hash = resume.get("provider_candidate_key_hash")
+            if not _is_provider_candidate_key_hash(provider_candidate_key_hash):
+                raise OpenCliBrowserError("liepin_opencli_candidate_identity_missing")
+            projected["provider_candidate_key_hash"] = provider_candidate_key_hash
+            projected["claim_aware"] = True
+        else:
+            projected["provider_candidate_key_material_ref"] = self._write_pi_artifact(
+                "protected",
+                f"liepin-opencli/provider-key/{safe_run_id}/{rank}.txt",
+                _detail_provider_key_material(
+                    safe_run_id=safe_run_id,
+                    rank=rank,
+                    payload=normalized_payload,
+                ),
+            )
+            projected["candidate_resume_id"] = (
+                f"liepin-opencli-detail-{safe_run_id}-{rank}"
+            )
+        self._upsert_collected_resume(safe_run_id, rank=rank, resume=projected)
 
     def _execute_liepin_cards_sidecar_effect(
         self,
@@ -1583,11 +1739,13 @@ class LiepinSiteAdapter:
         locator_root: Path,
     ) -> dict[str, object]:
         """Execute one details browser effect for the Source Port sidecar owner."""
-        from seektalent.source_port.liepin_details_locator_store import (
+        from seektalent.providers.liepin.liepin_details_locator_store import (
             load_liepin_detail_locator,
             remember_liepin_detail_locator,
         )
 
+        if open_mode not in {"resolve_locator", "cached_locator"}:
+            raise RuntimeError("liepin_details_open_mode_invalid")
         try:
             self._begin_browser_control_scope()
             if open_mode == "resolve_locator":
@@ -1599,6 +1757,7 @@ class LiepinSiteAdapter:
                         detail_url=None,
                         resume=None,
                         action_attempted=0,
+                        effect_posture="not_attempted",
                         safe_reason_code="liepin_opencli_detail_not_opened",
                     )
                 key_hash = stable_liepin_detail_candidate_key_hash(detail_url)
@@ -1609,149 +1768,93 @@ class LiepinSiteAdapter:
                         detail_url=detail_url,
                         resume=None,
                         action_attempted=0,
+                        effect_posture="not_attempted",
                         safe_reason_code="liepin_opencli_candidate_identity_missing",
                     )
-                remember_liepin_detail_locator(
-                    locator_root,
-                    provider_candidate_key_hash=key_hash,
-                    detail_url=detail_url,
-                    card_ref=card_ref,
-                    rank=rank,
-                )
+                try:
+                    remember_liepin_detail_locator(
+                        locator_root,
+                        provider_candidate_key_hash=key_hash,
+                        detail_url=detail_url,
+                        card_ref=card_ref,
+                        rank=rank,
+                    )
+                except ValueError as exc:
+                    return _details_sidecar_effect_result(
+                        status="failed",
+                        provider_candidate_key_hash=key_hash,
+                        detail_url=detail_url,
+                        resume=None,
+                        action_attempted=0,
+                        effect_posture="not_attempted",
+                        safe_reason_code=str(exc)[:160],
+                    )
                 return _details_sidecar_effect_result(
                     status="succeeded",
                     provider_candidate_key_hash=key_hash,
                     detail_url=detail_url,
                     resume=None,
                     action_attempted=0,
+                    effect_posture="not_attempted",
                     safe_reason_code=None,
                 )
 
-            if open_mode == "cached_locator":
-                if provider_candidate_key_hash is None:
-                    return _details_sidecar_effect_result(
-                        status="failed",
-                        provider_candidate_key_hash=None,
-                        detail_url=None,
-                        resume=None,
-                        action_attempted=0,
-                        safe_reason_code="liepin_opencli_candidate_identity_missing",
-                    )
+            if provider_candidate_key_hash is None:
+                return _details_sidecar_effect_result(
+                    status="failed",
+                    provider_candidate_key_hash=None,
+                    detail_url=None,
+                    resume=None,
+                    action_attempted=0,
+                    effect_posture="not_attempted",
+                    safe_reason_code="liepin_opencli_candidate_identity_missing",
+                )
+            try:
                 locator = load_liepin_detail_locator(
                     locator_root,
                     provider_candidate_key_hash,
                 )
-                if locator is None:
-                    return _details_sidecar_effect_result(
-                        status="failed",
-                        provider_candidate_key_hash=provider_candidate_key_hash,
-                        detail_url=None,
-                        resume=None,
-                        action_attempted=0,
-                        safe_reason_code="liepin_opencli_detail_not_opened",
-                    )
-                cached_url = str(locator["detail_url"])
-                cached_ref = str(locator.get("card_ref") or card_ref)
-                cached_rank = int(locator.get("rank") or rank)
-                open_result = self._open_liepin_detail_with_local_retry(
-                    source_run_id=source_run_id,
-                    ref=cached_ref,
-                    rank=cached_rank,
-                    use_cached=True,
-                    cached_detail_url=cached_url,
-                )
-                action_attempted = int(open_result.counts.get("action_attempted") or 0)
-                if not open_result.ok:
-                    return _details_sidecar_effect_result(
-                        status="failed",
-                        provider_candidate_key_hash=provider_candidate_key_hash,
-                        detail_url=cached_url,
-                        resume=None,
-                        action_attempted=action_attempted,
-                        safe_reason_code=(
-                            open_result.safe_reason_code
-                            or "liepin_opencli_detail_not_opened"
-                        ),
-                    )
-                wait_result = self.wait_liepin_detail_ready(
-                    source_run_id=source_run_id,
-                    rank=cached_rank,
-                )
-                if not wait_result.ok:
-                    return _details_sidecar_effect_result(
-                        status="failed",
-                        provider_candidate_key_hash=provider_candidate_key_hash,
-                        detail_url=cached_url,
-                        resume=None,
-                        action_attempted=action_attempted,
-                        safe_reason_code=(
-                            wait_result.safe_reason_code
-                            or "liepin_opencli_detail_not_opened"
-                        ),
-                    )
-                if expected_provider_candidate_key_hash is not None:
-                    capture_result = self._capture_liepin_detail_resume_claim_aware(
-                        source_run_id=source_run_id,
-                        rank=cached_rank,
-                        expected_provider_candidate_key_hash=(
-                            expected_provider_candidate_key_hash
-                        ),
-                        require_ready=False,
-                        emit_events=True,
-                    )
-                else:
-                    capture_result = self._capture_liepin_detail_resume(
-                        source_run_id=source_run_id,
-                        rank=cached_rank,
-                        require_ready=False,
-                        emit_events=True,
-                    )
-                if not capture_result.ok:
-                    return _details_sidecar_effect_result(
-                        status="failed",
-                        provider_candidate_key_hash=provider_candidate_key_hash,
-                        detail_url=cached_url,
-                        resume=None,
-                        action_attempted=action_attempted,
-                        safe_reason_code=(
-                            capture_result.safe_reason_code
-                            or "liepin_opencli_detail_not_opened"
-                        ),
-                    )
-                detail_url = self._current_liepin_detail_url() or cached_url
-                return _details_sidecar_effect_result(
-                    status="succeeded",
-                    provider_candidate_key_hash=provider_candidate_key_hash,
-                    detail_url=detail_url,
-                    resume=self._collected_resume_at_rank(source_run_id, cached_rank),
-                    action_attempted=action_attempted,
-                    safe_reason_code=None,
-                )
-
-            if open_mode != "visible_card":
-                raise RuntimeError("liepin_details_open_mode_invalid")
-
-            open_result = self._open_liepin_detail_with_local_retry(
-                source_run_id=source_run_id,
-                ref=card_ref,
-                rank=rank,
-                use_cached=False,
-                cached_detail_url=None,
-            )
-            action_attempted = int(open_result.counts.get("action_attempted") or 0)
-            if not open_result.ok:
+            except ValueError as exc:
                 return _details_sidecar_effect_result(
                     status="failed",
                     provider_candidate_key_hash=provider_candidate_key_hash,
                     detail_url=None,
                     resume=None,
-                    action_attempted=action_attempted,
+                    action_attempted=0,
+                    effect_posture="not_attempted",
+                    safe_reason_code=str(exc)[:160],
+                )
+            if locator is None:
+                return _details_sidecar_effect_result(
+                    status="failed",
+                    provider_candidate_key_hash=provider_candidate_key_hash,
+                    detail_url=None,
+                    resume=None,
+                    action_attempted=0,
+                    effect_posture="not_attempted",
+                    safe_reason_code="liepin_opencli_detail_not_opened",
+                )
+            open_result = self._open_liepin_detail_cached_url(
+                source_run_id=source_run_id,
+                ref=card_ref,
+                rank=rank,
+                detail_url=locator.detail_url,
+                emit_events=True,
+            )
+            if not open_result.ok:
+                return _details_sidecar_effect_result(
+                    status="failed",
+                    provider_candidate_key_hash=provider_candidate_key_hash,
+                    detail_url=locator.detail_url,
+                    resume=None,
+                    action_attempted=1,
+                    effect_posture="attempted",
                     safe_reason_code=(
                         open_result.safe_reason_code
                         or "liepin_opencli_detail_not_opened"
                     ),
                 )
-            wait_result = self.wait_liepin_detail_ready(
+            wait_result = self._wait_liepin_detail_ready_unchecked(
                 source_run_id=source_run_id,
                 rank=rank,
             )
@@ -1759,52 +1862,50 @@ class LiepinSiteAdapter:
                 return _details_sidecar_effect_result(
                     status="failed",
                     provider_candidate_key_hash=provider_candidate_key_hash,
-                    detail_url=None,
+                    detail_url=locator.detail_url,
                     resume=None,
-                    action_attempted=action_attempted,
+                    action_attempted=1,
+                    effect_posture="attempted",
                     safe_reason_code=(
                         wait_result.safe_reason_code
                         or "liepin_opencli_detail_not_opened"
                     ),
                 )
-            capture_result = self._capture_liepin_detail_resume(
-                source_run_id=source_run_id,
+            observed = self._observe_liepin_detail_resume_for_sidecar(
                 rank=rank,
-                require_ready=False,
-                emit_events=True,
+                expected_provider_candidate_key_hash=(
+                    expected_provider_candidate_key_hash
+                ),
             )
-            if not capture_result.ok:
+            if observed.resume is None:
                 return _details_sidecar_effect_result(
                     status="failed",
                     provider_candidate_key_hash=provider_candidate_key_hash,
-                    detail_url=None,
+                    detail_url=locator.detail_url,
                     resume=None,
-                    action_attempted=action_attempted,
+                    action_attempted=1,
+                    effect_posture="attempted",
                     safe_reason_code=(
-                        capture_result.safe_reason_code
+                        observed.safe_reason_code
                         or "liepin_opencli_detail_not_opened"
                     ),
                 )
-            detail_url = self._current_liepin_detail_url()
-            key_hash = (
-                stable_liepin_detail_candidate_key_hash(detail_url)
-                if detail_url is not None
-                else provider_candidate_key_hash
+            self._append_agent_event(
+                source_run_id,
+                {
+                    "action_kind": "observe_detail",
+                    "route_kind": "detail",
+                    "ok": True,
+                    "rank": rank,
+                },
             )
-            if detail_url is not None and key_hash is not None:
-                remember_liepin_detail_locator(
-                    locator_root,
-                    provider_candidate_key_hash=key_hash,
-                    detail_url=detail_url,
-                    card_ref=card_ref,
-                    rank=rank,
-                )
             return _details_sidecar_effect_result(
                 status="succeeded",
-                provider_candidate_key_hash=key_hash,
-                detail_url=detail_url,
-                resume=self._collected_resume_at_rank(source_run_id, rank),
-                action_attempted=action_attempted,
+                provider_candidate_key_hash=provider_candidate_key_hash,
+                detail_url=self._current_liepin_detail_url() or locator.detail_url,
+                resume=observed.resume,
+                action_attempted=1,
+                effect_posture="attempted",
                 safe_reason_code=None,
             )
         finally:
@@ -1816,70 +1917,6 @@ class LiepinSiteAdapter:
                 ),
             )
 
-    def _open_liepin_detail_with_local_retry(
-        self,
-        *,
-        source_run_id: str,
-        ref: str,
-        rank: int,
-        use_cached: bool,
-        cached_detail_url: str | None,
-    ) -> OpenCliBrowserResult:
-        last_result: OpenCliBrowserResult | None = None
-        for attempt in range(1, _DETAIL_OPEN_MAX_ATTEMPTS + 1):
-            if use_cached:
-                if cached_detail_url is None:
-                    return OpenCliBrowserResult(
-                        ok=False,
-                        action="open_liepin_detail",
-                        safe_reason_code="liepin_opencli_detail_not_opened",
-                        counts={"rank": rank, "action_attempted": 0},
-                    )
-                result = self._open_liepin_detail_cached_url(
-                    source_run_id=source_run_id,
-                    ref=ref,
-                    rank=rank,
-                    detail_url=cached_detail_url,
-                    emit_events=True,
-                )
-            else:
-                result = self._open_liepin_detail(
-                    source_run_id=source_run_id,
-                    ref=ref,
-                    rank=rank,
-                    emit_events=True,
-                )
-            if result.ok:
-                return replace(
-                    result,
-                    counts={
-                        **result.counts,
-                        "action_attempted": max(
-                            1,
-                            int(result.counts.get("action_attempted") or attempt),
-                        ),
-                    },
-                )
-            last_result = replace(
-                result,
-                counts={
-                    **result.counts,
-                    "action_attempted": 1,
-                },
-            )
-            reason = result.safe_reason_code or "liepin_opencli_detail_not_opened"
-            if (
-                reason not in _DETAIL_OPEN_RETRYABLE_REASON_CODES
-                or attempt >= _DETAIL_OPEN_MAX_ATTEMPTS
-            ):
-                break
-        return last_result or OpenCliBrowserResult(
-            ok=False,
-            action="open_liepin_detail",
-            safe_reason_code="liepin_opencli_detail_not_opened",
-            counts={"rank": rank, "action_attempted": 0},
-        )
-
     def _current_liepin_detail_url(self) -> str | None:
         url_result = self.get_url()
         if not url_result.ok:
@@ -1888,17 +1925,6 @@ class LiepinSiteAdapter:
         if not _is_liepin_detail_url(current_url):
             return None
         return current_url
-
-    def _collected_resume_at_rank(
-        self,
-        source_run_id: str,
-        rank: int,
-    ) -> dict[str, object] | None:
-        safe_run_id = _safe_artifact_segment(source_run_id)
-        for item in self._read_collected_resumes(safe_run_id):
-            if item.get("provider_rank") == rank:
-                return dict(item)
-        return None
 
     def _search_liepin_cards_once(
         self,

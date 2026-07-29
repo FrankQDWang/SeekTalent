@@ -99,41 +99,6 @@ class _LiepinSearchWorkflowSite:
             expected_provider_candidate_key_hash=expected_provider_candidate_key_hash,
         )
 
-    def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult:
-        raise RuntimeError("liepin_details_direct_browser_forbidden")
-
-    def open_liepin_detail_cached_url(
-        self,
-        *,
-        source_run_id: str,
-        ref: str,
-        rank: int,
-        detail_url: str,
-    ) -> OpenCliBrowserResult:
-        raise RuntimeError("liepin_details_direct_browser_forbidden")
-
-    def wait_liepin_detail_ready(self, *, source_run_id: str, rank: int) -> OpenCliBrowserResult:
-        raise RuntimeError("liepin_details_direct_browser_forbidden")
-
-    def capture_liepin_detail_resume(
-        self,
-        *,
-        source_run_id: str,
-        rank: int,
-        require_ready: bool = True,
-    ) -> OpenCliBrowserResult:
-        raise RuntimeError("liepin_details_direct_browser_forbidden")
-
-    def _capture_liepin_detail_resume_claim_aware(
-        self,
-        *,
-        source_run_id: str,
-        rank: int,
-        expected_provider_candidate_key_hash: str,
-        require_ready: bool = True,
-    ) -> OpenCliBrowserResult:
-        raise RuntimeError("liepin_details_direct_browser_forbidden")
-
     def discard_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> None:
         self.adapter._discard_collected_liepin_detail_resume(source_run_id=source_run_id, rank=rank)
 

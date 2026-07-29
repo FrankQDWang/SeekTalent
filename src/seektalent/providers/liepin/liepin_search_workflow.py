@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Protocol, cast
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserError, OpenCliBrowserResult
 from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
 from seektalent.providers.liepin.first_page_continuation import CandidateState, LiepinFirstPageCandidate, LiepinFirstPageContinuation
-from seektalent.source_contracts.detail_open_claims import DetailOpenClaimSearchContext
+from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger, DetailOpenClaimSearchContext
 from seektalent.providers.liepin.liepin_site_parsing import stable_liepin_detail_candidate_key_hash
 from seektalent.providers.liepin.liepin_state_machine import (
     LiepinStateSnapshot,
@@ -16,14 +16,10 @@ from seektalent.providers.liepin.liepin_state_machine import (
     TransitionResult,
 )
 
-_DETAIL_OPEN_MAX_ATTEMPTS = 2
-_DETAIL_OPEN_RETRY_EXHAUSTED_REASON = "liepin_opencli_detail_open_retry_exhausted"
-_DETAIL_OPEN_RETRYABLE_REASON_CODES = frozenset(
-    {
-        "liepin_opencli_detail_not_opened",
-        "liepin_opencli_timeout",
-    }
-)
+_DETAIL_EFFECT_POSTURES = frozenset({"not_attempted", "attempted", "unknown"})
+_DETAIL_EFFECT_UNKNOWN_REASON = "liepin_details_effect_unknown"
+_DETAIL_RECONCILIATION_UNKNOWN_REASON = "liepin_details_reconciliation_unknown"
+_DETAIL_NOT_OPENED_REASON = "liepin_opencli_detail_not_opened"
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -117,18 +113,6 @@ class LiepinSearchWorkflow:
         last_reason: str | None = None
         interrupted = False
 
-        def finish_failure(candidate: LiepinFirstPageCandidate, reason: str) -> bool:
-            nonlocal terminal_failures, last_reason
-            last_reason = reason
-            if ledger.has_browser_open_attempt(candidate.provider_candidate_key_hash):
-                ledger.mark_terminal_failed(candidate.provider_candidate_key_hash, safe_reason_code=reason)
-                self._site.mark_liepin_first_page_candidate(opaque_ref=continuation_ref,
-                    rank=candidate.rank, state="terminal_failed")
-                terminal_failures += 1
-                return True
-            ledger.release_unattempted(candidate.provider_candidate_key_hash)
-            return False
-
         for candidate in continuation.candidates:
             if candidate.state != "remaining":
                 continue
@@ -138,8 +122,8 @@ class LiepinSearchWorkflow:
                     rank=candidate.rank, state="skipped_seen")
                 skipped_seen += 1
                 continue
+            raised = False
             try:
-                ledger.record_browser_open_attempt(key)
                 opened_envelope, opened = self._site.run_liepin_details_operation(
                     source_run_id=continuation.source_run_id,
                     card_ref=candidate.ref,
@@ -148,29 +132,29 @@ class LiepinSearchWorkflow:
                     provider_candidate_key_hash=key,
                     expected_provider_candidate_key_hash=key,
                 )
-                if not opened.ok:
-                    if not finish_failure(
-                        candidate,
-                        opened.safe_reason_code
-                        or str(opened_envelope.get("safe_reason_code") or "")
-                        or "liepin_opencli_detail_not_opened",
-                    ):
-                        interrupted = True
-                        break
-                    continue
-            except OpenCliBrowserError as exc:
-                if not finish_failure(candidate, exc.safe_reason_code or "liepin_opencli_detail_not_opened"):
-                    interrupted = True
-                break
-            except RuntimeError as exc:
-                reason = str(exc) if str(exc).startswith("liepin_") else "liepin_opencli_detail_not_opened"
-                if not finish_failure(candidate, reason):
-                    interrupted = True
-                break
-            ledger.mark_opened(key)
+            except (OpenCliBrowserError, RuntimeError) as exc:
+                raised = True
+                effect = _unknown_detail_effect(exc)
+            else:
+                effect = _detail_effect_from_result(opened_envelope, opened)
+            state = apply_detail_claim_from_result(
+                ledger=ledger,
+                provider_candidate_key_hash=key,
+                effect=effect,
+            )
             self._site.mark_liepin_first_page_candidate(opaque_ref=continuation_ref,
-                rank=candidate.rank, state="opened")
-            opened_ranks.add(candidate.rank)
+                rank=candidate.rank, state=state)
+            if state == "opened":
+                opened_ranks.add(candidate.rank)
+                continue
+            last_reason = effect.safe_reason_code
+            if state == "terminal_failed":
+                terminal_failures += 1
+                if not raised:
+                    continue
+            else:
+                interrupted = True
+            break
 
         finalized = self._site.finalize_liepin_resumes(source_run_id=continuation.source_run_id,
             query=continuation.keyword_query, max_pages=1, max_cards=len(continuation.candidates),
@@ -240,21 +224,6 @@ class LiepinSearchWorkflow:
                 {"action_kind": "detail_claim_outcomes", **detail_claim_outcomes},
             )
             detail_claim_outcomes_emitted = True
-
-        def record_detail_open_claim_terminal_failure(
-            *,
-            provider_candidate_key_hash: str | None,
-            safe_reason_code: str,
-        ) -> CandidateState | None:
-            state = self._finish_detail_open_claim_after_failure(
-                detail_open_claim_context=detail_open_claim_context,
-                provider_candidate_key_hash=provider_candidate_key_hash,
-                safe_reason_code=safe_reason_code,
-            )
-            if state == "terminal_failed":
-                assert detail_claim_outcomes is not None
-                detail_claim_outcomes["detail_open_terminal_failure_count"] += 1
-            return state
 
         self._append_event(
             request.source_run_id,
@@ -450,6 +419,26 @@ class LiepinSearchWorkflow:
                         opaque_ref=private_continuation.opaque_ref, rank=rank, state=state
                     )
 
+        def apply_detail_claim(
+            *,
+            rank: int,
+            provider_candidate_key_hash: str,
+            effect: _DetailEffect,
+        ) -> CandidateState:
+            assert detail_open_claim_context is not None
+            assert detail_claim_outcomes is not None
+            state = apply_detail_claim_from_result(
+                ledger=detail_open_claim_context.detail_open_claim_ledger,
+                provider_candidate_key_hash=provider_candidate_key_hash,
+                effect=effect,
+            )
+            if state == "opened":
+                detail_claim_outcomes["detail_opened_count"] += 1
+            elif state == "terminal_failed":
+                detail_claim_outcomes["detail_open_terminal_failure_count"] += 1
+            mark_candidate(rank, state)
+            return state
+
         opened = 0
         attempted_ranks: set[int] = set()
         while opened < request.target_resumes:
@@ -471,15 +460,15 @@ class LiepinSearchWorkflow:
 
             cached_detail_url = detail_urls_by_rank.get(selected_rank)
             provider_candidate_key_hash: str | None = detail_hashes_by_rank.get(selected_rank)
-            before_browser_open_attempt: Callable[[], None] | None = None
+            if provider_candidate_key_hash is None and cached_detail_url is not None:
+                # resolve_locator must have produced a durable locator first.
+                provider_candidate_key_hash = (
+                    stable_liepin_detail_candidate_key_hash(cached_detail_url)
+                )
+            if provider_candidate_key_hash is None:
+                last_detail_safe_reason = "liepin_opencli_candidate_identity_missing"
+                continue
             if detail_open_claim_context is not None:
-                if provider_candidate_key_hash is None and cached_detail_url is not None:
-                    provider_candidate_key_hash = (
-                        stable_liepin_detail_candidate_key_hash(cached_detail_url)
-                    )
-                if provider_candidate_key_hash is None:
-                    last_detail_safe_reason = "liepin_opencli_candidate_identity_missing"
-                    continue
                 if not detail_open_claim_context.detail_open_claim_ledger.try_claim(provider_candidate_key_hash):
                     assert detail_claim_outcomes is not None
                     detail_claim_outcomes["detail_open_skipped_seen_count"] += 1
@@ -488,26 +477,8 @@ class LiepinSearchWorkflow:
                 assert detail_claim_outcomes is not None
                 detail_claim_outcomes["detail_claim_granted_count"] += 1
 
-                def record_browser_open_attempt() -> None:
-                    detail_open_claim_context.detail_open_claim_ledger.record_browser_open_attempt(
-                        provider_candidate_key_hash
-                    )
-
-                before_browser_open_attempt = record_browser_open_attempt
-
             try:
-                if before_browser_open_attempt is not None:
-                    before_browser_open_attempt()
-                if provider_candidate_key_hash is None:
-                    # resolve_locator must have produced a durable locator first
-                    if cached_detail_url is not None:
-                        provider_candidate_key_hash = (
-                            stable_liepin_detail_candidate_key_hash(cached_detail_url)
-                        )
-                if provider_candidate_key_hash is None:
-                    last_detail_safe_reason = "liepin_opencli_candidate_identity_missing"
-                    continue
-                _envelope, capture_result = self._site.run_liepin_details_operation(
+                detail_envelope, capture_result = self._site.run_liepin_details_operation(
                     source_run_id=request.source_run_id,
                     card_ref=selected_ref,
                     rank=selected_rank,
@@ -519,37 +490,30 @@ class LiepinSearchWorkflow:
                         else None
                     ),
                 )
-                if not capture_result.ok:
-                    last_detail_safe_reason = (
-                        capture_result.safe_reason_code
-                        or "liepin_opencli_detail_not_opened"
-                    )
-                    failure_state = record_detail_open_claim_terminal_failure(
-                        provider_candidate_key_hash=provider_candidate_key_hash,
-                        safe_reason_code=last_detail_safe_reason,
-                    )
-                    if failure_state is not None:
-                        mark_candidate(selected_rank, failure_state)
-                    continue
-                if detail_open_claim_context is not None and provider_candidate_key_hash is not None:
-                    detail_open_claim_context.detail_open_claim_ledger.mark_opened(
-                        provider_candidate_key_hash
-                    )
-                    assert detail_claim_outcomes is not None
-                    detail_claim_outcomes["detail_opened_count"] += 1
-                    mark_candidate(selected_rank, "opened")
             except Exception as exc:
-                failure_state = record_detail_open_claim_terminal_failure(
-                    provider_candidate_key_hash=provider_candidate_key_hash,
-                    safe_reason_code=(
-                        exc.safe_reason_code
-                        if isinstance(exc, OpenCliBrowserError)
-                        else "liepin_opencli_detail_not_opened"
-                    ),
-                )
-                if failure_state is not None:
-                    mark_candidate(selected_rank, failure_state)
+                if detail_open_claim_context is not None:
+                    apply_detail_claim(
+                        rank=selected_rank,
+                        provider_candidate_key_hash=provider_candidate_key_hash,
+                        effect=_unknown_detail_effect(exc),
+                    )
                 raise
+
+            effect = _detail_effect_from_result(detail_envelope, capture_result)
+            if detail_open_claim_context is None:
+                if not capture_result.ok:
+                    last_detail_safe_reason = effect.safe_reason_code
+                    continue
+            elif (
+                apply_detail_claim(
+                    rank=selected_rank,
+                    provider_candidate_key_hash=provider_candidate_key_hash,
+                    effect=effect,
+                )
+                != "opened"
+            ):
+                last_detail_safe_reason = effect.safe_reason_code
+                continue
 
             opened += 1
             if opened >= request.target_resumes:
@@ -699,349 +663,6 @@ class LiepinSearchWorkflow:
             )
         return extracted
 
-    def _open_detail_with_retry(
-        self,
-        *,
-        source_run_id: str,
-        ref: str,
-        rank: int,
-        cached_detail_url: str | None,
-        use_cached: bool,
-        before_browser_open_attempt: Callable[[], None] | None = None,
-    ) -> OpenCliBrowserResult:
-        last_result: OpenCliBrowserResult | None = None
-        for attempt in range(1, _DETAIL_OPEN_MAX_ATTEMPTS + 1):
-            result = self._open_detail_transition(
-                source_run_id=source_run_id,
-                ref=ref,
-                rank=rank,
-                cached_detail_url=cached_detail_url,
-                use_cached=use_cached,
-                attempt=attempt,
-                before_browser_open_attempt=before_browser_open_attempt,
-            )
-            if result.ok:
-                return result
-            last_result = result
-            reason = result.safe_reason_code or "liepin_opencli_detail_not_opened"
-            action_attempted = int(result.counts.get("action_attempted") or 0) > 0
-            if (
-                not action_attempted
-                or reason not in _DETAIL_OPEN_RETRYABLE_REASON_CODES
-                or attempt >= _DETAIL_OPEN_MAX_ATTEMPTS
-            ):
-                break
-            self._append_event(
-                source_run_id,
-                {
-                    "action_kind": "open_detail_retry_scheduled",
-                    "route_kind": "detail",
-                    "ok": True,
-                    "rank": rank,
-                    "ref": ref,
-                    "attempt": attempt,
-                    "next_attempt": attempt + 1,
-                    "safe_reason_code": reason,
-                },
-            )
-
-        if (
-            last_result is not None
-            and int(last_result.counts.get("action_attempted") or 0) > 0
-            and (last_result.safe_reason_code or "liepin_opencli_detail_not_opened")
-            in _DETAIL_OPEN_RETRYABLE_REASON_CODES
-        ):
-            self._append_event(
-                source_run_id,
-                {
-                    "action_kind": "open_detail_retry_exhausted",
-                    "route_kind": "detail",
-                    "ok": False,
-                    "rank": rank,
-                    "ref": ref,
-                    "attempts": _DETAIL_OPEN_MAX_ATTEMPTS,
-                    "safe_reason_code": _DETAIL_OPEN_RETRY_EXHAUSTED_REASON,
-                },
-            )
-            return OpenCliBrowserResult(
-                ok=False,
-                action="open_liepin_detail",
-                safe_reason_code=_DETAIL_OPEN_RETRY_EXHAUSTED_REASON,
-                counts={"rank": rank, "attempts": _DETAIL_OPEN_MAX_ATTEMPTS, "action_attempted": 1},
-            )
-        return last_result or OpenCliBrowserResult(
-            ok=False,
-            action="open_liepin_detail",
-            safe_reason_code="liepin_opencli_detail_not_opened",
-            counts={"rank": rank, "action_attempted": 0},
-        )
-
-    def _open_detail_transition(
-        self,
-        *,
-        source_run_id: str,
-        ref: str,
-        rank: int,
-        cached_detail_url: str | None,
-        use_cached: bool,
-        attempt: int = 1,
-        before_browser_open_attempt: Callable[[], None] | None = None,
-    ) -> OpenCliBrowserResult:
-        opened: OpenCliBrowserResult | None = None
-        open_mode = "cached_url" if use_cached else "visible_card"
-
-        def observe_search_state() -> LiepinStateSnapshot:
-            return _snapshot_from_result(self._site.observe_liepin_search_state())
-
-        def observe_detail_state() -> LiepinStateSnapshot:
-            return _snapshot_from_result(self._site.observe_liepin_detail_state())
-
-        def can_open(snapshot: LiepinStateSnapshot) -> bool:
-            if not snapshot.ok:
-                return False
-            if use_cached:
-                return cached_detail_url is not None
-            return bool(ref and rank > 0 and _search_state_has_detail_target(snapshot.observation, ref))
-
-        def open_detail() -> TransitionResult:
-            nonlocal opened
-            if use_cached:
-                if cached_detail_url is None:
-                    return TransitionResult(ok=False, safe_reason_code="liepin_opencli_detail_not_opened")
-                if before_browser_open_attempt is not None:
-                    before_browser_open_attempt()
-                opened = self._site.open_liepin_detail_cached_url(
-                    source_run_id=source_run_id,
-                    ref=ref,
-                    rank=rank,
-                    detail_url=cached_detail_url,
-                )
-            else:
-                if before_browser_open_attempt is not None:
-                    before_browser_open_attempt()
-                opened = self._site.open_liepin_detail(
-                    source_run_id=source_run_id,
-                    ref=ref,
-                    rank=rank,
-                )
-            if opened.ok:
-                return TransitionResult(ok=True)
-            return TransitionResult(
-                ok=False,
-                safe_reason_code=opened.safe_reason_code or "liepin_opencli_detail_not_opened",
-            )
-
-        result = self._transition_runner.run(
-            LiepinTransition(
-                name="open_detail",
-                phase="detail",
-                observe_pre_state=observe_search_state,
-                precondition=can_open,
-                action=open_detail,
-                observe_post_state=observe_detail_state,
-                postcondition=lambda snapshot: snapshot.ok and bool(opened and opened.ok),
-                safe_reason_code="liepin_opencli_detail_not_opened",
-                trace_event="liepin.detail.open",
-            )
-        )
-        if opened is not None:
-            self._append_event(
-                source_run_id,
-                {
-                    "action_kind": "open_detail",
-                    "route_kind": "detail",
-                    "ok": True,
-                    "rank": rank,
-                    "ref": ref,
-                    "open_mode": open_mode,
-                    "attempt": attempt,
-                },
-            )
-        event: dict[str, object] = {
-            "action_kind": "open_detail_succeeded" if result.ok else "open_detail_failed",
-            "route_kind": "detail",
-            "ok": result.ok,
-            "rank": rank,
-            "ref": ref,
-            "attempt": attempt,
-        }
-        if opened is not None:
-            event["open_mode"] = open_mode
-        if not result.ok:
-            event["safe_reason_code"] = result.safe_reason_code or "liepin_opencli_detail_not_opened"
-        self._append_event(source_run_id, event)
-        if not result.ok:
-            return OpenCliBrowserResult(
-                ok=False,
-                action="open_liepin_detail",
-                safe_reason_code=result.safe_reason_code or "liepin_opencli_detail_not_opened",
-                counts={"rank": rank, "action_attempted": 1 if opened is not None else 0},
-            )
-        if opened is None:
-            return OpenCliBrowserResult(
-                ok=False,
-                action="open_liepin_detail",
-                safe_reason_code="liepin_opencli_detail_not_opened",
-                counts={"rank": rank, "action_attempted": 0},
-            )
-        return opened
-
-    def _wait_detail_ready_transition(self, *, source_run_id: str, rank: int) -> OpenCliBrowserResult:
-        waited: OpenCliBrowserResult | None = None
-
-        def observe_detail_state() -> LiepinStateSnapshot:
-            return _snapshot_from_result(self._site.observe_liepin_detail_state())
-
-        def wait_detail_ready() -> TransitionResult:
-            nonlocal waited
-            waited = self._site.wait_liepin_detail_ready(
-                source_run_id=source_run_id,
-                rank=rank,
-            )
-            if waited.ok:
-                return TransitionResult(ok=True)
-            return TransitionResult(
-                ok=False,
-                safe_reason_code=waited.safe_reason_code or "liepin_opencli_detail_not_opened",
-            )
-
-        result = self._transition_runner.run(
-            LiepinTransition(
-                name="wait_detail_ready",
-                phase="detail",
-                observe_pre_state=observe_detail_state,
-                precondition=lambda snapshot: snapshot.ok,
-                action=wait_detail_ready,
-                observe_post_state=observe_detail_state,
-                postcondition=lambda snapshot: snapshot.ok and bool(waited and waited.ok),
-                safe_reason_code="liepin_opencli_detail_not_opened",
-                trace_event="liepin.detail.wait_ready",
-            )
-        )
-        event: dict[str, object] = {
-            "action_kind": "wait_detail_ready",
-            "route_kind": "detail",
-            "ok": result.ok,
-            "rank": rank,
-        }
-        if not result.ok:
-            event["safe_reason_code"] = result.safe_reason_code or "liepin_opencli_detail_not_opened"
-        self._append_event(source_run_id, event)
-        if not result.ok:
-            return OpenCliBrowserResult(
-                ok=False,
-                action="wait_liepin_detail_ready",
-                safe_reason_code=result.safe_reason_code or "liepin_opencli_detail_not_opened",
-            )
-        if waited is None:
-            return OpenCliBrowserResult(
-                ok=False,
-                action="wait_liepin_detail_ready",
-                safe_reason_code="liepin_opencli_detail_not_opened",
-            )
-        return waited
-
-    def _capture_detail_transition(
-        self,
-        *,
-        source_run_id: str,
-        rank: int,
-        require_ready: bool = True,
-        expected_provider_candidate_key_hash: str | None = None,
-    ) -> OpenCliBrowserResult:
-        captured: OpenCliBrowserResult | None = None
-
-        def observe_detail_state() -> LiepinStateSnapshot:
-            return _snapshot_from_result(self._site.observe_liepin_detail_state())
-
-        def capture_detail() -> TransitionResult:
-            nonlocal captured
-            if expected_provider_candidate_key_hash is None:
-                captured = self._site.capture_liepin_detail_resume(
-                    source_run_id=source_run_id,
-                    rank=rank,
-                    require_ready=require_ready,
-                )
-            else:
-                captured = self._site._capture_liepin_detail_resume_claim_aware(
-                    source_run_id=source_run_id,
-                    rank=rank,
-                    require_ready=require_ready,
-                    expected_provider_candidate_key_hash=expected_provider_candidate_key_hash,
-                )
-            if captured.ok:
-                return TransitionResult(ok=True)
-            return TransitionResult(
-                ok=False,
-                safe_reason_code=captured.safe_reason_code or "liepin_opencli_detail_not_opened",
-            )
-
-        result = self._transition_runner.run(
-            LiepinTransition(
-                name="capture_detail",
-                phase="detail",
-                observe_pre_state=observe_detail_state,
-                precondition=lambda snapshot: snapshot.ok,
-                action=capture_detail,
-                observe_post_state=observe_detail_state,
-                postcondition=lambda snapshot: snapshot.ok and bool(captured and captured.ok),
-                safe_reason_code="liepin_opencli_detail_not_opened",
-                trace_event="liepin.detail.capture",
-            )
-        )
-        observe_event: dict[str, object] = {
-            "action_kind": "observe_detail",
-            "route_kind": "detail",
-            "ok": result.ok,
-            "rank": rank,
-        }
-        if not result.ok:
-            observe_event["safe_reason_code"] = result.safe_reason_code or "liepin_opencli_detail_not_opened"
-        self._append_event(source_run_id, observe_event)
-        event: dict[str, object] = {
-            "action_kind": "capture_detail_succeeded" if result.ok else "capture_detail_failed",
-            "route_kind": "detail",
-            "ok": result.ok,
-            "rank": rank,
-        }
-        if not result.ok:
-            event["safe_reason_code"] = result.safe_reason_code or "liepin_opencli_detail_not_opened"
-        self._append_event(source_run_id, event)
-        if not result.ok:
-            if captured is not None and captured.ok:
-                self._site.discard_liepin_detail_resume(source_run_id=source_run_id, rank=rank)
-            return OpenCliBrowserResult(
-                ok=False,
-                action="capture_liepin_detail_resume",
-                safe_reason_code=result.safe_reason_code or "liepin_opencli_detail_not_opened",
-            )
-        if captured is None:
-            return OpenCliBrowserResult(
-                ok=False,
-                action="capture_liepin_detail_resume",
-                safe_reason_code="liepin_opencli_detail_not_opened",
-            )
-        return captured
-
-    @staticmethod
-    def _finish_detail_open_claim_after_failure(
-        *,
-        detail_open_claim_context: DetailOpenClaimSearchContext | None,
-        provider_candidate_key_hash: str | None,
-        safe_reason_code: str,
-    ) -> CandidateState | None:
-        if detail_open_claim_context is None or provider_candidate_key_hash is None:
-            return None
-        ledger = detail_open_claim_context.detail_open_claim_ledger
-        if ledger.has_browser_open_attempt(provider_candidate_key_hash):
-            ledger.mark_terminal_failed(
-                provider_candidate_key_hash,
-                safe_reason_code=safe_reason_code,
-            )
-            return "terminal_failed"
-        ledger.release_unattempted(provider_candidate_key_hash)
-        return "remaining"
-
     def _restore_search_transition(self, *, source_run_id: str, rank: int) -> str | None:
         restored_page_id: str | None = None
 
@@ -1083,6 +704,83 @@ class LiepinSearchWorkflow:
         return restored_page_id
 
 
+@dataclass(frozen=True, kw_only=True)
+class _DetailEffect:
+    """What the Source Port reported about one details browser effect."""
+
+    posture: str
+    action_attempted: int
+    ok: bool
+    safe_reason_code: str
+
+
+def _detail_effect_from_result(
+    envelope: Mapping[str, object],
+    result: OpenCliBrowserResult,
+) -> _DetailEffect:
+    safe_reason_code = _DETAIL_NOT_OPENED_REASON
+    if not result.ok:
+        safe_reason_code = result.safe_reason_code or _envelope_reason(envelope)
+    raw_posture = envelope.get("effect_posture")
+    if (
+        safe_reason_code == _DETAIL_RECONCILIATION_UNKNOWN_REASON
+        or not isinstance(raw_posture, str)
+        or raw_posture not in _DETAIL_EFFECT_POSTURES
+    ):
+        posture = "unknown"
+    else:
+        posture = raw_posture
+    return _DetailEffect(
+        posture=posture,
+        action_attempted=_positive_int(result.counts.get("action_attempted")),
+        ok=result.ok,
+        safe_reason_code=safe_reason_code,
+    )
+
+
+def _unknown_detail_effect(exc: BaseException) -> _DetailEffect:
+    return _DetailEffect(
+        posture="unknown",
+        action_attempted=1,
+        ok=False,
+        safe_reason_code=(
+            exc.safe_reason_code
+            if isinstance(exc, OpenCliBrowserError)
+            else _DETAIL_NOT_OPENED_REASON
+        ),
+    )
+
+
+def apply_detail_claim_from_result(
+    *,
+    ledger: DetailOpenClaimLedger,
+    provider_candidate_key_hash: str,
+    effect: _DetailEffect,
+) -> CandidateState:
+    """Move one claim using only what the Source Port observed about the effect.
+
+    An unknown posture must block repeats without claiming a confirmed open, so it
+    lands on terminal_failed instead of releasing the claim.
+    """
+    if effect.posture == "not_attempted" and effect.action_attempted == 0:
+        ledger.release_unattempted(provider_candidate_key_hash)
+        return "remaining"
+    if not ledger.has_browser_open_attempt(provider_candidate_key_hash):
+        ledger.record_browser_open_attempt(provider_candidate_key_hash)
+    if effect.posture == "attempted" and effect.ok:
+        ledger.mark_opened(provider_candidate_key_hash)
+        return "opened"
+    ledger.mark_terminal_failed(
+        provider_candidate_key_hash,
+        safe_reason_code=(
+            _DETAIL_EFFECT_UNKNOWN_REASON
+            if effect.posture == "unknown"
+            else effect.safe_reason_code
+        ),
+    )
+    return "terminal_failed"
+
+
 def _structured_card_items(result: OpenCliBrowserResult) -> list[Mapping[str, object]]:
     raw_cards = result.observation.get("cards") if isinstance(result.observation, Mapping) else None
     if not isinstance(raw_cards, Sequence) or isinstance(raw_cards, str | bytes | bytearray):
@@ -1103,22 +801,6 @@ def _snapshot_from_result(result: OpenCliBrowserResult) -> LiepinStateSnapshot:
 def _safe_snapshot_observation(observation: Mapping[str, object]) -> dict[str, object] | None:
     safe_observation = {key: value for key, value in observation.items() if key != "text"}
     return safe_observation or None
-
-
-def _search_state_has_detail_target(observation: Mapping[str, object] | None, ref: str) -> bool:
-    stripped_ref = ref.strip()
-    if not stripped_ref or observation is None:
-        return False
-    targets = observation.get("detailTargets")
-    if not isinstance(targets, Sequence) or isinstance(targets, str | bytes | bytearray):
-        return False
-    for target in targets:
-        if not isinstance(target, Mapping):
-            continue
-        target_ref = cast(Mapping[str, object], target).get("ref")
-        if isinstance(target_ref, str) and target_ref.strip() == stripped_ref:
-            return True
-    return False
 
 
 def _next_unattempted_card(

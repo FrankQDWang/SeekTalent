@@ -64,6 +64,8 @@ from seektalent.source_port.liepin_details_artifacts import (
     read_liepin_details_artifact,
 )
 from seektalent.source_port.liepin_details_contract import (
+    LiepinDetailsArtifactV1,
+    LiepinDetailsObservationV1,
     LiepinDetailsOperationRequestV1,
     canonical_liepin_details_request_hash,
     stable_liepin_details_operation_id,
@@ -669,6 +671,14 @@ class LiepinCardsSourceOperationExecutor:
             )
         except (OSError, ValueError):
             return _details_artifact_unavailable_result(observation)
+        if not _details_artifact_binds_accepted_request(
+            request=request,
+            artifact=artifact,
+            observation=observation,
+            operation_id=operation_id,
+            request_hash=request_hash,
+        ):
+            return _details_identity_mismatch_result(observation)
         if (
             self._store.get_source_operation(
                 self._runtime_run_id,
@@ -1407,6 +1417,55 @@ def _unknown_result():
     )
 
 
+def _details_artifact_binds_accepted_request(
+    *,
+    request: LiepinDetailsOperationRequestV1,
+    artifact: LiepinDetailsArtifactV1,
+    observation: LiepinDetailsObservationV1,
+    operation_id: str,
+    request_hash: str,
+) -> bool:
+    """Reject any artifact or observation that is not bound to the accepted request."""
+    if operation_id not in {artifact.operation_id, observation.operation_id}:
+        return False
+    if artifact.operation_id != observation.operation_id:
+        return False
+    if request_hash != artifact.canonical_request_hash:
+        return False
+    if request_hash != observation.canonical_request_hash:
+        return False
+    if artifact.open_mode != request.open_mode:
+        return False
+    if observation.open_mode != artifact.open_mode:
+        return False
+    if (
+        request.open_mode == "cached_locator"
+        and artifact.provider_candidate_key_hash != request.provider_candidate_key_hash
+    ):
+        return False
+    if observation.provider_candidate_key_hash != artifact.provider_candidate_key_hash:
+        return False
+    if artifact.rank != request.rank or artifact.card_ref != request.card_ref:
+        return False
+    if observation.rank != artifact.rank:
+        return False
+    if observation.action_attempted != artifact.action_attempted:
+        return False
+    if observation.effect_posture != artifact.effect_posture:
+        return False
+    if observation.safe_reason_code != artifact.safe_reason_code:
+        return False
+    return observation.disposition == _details_disposition(artifact.status)
+
+
+def _details_disposition(status: str) -> str:
+    if status == "succeeded":
+        return "completed"
+    if status == "partial":
+        return "partial"
+    return "failed"
+
+
 def _details_workflow_result(request, artifact, observation):
     status = (
         "succeeded"
@@ -1431,6 +1490,7 @@ def _details_workflow_result(request, artifact, observation):
         "card_ref": artifact.card_ref,
         "open_mode": artifact.open_mode,
         "action_attempted": artifact.action_attempted,
+        "effect_posture": artifact.effect_posture,
     }
     structured = {
         "ok": status in {"succeeded", "partial"},
@@ -1443,42 +1503,70 @@ def _details_workflow_result(request, artifact, observation):
         "observation": artifact.resume or {},
         "provider_candidate_key_hash": artifact.provider_candidate_key_hash,
         "detail_url": artifact.detail_url,
+        "effect_posture": artifact.effect_posture,
+        "resume": artifact.resume,
+        "ingest_ready": (
+            artifact.resume is not None
+            and observation.disposition in {"completed", "partial"}
+        ),
     }
     return envelope, structured
 
 
 def _details_artifact_unavailable_result(observation):
-    reason = "liepin_details_artifact_unavailable"
-    return (
-        {
-            "status": "failed",
-            "safe_reason_code": reason,
-        },
-        {
-            "ok": False,
-            "action": "capture_liepin_detail_resume",
-            "safe_reason_code": reason,
-            "counts": {
-                "rank": observation.rank,
-                "action_attempted": observation.action_attempted,
-            },
-            "observation": {},
-        },
+    return _details_failed_result(
+        reason="liepin_details_artifact_unavailable",
+        effect_posture=observation.effect_posture,
+        rank=observation.rank,
+        action_attempted=observation.action_attempted,
+    )
+
+
+def _details_identity_mismatch_result(observation):
+    return _details_failed_result(
+        reason="liepin_details_artifact_identity_mismatch",
+        effect_posture="unknown",
+        rank=observation.rank,
+        action_attempted=observation.action_attempted,
     )
 
 
 def _details_unknown_result():
+    return _details_failed_result(
+        reason="liepin_details_reconciliation_unknown",
+        effect_posture="unknown",
+        rank=None,
+        action_attempted=None,
+    )
+
+
+def _details_failed_result(
+    *,
+    reason: str,
+    effect_posture: str,
+    rank: int | None,
+    action_attempted: int | None,
+):
+    counts = (
+        {"rank": rank, "action_attempted": action_attempted}
+        if rank is not None and action_attempted is not None
+        else {}
+    )
     return (
         {
             "status": "failed",
-            "safe_reason_code": "liepin_details_reconciliation_unknown",
+            "safe_reason_code": reason,
+            "effect_posture": effect_posture,
         },
         {
             "ok": False,
             "action": "capture_liepin_detail_resume",
-            "safe_reason_code": "liepin_details_reconciliation_unknown",
-            "counts": {},
+            "safe_reason_code": reason,
+            "counts": counts,
             "observation": {},
+            "effect_posture": effect_posture,
+            "resume": None,
+            "ingest_ready": False,
         },
     )
 

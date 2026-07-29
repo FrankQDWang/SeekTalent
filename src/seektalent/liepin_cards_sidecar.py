@@ -420,6 +420,7 @@ def _handle_details_submit(
         provider_candidate_key_hash=artifact.provider_candidate_key_hash,
         rank=artifact.rank,
         action_attempted=artifact.action_attempted,
+        effect_posture=artifact.effect_posture,
         safe_reason_code=artifact.safe_reason_code,
         producer_generation=journal_session.generation,
     )
@@ -596,6 +597,7 @@ def _execute_details(
             "detail_url": effect.get("detail_url"),
             "resume": resume,
             "action_attempted": max(0, int(effect.get("action_attempted") or 0)),
+            "effect_posture": effect.get("effect_posture"),
             "safe_reason_code": (
                 str(safe_reason)[:160] if safe_reason else None
             ),
