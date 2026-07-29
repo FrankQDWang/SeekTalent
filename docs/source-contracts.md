@@ -6,8 +6,10 @@ SeekTalent supports multiple candidate sources without letting runtime code depe
 
 | Layer | Owns | Must not own |
 | --- | --- | --- |
+| Failure interpretation | stable public problems, source-specific cause interpretation, optional user-action mapping, recovery guidance | source execution, retry authority, provider transport |
 | Runtime | orchestration, source-neutral plans, budgets, candidate identity, scoring, finalization, public runtime events | provider transport, browser automation, provider-specific reason-code literals |
-| Sources | source-neutral contracts, source registry, source adapters, source-specific runtime bridge code | concrete HTTP/browser clients except through provider boundaries |
+| Source contracts | source-neutral DTOs, protocols, registry, serialization, and worker failure contract | source-specific failure policy, concrete execution, provider transport |
+| Sources | source adapters and source-specific runtime bridge code | concrete HTTP/browser clients except through provider boundaries |
 | Providers | CTS/Liepin transport adapters, provider DTOs, mapping, safety, worker/OpenCLI details | runtime DTO imports or runtime orchestration |
 | BFF | frontend response projection, Workbench persistence/API, OpenAPI generation | backend model normalization or provider error mapping outside source/provider boundaries |
 
@@ -19,7 +21,9 @@ SeekTalent supports multiple candidate sources without letting runtime code depe
 - `src/seektalent/sources/range_overlap.py`: shared open-ended range overlap math.
 - `src/seektalent/sources/cts/filter_projection.py`: CTS-native filter projection.
 - `src/seektalent/sources/liepin/runtime_lane.py`: Liepin runtime source-lane bridge.
-- `src/seektalent/sources/liepin/reason_codes.py`: Liepin/OpenCLI safe public reason-code mapping.
+- `src/seektalent/failure_interpretation.py`: product-owned public problem and source failure-cause interpretation.
+- `src/seektalent/sources/liepin/reason_codes.py`: compatibility exports for the former import path.
+- `src/seektalent/source_contracts/errors.py`: source-neutral worker failure contract.
 - `src/seektalent/retrieval/service_factory.py`: provider registry/service construction outside runtime.
 
 ## Runtime Rules

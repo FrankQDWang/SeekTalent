@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from seektalent.public_payload_safety import public_source_identifier, public_text
-from seektalent.sources.liepin.reason_codes import public_source_problem_code
+from seektalent.failure_interpretation import public_source_problem_code
 from seektalent_runtime_control.errors import RuntimeControlError
 
 

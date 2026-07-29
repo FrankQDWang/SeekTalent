@@ -6,7 +6,7 @@ import re
 
 import pytest
 
-from seektalent.sources.liepin.reason_codes import (
+from seektalent.failure_interpretation import (
     LIEPIN_FAILURE_POLICIES,
     public_source_problem_code,
     public_source_problem_message,

@@ -173,7 +173,7 @@ def sanitize_reason_code(value: str | None) -> str | None:
         return None
     if value in _SAFE_REASON_CODES:
         return value
-    from seektalent.sources.liepin.reason_codes import public_source_problem_code
+    from seektalent.failure_interpretation import public_source_problem_code
 
     return public_source_problem_code(value) or "unknown_reason"
 

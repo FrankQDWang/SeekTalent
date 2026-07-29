@@ -16,7 +16,7 @@ from seektalent.providers.liepin.browser_environment import (
     BrowserBridgeEnvironmentStatus,
     check_browser_bridge_environment,
 )
-from seektalent.sources.liepin.reason_codes import public_source_problem_message
+from seektalent.failure_interpretation import public_source_problem_message
 from seektalent.wtscli_verify_session_adapter import (
     probe_wtscli_liepin_session,
 )

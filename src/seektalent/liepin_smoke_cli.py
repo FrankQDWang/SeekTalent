@@ -14,7 +14,7 @@ from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from seektalent.providers.liepin.worker_contracts import OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT
 from seektalent.source_adapters import build_source_enabled_runtime
-from seektalent.sources.liepin.reason_codes import public_source_problem_code
+from seektalent.failure_interpretation import public_source_problem_code
 
 WorkflowRuntime = build_source_enabled_runtime
 

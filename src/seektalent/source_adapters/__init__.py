@@ -51,7 +51,7 @@ from seektalent.source_contracts import (
     SourceRegistry as SourceRegistry,
 )
 from seektalent.sources.cts.filter_projection import project_constraints_to_cts as project_constraints_to_cts
-from seektalent.sources.liepin.reason_codes import (
+from seektalent.failure_interpretation import (
     public_source_problem_code as public_source_problem_code,
 )
 from seektalent.sources.liepin.runtime_lane import (

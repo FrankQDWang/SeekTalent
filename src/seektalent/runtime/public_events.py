@@ -5,9 +5,9 @@ from datetime import datetime
 from typing import NotRequired, TypedDict
 
 from seektalent.public_payload_safety import public_source_identifier, public_text
-from seektalent.sources.liepin.reason_codes import (
+from seektalent.failure_interpretation import (
     PUBLIC_SOURCE_REASON_CODES as PUBLIC_SOURCE_REASON_CODES,
-    public_liepin_failure_cause_code,
+    public_source_failure_cause_code,
     public_source_problem_code,
 )
 
@@ -125,8 +125,11 @@ def normalize_runtime_public_event(payload: Mapping[str, object]) -> RuntimePubl
         safeReasonCode=public_source_reason_code(payload.get("safeReasonCode")),
         createdAt=_public_created_at(payload.get("createdAt")),
     )
-    failure_cause_code = public_liepin_failure_cause_code(payload.get("failureCauseCode"))
-    if source_kind == "liepin" and event["status"] in {"blocked", "failed"} and failure_cause_code is not None:
+    failure_cause_code = public_source_failure_cause_code(
+        source_kind,
+        payload.get("failureCauseCode"),
+    )
+    if event["status"] in {"blocked", "failed"} and failure_cause_code is not None:
         event["failureCauseCode"] = failure_cause_code
     return event
 

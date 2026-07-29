@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from typing import Literal
 
 from seektalent.models import RequirementSheet
-from seektalent.sources.liepin.reason_codes import public_source_problem_message
+from seektalent.failure_interpretation import public_source_problem_message
 
 
 DEFAULT_TENANT_ID = "local"

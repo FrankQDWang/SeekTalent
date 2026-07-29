@@ -22,7 +22,7 @@ from seektalent.runtime.source_round_dispatch import (
     SourceRoundDispatchStatus,
 )
 from seektalent.sources.cts.filter_projection import project_constraints_to_cts
-from seektalent.sources.liepin.reason_codes import public_source_problem_code
+from seektalent.failure_interpretation import public_source_problem_code
 from seektalent.source_contracts import (
     RuntimeQueryCandidateAttribution,
     SourceQueryExecutionOutcome,
