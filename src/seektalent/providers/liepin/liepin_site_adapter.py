@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, cast
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
 from seektalent.providers.liepin.first_page_continuation import (
     CandidateState, LiepinFirstPageCandidate, LiepinFirstPageContinuationStore,
@@ -317,6 +317,35 @@ def _search_form_ready(snapshot: LiepinStateSnapshot) -> bool:
         and extract_liepin_search_input_ref(snapshot.text) is not None
         and extract_liepin_search_button_ref(snapshot.text) is not None
     )
+
+
+def _search_readiness_evidence(snapshot: LiepinStateSnapshot) -> dict[str, object]:
+    parsed = urlparse(snapshot.url or "")
+    host = (parsed.hostname or "").casefold()
+    allowed_host = host in LIEPIN_OPENCLI_ALLOWED_HOSTS
+    search_surface_url = _search_url_ready(snapshot)
+    terminal_reason = (
+        classify_liepin_state(url=snapshot.url, text=snapshot.text)
+        if snapshot.url is not None
+        else snapshot.safe_reason_code
+    )
+    return {
+        "state_ok": snapshot.ok,
+        "url_host": host if allowed_host else ("other" if host else None),
+        "url_path": (
+            (unquote(parsed.path or "") or "/")
+            if search_surface_url
+            else ("other" if allowed_host else None)
+        ),
+        "search_surface_url": search_surface_url,
+        "search_input_ref_present": (
+            extract_liepin_search_input_ref(snapshot.text) is not None
+        ),
+        "search_button_ref_present": (
+            extract_liepin_search_button_ref(snapshot.text) is not None
+        ),
+        "terminal_reason": terminal_reason,
+    }
 
 
 def _search_query_matches(actual: str, expected: str) -> bool:
@@ -1531,10 +1560,17 @@ class LiepinSiteAdapter:
                 retried_unready = False
                 while True:
                     first_state = self.state()
-                    events.append({"action_kind": "observe", "route_kind": "search", "ok": first_state.ok})
                     snapshot = replace(
                         _snapshot_from_result(first_state),
                         url=self._current_url_or_none(),
+                    )
+                    events.append(
+                        {
+                            "action_kind": "observe",
+                            "route_kind": "search",
+                            "ok": first_state.ok,
+                            **_search_readiness_evidence(snapshot),
+                        }
                     )
                     if _search_form_ready(snapshot):
                         return snapshot

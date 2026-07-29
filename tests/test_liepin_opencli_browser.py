@@ -3005,6 +3005,32 @@ def test_search_liepin_cards_fails_closed_when_search_input_never_appears(
     assert envelope["safe_reason_code"] == "liepin_opencli_search_not_ready"
     assert delays == pytest.approx([0.1, 0.1, 0.1])
     assert not any(call[3] in {"fill", "click"} for call in commands.calls if len(call) >= 4)
+    trace = json.loads(
+        (
+            tmp_path
+            / "protected"
+            / "pi-trace"
+            / "run-search-form-timeout"
+            / "action-trace.json"
+        ).read_text(encoding="utf-8")
+    )
+    observe_events = [
+        event for event in trace["events"] if event["action_kind"] == "observe"
+    ]
+    assert observe_events
+    assert observe_events[-1] == {
+        "action_kind": "observe",
+        "route_kind": "search",
+        "ok": False,
+        "state_ok": True,
+        "url_host": "h.liepin.com",
+        "url_path": "/search/getConditionItem",
+        "search_surface_url": True,
+        "search_input_ref_present": False,
+        "search_button_ref_present": False,
+        "terminal_reason": None,
+        "safe_reason_code": "liepin_opencli_search_not_ready",
+    }
 
 
 def test_search_liepin_cards_ignores_add_resume_copy_without_closing_it(tmp_path: Path) -> None:
