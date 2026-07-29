@@ -63,37 +63,16 @@ class LiepinSearchWorkflowSite(Protocol):
 
     def observe_liepin_detail_state(self) -> OpenCliBrowserResult: ...
 
-    def safe_liepin_detail_url_for_ref(self, ref: str) -> str | None: ...
-
-    def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult: ...
-
-    def open_liepin_detail_cached_url(
+    def run_liepin_details_operation(
         self,
         *,
         source_run_id: str,
-        ref: str,
+        card_ref: str,
         rank: int,
-        detail_url: str,
-    ) -> OpenCliBrowserResult: ...
-
-    def wait_liepin_detail_ready(self, *, source_run_id: str, rank: int) -> OpenCliBrowserResult: ...
-
-    def capture_liepin_detail_resume(
-        self,
-        *,
-        source_run_id: str,
-        rank: int,
-        require_ready: bool = True,
-    ) -> OpenCliBrowserResult: ...
-
-    def _capture_liepin_detail_resume_claim_aware(
-        self,
-        *,
-        source_run_id: str,
-        rank: int,
-        expected_provider_candidate_key_hash: str,
-        require_ready: bool = True,
-    ) -> OpenCliBrowserResult: ...
+        open_mode: str,
+        provider_candidate_key_hash: str | None = None,
+        expected_provider_candidate_key_hash: str | None = None,
+    ) -> tuple[dict[str, object], OpenCliBrowserResult]: ...
 
     def discard_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> None: ...
 
@@ -160,25 +139,32 @@ class LiepinSearchWorkflow:
                 skipped_seen += 1
                 continue
             try:
-                opened = self._open_detail_with_retry(source_run_id=continuation.source_run_id,
-                    ref=candidate.ref, rank=candidate.rank, cached_detail_url=candidate.detail_url,
-                    use_cached=True, before_browser_open_attempt=lambda key=key: ledger.record_browser_open_attempt(key))
+                ledger.record_browser_open_attempt(key)
+                opened_envelope, opened = self._site.run_liepin_details_operation(
+                    source_run_id=continuation.source_run_id,
+                    card_ref=candidate.ref,
+                    rank=candidate.rank,
+                    open_mode="cached_locator",
+                    provider_candidate_key_hash=key,
+                    expected_provider_candidate_key_hash=key,
+                )
                 if not opened.ok:
-                    if not finish_failure(candidate, opened.safe_reason_code or "liepin_opencli_detail_not_opened"):
+                    if not finish_failure(
+                        candidate,
+                        opened.safe_reason_code
+                        or str(opened_envelope.get("safe_reason_code") or "")
+                        or "liepin_opencli_detail_not_opened",
+                    ):
                         interrupted = True
                         break
                     continue
-                waited = self._wait_detail_ready_transition(source_run_id=continuation.source_run_id, rank=candidate.rank)
-                if not waited.ok:
-                    finish_failure(candidate, waited.safe_reason_code or "liepin_opencli_detail_not_opened")
-                    continue
-                captured = self._capture_detail_transition(source_run_id=continuation.source_run_id,
-                    rank=candidate.rank, require_ready=False, expected_provider_candidate_key_hash=key)
-                if not captured.ok:
-                    finish_failure(candidate, captured.safe_reason_code or "liepin_opencli_detail_not_opened")
-                    continue
             except OpenCliBrowserError as exc:
                 if not finish_failure(candidate, exc.safe_reason_code or "liepin_opencli_detail_not_opened"):
+                    interrupted = True
+                break
+            except RuntimeError as exc:
+                reason = str(exc) if str(exc).startswith("liepin_") else "liepin_opencli_detail_not_opened"
+                if not finish_failure(candidate, reason):
                     interrupted = True
                 break
             ledger.mark_opened(key)
@@ -346,6 +332,7 @@ class LiepinSearchWorkflow:
         )
         cards_seen_for_resume = max(cards_seen, len(card_items))
         detail_urls_by_rank: dict[int, str] = {}
+        detail_hashes_by_rank: dict[int, str] = {}
 
         def remember_detail_urls(cards_to_cache: Sequence[Mapping[str, object]]) -> None:
             for card in cards_to_cache:
@@ -357,12 +344,28 @@ class LiepinSearchWorkflow:
                     continue
                 if detail_open_claim_context is not None:
                     detail_urls_by_rank.pop(rank, None)
-                detail_url = self._site.safe_liepin_detail_url_for_ref(ref)
-                if detail_url is not None and (
-                    detail_open_claim_context is None
-                    or stable_liepin_detail_candidate_key_hash(detail_url) is not None
+                    detail_hashes_by_rank.pop(rank, None)
+                envelope, result = self._site.run_liepin_details_operation(
+                    source_run_id=request.source_run_id,
+                    card_ref=ref,
+                    rank=rank,
+                    open_mode="resolve_locator",
+                )
+                if not result.ok:
+                    continue
+                detail_url = envelope.get("detail_url")
+                key_hash = envelope.get("provider_candidate_key_hash")
+                if (
+                    isinstance(detail_url, str)
+                    and detail_url
+                    and isinstance(key_hash, str)
+                    and (
+                        detail_open_claim_context is None
+                        or stable_liepin_detail_candidate_key_hash(detail_url) is not None
+                    )
                 ):
                     detail_urls_by_rank[rank] = detail_url
+                    detail_hashes_by_rank[rank] = key_hash
 
         def has_cached_url_for_remaining_candidate() -> bool:
             for card in card_items:
@@ -399,7 +402,11 @@ class LiepinSearchWorkflow:
                 if (selected := _card_ref_and_rank(card)) is not None
                 for ref, rank in (selected,)
                 if (detail_url := detail_urls_by_rank.get(rank)) is not None
-                if (provider_candidate_key_hash := stable_liepin_detail_candidate_key_hash(detail_url)) is not None
+                if (
+                    provider_candidate_key_hash := detail_hashes_by_rank.get(rank)
+                    or stable_liepin_detail_candidate_key_hash(detail_url)
+                )
+                is not None
             )
             save_continuation = getattr(self._site, "save_liepin_first_page_continuation", None)
             if callable(save_continuation):
@@ -445,7 +452,6 @@ class LiepinSearchWorkflow:
 
         opened = 0
         attempted_ranks: set[int] = set()
-        using_cached_card_items = False
         while opened < request.target_resumes:
             selected = _next_unattempted_card(card_items, attempted_ranks)
             if selected is None:
@@ -464,14 +470,13 @@ class LiepinSearchWorkflow:
             )
 
             cached_detail_url = detail_urls_by_rank.get(selected_rank)
-            provider_candidate_key_hash: str | None = None
+            provider_candidate_key_hash: str | None = detail_hashes_by_rank.get(selected_rank)
             before_browser_open_attempt: Callable[[], None] | None = None
             if detail_open_claim_context is not None:
-                provider_candidate_key_hash = (
-                    stable_liepin_detail_candidate_key_hash(cached_detail_url)
-                    if cached_detail_url is not None
-                    else None
-                )
+                if provider_candidate_key_hash is None and cached_detail_url is not None:
+                    provider_candidate_key_hash = (
+                        stable_liepin_detail_candidate_key_hash(cached_detail_url)
+                    )
                 if provider_candidate_key_hash is None:
                     last_detail_safe_reason = "liepin_opencli_candidate_identity_missing"
                     continue
@@ -491,46 +496,34 @@ class LiepinSearchWorkflow:
                 before_browser_open_attempt = record_browser_open_attempt
 
             try:
-                open_result = self._open_detail_with_retry(
-                    source_run_id=request.source_run_id,
-                    ref=selected_ref,
-                    rank=selected_rank,
-                    cached_detail_url=cached_detail_url,
-                    use_cached=using_cached_card_items or provider_candidate_key_hash is not None,
-                    before_browser_open_attempt=before_browser_open_attempt,
-                )
-                if not open_result.ok:
-                    last_detail_safe_reason = open_result.safe_reason_code or "liepin_opencli_detail_not_opened"
-                    failure_state = record_detail_open_claim_terminal_failure(
-                        provider_candidate_key_hash=provider_candidate_key_hash,
-                        safe_reason_code=last_detail_safe_reason,
-                    )
-                    if failure_state is not None:
-                        mark_candidate(selected_rank, failure_state)
+                if before_browser_open_attempt is not None:
+                    before_browser_open_attempt()
+                if provider_candidate_key_hash is None:
+                    # resolve_locator must have produced a durable locator first
+                    if cached_detail_url is not None:
+                        provider_candidate_key_hash = (
+                            stable_liepin_detail_candidate_key_hash(cached_detail_url)
+                        )
+                if provider_candidate_key_hash is None:
+                    last_detail_safe_reason = "liepin_opencli_candidate_identity_missing"
                     continue
-
-                wait_result = self._wait_detail_ready_transition(
+                _envelope, capture_result = self._site.run_liepin_details_operation(
                     source_run_id=request.source_run_id,
+                    card_ref=selected_ref,
                     rank=selected_rank,
-                )
-                if not wait_result.ok:
-                    last_detail_safe_reason = wait_result.safe_reason_code or "liepin_opencli_detail_not_opened"
-                    failure_state = record_detail_open_claim_terminal_failure(
-                        provider_candidate_key_hash=provider_candidate_key_hash,
-                        safe_reason_code=last_detail_safe_reason,
-                    )
-                    if failure_state is not None:
-                        mark_candidate(selected_rank, failure_state)
-                    continue
-
-                capture_result = self._capture_detail_transition(
-                    source_run_id=request.source_run_id,
-                    rank=selected_rank,
-                    require_ready=False,
-                    expected_provider_candidate_key_hash=provider_candidate_key_hash,
+                    open_mode="cached_locator",
+                    provider_candidate_key_hash=provider_candidate_key_hash,
+                    expected_provider_candidate_key_hash=(
+                        provider_candidate_key_hash
+                        if detail_open_claim_context is not None
+                        else None
+                    ),
                 )
                 if not capture_result.ok:
-                    last_detail_safe_reason = capture_result.safe_reason_code or "liepin_opencli_detail_not_opened"
+                    last_detail_safe_reason = (
+                        capture_result.safe_reason_code
+                        or "liepin_opencli_detail_not_opened"
+                    )
                     failure_state = record_detail_open_claim_terminal_failure(
                         provider_candidate_key_hash=provider_candidate_key_hash,
                         safe_reason_code=last_detail_safe_reason,
@@ -538,9 +531,10 @@ class LiepinSearchWorkflow:
                     if failure_state is not None:
                         mark_candidate(selected_rank, failure_state)
                     continue
-                if provider_candidate_key_hash is not None:
-                    assert detail_open_claim_context is not None
-                    detail_open_claim_context.detail_open_claim_ledger.mark_opened(provider_candidate_key_hash)
+                if detail_open_claim_context is not None and provider_candidate_key_hash is not None:
+                    detail_open_claim_context.detail_open_claim_ledger.mark_opened(
+                        provider_candidate_key_hash
+                    )
                     assert detail_claim_outcomes is not None
                     detail_claim_outcomes["detail_opened_count"] += 1
                     mark_candidate(selected_rank, "opened")
@@ -567,7 +561,6 @@ class LiepinSearchWorkflow:
             )
             if restored_page_id is None:
                 if has_cached_url_for_remaining_candidate():
-                    using_cached_card_items = True
                     continue
                 break
 
@@ -590,10 +583,7 @@ class LiepinSearchWorkflow:
             refreshed_card_items = _structured_card_items(refreshed)
             if refreshed_card_items and detail_open_claim_context is None:
                 card_items = refreshed_card_items
-                using_cached_card_items = False
                 remember_detail_urls(card_items)
-            else:
-                using_cached_card_items = has_cached_url_for_remaining_candidate()
             cards_seen_for_resume = max(cards_seen_for_resume, len(refreshed_card_items))
             self._append_event(
                 request.source_run_id,

@@ -80,16 +80,27 @@ class _LiepinSearchWorkflowSite:
     def observe_liepin_detail_state(self) -> OpenCliBrowserResult:
         return self.adapter.state()
 
-    def safe_liepin_detail_url_for_ref(self, ref: str) -> str | None:
-        return self.adapter._safe_liepin_detail_url_for_ref(ref)
+    def run_liepin_details_operation(
+        self,
+        *,
+        source_run_id: str,
+        card_ref: str,
+        rank: int,
+        open_mode: str,
+        provider_candidate_key_hash: str | None = None,
+        expected_provider_candidate_key_hash: str | None = None,
+    ) -> tuple[dict[str, object], OpenCliBrowserResult]:
+        return self.adapter.run_liepin_details_operation(
+            source_run_id=source_run_id,
+            card_ref=card_ref,
+            rank=rank,
+            open_mode=open_mode,
+            provider_candidate_key_hash=provider_candidate_key_hash,
+            expected_provider_candidate_key_hash=expected_provider_candidate_key_hash,
+        )
 
     def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult:
-        return self.adapter._open_liepin_detail(
-            source_run_id=source_run_id,
-            ref=ref,
-            rank=rank,
-            emit_events=False,
-        )
+        raise RuntimeError("liepin_details_direct_browser_forbidden")
 
     def open_liepin_detail_cached_url(
         self,
@@ -99,16 +110,10 @@ class _LiepinSearchWorkflowSite:
         rank: int,
         detail_url: str,
     ) -> OpenCliBrowserResult:
-        return self.adapter._open_liepin_detail_cached_url(
-            source_run_id=source_run_id,
-            ref=ref,
-            rank=rank,
-            detail_url=detail_url,
-            emit_events=False,
-        )
+        raise RuntimeError("liepin_details_direct_browser_forbidden")
 
     def wait_liepin_detail_ready(self, *, source_run_id: str, rank: int) -> OpenCliBrowserResult:
-        return self.adapter.wait_liepin_detail_ready(source_run_id=source_run_id, rank=rank)
+        raise RuntimeError("liepin_details_direct_browser_forbidden")
 
     def capture_liepin_detail_resume(
         self,
@@ -117,14 +122,7 @@ class _LiepinSearchWorkflowSite:
         rank: int,
         require_ready: bool = True,
     ) -> OpenCliBrowserResult:
-        if require_ready:
-            return self.adapter.capture_liepin_detail_resume(source_run_id=source_run_id, rank=rank)
-        return self.adapter._capture_liepin_detail_resume(
-            source_run_id=source_run_id,
-            rank=rank,
-            require_ready=False,
-            emit_events=False,
-        )
+        raise RuntimeError("liepin_details_direct_browser_forbidden")
 
     def _capture_liepin_detail_resume_claim_aware(
         self,
@@ -134,18 +132,15 @@ class _LiepinSearchWorkflowSite:
         expected_provider_candidate_key_hash: str,
         require_ready: bool = True,
     ) -> OpenCliBrowserResult:
-        return self.adapter._capture_liepin_detail_resume_claim_aware(
-            source_run_id=source_run_id,
-            rank=rank,
-            expected_provider_candidate_key_hash=expected_provider_candidate_key_hash,
-            require_ready=require_ready,
-            emit_events=False,
-        )
+        raise RuntimeError("liepin_details_direct_browser_forbidden")
 
     def discard_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> None:
         self.adapter._discard_collected_liepin_detail_resume(source_run_id=source_run_id, rank=rank)
 
     def restore_liepin_search_page(self) -> str | None:
+        if self.adapter._cards_operation_executor is not None:
+            # Cached-locator details opens do not require main-owned search restore.
+            return "source-port-managed"
         if self.adapter._automation.daemon_enabled:
             page_id, _before_urls = self.adapter._select_existing_liepin_search_tab(
                 expected_url=LIEPIN_RECRUITER_SEARCH_URL

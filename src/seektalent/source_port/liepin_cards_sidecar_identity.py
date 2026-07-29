@@ -40,7 +40,11 @@ def liepin_cards_sidecar_identity() -> SidecarHandshakeIdentity:
         protocol_major=1,
         protocol_min_minor=0,
         protocol_max_minor=0,
-        protocol_capabilities=("authenticated_framing", "liepin_cards_v1"),
+        protocol_capabilities=(
+            "authenticated_framing",
+            "liepin_cards_v1",
+            "liepin_details_v1",
+        ),
         expected_main_application_build_id=f"seektalent-main:{product_build_id}",
     )
 

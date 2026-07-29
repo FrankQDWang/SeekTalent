@@ -289,10 +289,95 @@ class _DeterministicPrivateClaimWorkflowSite:
     def observe_liepin_detail_state(self) -> OpenCliBrowserResult:
         return OpenCliBrowserResult(ok=True, action="observe_liepin_detail_state")
 
-    def safe_liepin_detail_url_for_ref(self, ref: str) -> str | None:
+    def _resolve_detail_url_for_ref(self, ref: str) -> str | None:
         if ref != "private-card-ref":
             return None
         return f"https://h.liepin.com/resume/showresumedetail/?res_id_encode={self._subject}"
+
+    def run_liepin_details_operation(
+        self,
+        *,
+        source_run_id: str,
+        card_ref: str,
+        rank: int,
+        open_mode: str,
+        provider_candidate_key_hash: str | None = None,
+        expected_provider_candidate_key_hash: str | None = None,
+    ) -> tuple[dict[str, object], OpenCliBrowserResult]:
+        del provider_candidate_key_hash
+        if open_mode == "resolve_locator":
+            detail_url = self._resolve_detail_url_for_ref(card_ref)
+            if detail_url is None:
+                envelope = {
+                    "status": "failed",
+                    "detail_url": None,
+                    "provider_candidate_key_hash": None,
+                    "safe_reason_code": "liepin_opencli_detail_not_opened",
+                }
+                return envelope, OpenCliBrowserResult(
+                    ok=False,
+                    action="resolve_locator",
+                    safe_reason_code="liepin_opencli_detail_not_opened",
+                )
+            key_hash = stable_liepin_detail_candidate_key_hash(detail_url)
+            assert key_hash is not None
+            envelope = {
+                "status": "succeeded",
+                "detail_url": detail_url,
+                "provider_candidate_key_hash": key_hash,
+                "safe_reason_code": None,
+            }
+            return envelope, OpenCliBrowserResult(ok=True, action="resolve_locator")
+
+        if open_mode == "cached_locator":
+            detail_url = self._resolve_detail_url_for_ref(card_ref)
+            open_result = self.open_liepin_detail_cached_url(
+                source_run_id=source_run_id,
+                ref=card_ref,
+                rank=rank,
+                detail_url=detail_url or "",
+            )
+            if not open_result.ok:
+                return (
+                    {
+                        "status": "failed",
+                        "detail_url": detail_url,
+                        "safe_reason_code": open_result.safe_reason_code,
+                    },
+                    open_result,
+                )
+            wait_result = self.wait_liepin_detail_ready(source_run_id=source_run_id, rank=rank)
+            if not wait_result.ok:
+                return (
+                    {
+                        "status": "failed",
+                        "detail_url": detail_url,
+                        "safe_reason_code": wait_result.safe_reason_code,
+                    },
+                    wait_result,
+                )
+            assert expected_provider_candidate_key_hash is not None
+            capture_result = self._capture_liepin_detail_resume_claim_aware(
+                source_run_id=source_run_id,
+                rank=rank,
+                expected_provider_candidate_key_hash=expected_provider_candidate_key_hash,
+                require_ready=False,
+            )
+            status = "succeeded" if capture_result.ok else "failed"
+            return (
+                {
+                    "status": status,
+                    "detail_url": detail_url,
+                    "provider_candidate_key_hash": expected_provider_candidate_key_hash,
+                    "safe_reason_code": capture_result.safe_reason_code,
+                },
+                capture_result,
+            )
+
+        raise RuntimeError("liepin_details_open_mode_invalid")
+
+    def safe_liepin_detail_url_for_ref(self, ref: str) -> str | None:
+        return self._resolve_detail_url_for_ref(ref)
 
     def open_liepin_detail(self, *, source_run_id: str, ref: str, rank: int) -> OpenCliBrowserResult:
         del source_run_id, ref, rank
