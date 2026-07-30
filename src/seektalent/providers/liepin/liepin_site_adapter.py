@@ -39,8 +39,6 @@ from seektalent.providers.liepin.opencli_filter_planning import (
     LIEPIN_FILTER_SECTION_LABELS,
     RETRYABLE_NATIVE_FILTER_REASONS,
     liepin_filter_actions,
-    native_filter_city_confirm_ref,
-    native_filter_city_picker_selection_contains,
     native_filter_clear_filters_ref,
     liepin_filter_menu_label,
     native_filter_control_ref_in_section,
@@ -2771,6 +2769,7 @@ class LiepinSiteAdapter:
         state = current_state
         for attempt_index in range(3):
             clicked_option = False
+            city_option_ref: str | None = None
             try:
                 state_text = _opencli_result_text(state)
                 if native_filter_selection_applied(state_text, section=section, label=label):
@@ -2826,7 +2825,7 @@ class LiepinSiteAdapter:
                     and section in {"current", "expected"}
                     and not native_filter_option_visible_in_section(state_text, section=section, label=label)
                 ):
-                    state = city_picker.find_liepin_city_filter_option(
+                    state, city_option_ref = city_picker.find_liepin_city_filter_option(
                         self,
                         section=section,
                         label=label,
@@ -2834,7 +2833,10 @@ class LiepinSiteAdapter:
                         events=events,
                     )
                     state_text = _opencli_result_text(state)
-                self._click_native_filter_option(label, state_text=state_text, section=section)
+                if city_option_ref is not None:
+                    self._click_native_filter_ref(city_option_ref)
+                else:
+                    self._click_native_filter_option(label, state_text=state_text, section=section)
                 clicked_option = True
                 state = self.state()
                 events.append(
@@ -2852,9 +2854,15 @@ class LiepinSiteAdapter:
                     filter_name == "city"
                     and section in {"current", "expected"}
                     and not native_filter_selection_applied(state_text, section=section, label=label)
-                    and native_filter_city_picker_selection_contains(state_text, label=label)
-                    and (confirm_ref := native_filter_city_confirm_ref(state_text)) is not None
                 ):
+                    pending_confirm, confirm_ref = city_picker.pending_confirm_ref(
+                        self, section=section, label=label, state_text=state_text
+                    )
+                    if pending_confirm and confirm_ref is None:
+                        raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
+                else:
+                    pending_confirm, confirm_ref = False, None
+                if pending_confirm and confirm_ref is not None:
                     self._click_native_filter_ref(confirm_ref)
                     events.append(
                         {
@@ -2956,21 +2964,7 @@ class LiepinSiteAdapter:
         return state
 
     def _liepin_city_choose_ref_from_dom(self, *, section: str) -> str | None:
-        if section not in {"current", "expected"}:
-            return None
-        try:
-            output = self._run_fixed_readonly_eval_probe(probe_name="liepin_city_choose_ref", ref=section).strip()
-        except OpenCliBrowserError:
-            return None
-        if not output or output == "null":
-            return None
-        try:
-            parsed = json.loads(output)
-        except json.JSONDecodeError:
-            parsed = output
-        if isinstance(parsed, str) and parsed.strip():
-            return parsed.strip()
-        return None
+        return city_picker.picker_control_ref(self, section=section)
 
     def _liepin_search_query_value_from_dom(self, *, ref: str) -> str:
         output = self._run_fixed_readonly_eval_probe(probe_name="liepin_search_query_value", ref=ref)

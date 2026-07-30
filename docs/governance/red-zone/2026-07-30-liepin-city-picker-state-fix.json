@@ -2,10 +2,11 @@
   "schema_version": "seektalent.red_zone_change.v1",
   "change_type": "boundary_cleanup",
   "summary": "Keep Liepin city selection within the requested section and drive the city picker from bounded semantic state.",
-  "rationale": "The live Liepin page exposes current city and expected city as different filters, while the adapter treated them as fallback aliases. The city picker can also expose its search input before its title text is observable, and same-name sidebar navigation is not a selectable city result. This change removes cross-section lookup and verification, observes bounded picker readiness without page text in traces, verifies the requested search input before accepting delayed suggestions, and excludes navigation nodes from selectable results.",
+  "rationale": "The live Liepin page exposes current city and expected city as different filters, while the adapter treated them as fallback aliases. The city picker can also expose its search input in the real DOM while WTSCLI state omits that semantic control, and same-name sidebar navigation is not a selectable city result. This change removes cross-section lookup and verification, adds one allowlisted readonly city-picker probe that returns only bounded refs and city state, verifies the requested search input before accepting delayed suggestions, and excludes navigation nodes from selectable results.",
   "red_files": [
     "src/seektalent/providers/liepin/liepin_city_picker.py",
     "src/seektalent/providers/liepin/liepin_site_adapter.py",
+    "src/seektalent/providers/liepin/liepin_site_parsing.py",
     "src/seektalent/providers/liepin/opencli_filter_planning.py"
   ],
   "verification": [

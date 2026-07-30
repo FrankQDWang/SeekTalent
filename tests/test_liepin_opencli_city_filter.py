@@ -1,12 +1,39 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import pytest
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserError, OpenCliBrowserResult
 from tests.test_liepin_opencli_browser import EvalCommands, FakeCommands, _runner
+
+
+class SequenceEvalCommands(FakeCommands):
+    def __init__(
+        self,
+        *,
+        eval_outputs: list[str],
+        outputs: dict[tuple[str, ...], str | list[str]] | None = None,
+    ) -> None:
+        super().__init__(outputs=outputs)
+        self.eval_outputs = eval_outputs
+
+    def run(
+        self,
+        argv: Sequence[str],
+        *,
+        timeout: int,
+        env: Mapping[str, str] | None = None,
+    ) -> str:
+        call = tuple(argv)
+        if len(call) >= 4 and call[3] == "eval":
+            del timeout
+            self.calls.append(call)
+            self.envs.append(env)
+            return self._resolve_output(self.eval_outputs)
+        return super().run(argv, timeout=timeout, env=env)
 
 
 def test_liepin_city_fill_rejects_an_explicitly_unverified_result() -> None:
@@ -93,6 +120,107 @@ def test_liepin_city_picker_uses_semantic_readiness_when_title_wait_is_unavailab
     assert result.ok is True
     assert ("opencli", "browser", "seektalent-liepin", "fill", "60", "上海") in commands.calls
     assert any(event.get("action_kind") == "observe_native_filter_menu" for event in events)
+    assert "SENTINEL_DOM_BODY_CANDIDATE_DATA" not in json.dumps(events, ensure_ascii=False)
+
+
+def test_liepin_city_picker_uses_focused_probe_when_state_omits_ready_modal(
+    tmp_path: Path,
+) -> None:
+    state_before = """
+    <span>期望城市：</span>
+    [23]<span>其他</span>
+    """
+    state_without_picker_semantics = """
+    <div aria-busy=false />
+    SENTINEL_DOM_BODY_CANDIDATE_DATA
+    """
+    state_after_expected_city = """
+    <span>期望城市：</span>
+    [23]<span>其他</span>
+    [50]<label class=tag-item selected>上海</label>
+    """
+    probe_ready = json.dumps(
+        {
+            "schema_version": "seektalent.liepin_city_picker.v1",
+            "section": "expected",
+            "controlRef": "23",
+            "open": True,
+            "searchInputRef": "60",
+            "searchValue": "",
+            "candidates": [],
+            "selectedCities": [],
+            "confirmRefs": ["66"],
+        },
+        ensure_ascii=False,
+    )
+    probe_current_suggestion = json.dumps(
+        {
+            "schema_version": "seektalent.liepin_city_picker.v1",
+            "section": "expected",
+            "controlRef": "23",
+            "open": True,
+            "searchInputRef": "60",
+            "searchValue": "上海",
+            "candidates": [{"ref": "64", "kind": "suggestion", "label": "中国 · 上海"}],
+            "selectedCities": [],
+            "confirmRefs": ["66"],
+        },
+        ensure_ascii=False,
+    )
+    probe_selected = json.dumps(
+        {
+            "schema_version": "seektalent.liepin_city_picker.v1",
+            "section": "expected",
+            "controlRef": "23",
+            "open": True,
+            "searchInputRef": "60",
+            "searchValue": "上海",
+            "candidates": [{"ref": "64", "kind": "suggestion", "label": "中国 · 上海"}],
+            "selectedCities": ["上海"],
+            "confirmRefs": ["66"],
+        },
+        ensure_ascii=False,
+    )
+    commands = SequenceEvalCommands(
+        eval_outputs=[
+            probe_ready,
+            probe_ready,
+            probe_current_suggestion,
+            probe_selected,
+        ],
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): (
+                "https://h.liepin.com/search/getConditionItem#session"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_without_picker_semantics,
+                state_without_picker_semantics,
+                state_without_picker_semantics,
+                state_after_expected_city,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "click", "23"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "fill", "60", "上海"): (
+                '{"filled":true,"verified":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "64"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "66"): '{"clicked":true}',
+        },
+    )
+    runner = _runner(commands, lease_dir=tmp_path)
+    events: list[dict[str, object]] = []
+
+    result = runner._select_liepin_native_filter(
+        filter_name="city",
+        section="expected",
+        label="上海",
+        current_state=OpenCliBrowserResult(ok=True, action="state", private_output=state_before),
+        events=events,
+    )
+
+    assert result.ok is True
+    assert ("opencli", "browser", "seektalent-liepin", "fill", "60", "上海") in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "click", "64") in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "click", "66") in commands.calls
     assert "SENTINEL_DOM_BODY_CANDIDATE_DATA" not in json.dumps(events, ensure_ascii=False)
 
 
@@ -457,9 +585,21 @@ def test_search_liepin_cards_selects_overseas_expected_city_from_city_picker(tmp
 王** 男 34岁 工作5年 硕士 美国-洛杉矶
 求职期望：美国 CFO/财务VP
 某美国公司 · CFO首席财务官 2021.01-至今
-"""
+    """
     commands = EvalCommands(
-        eval_output='"24"',
+        eval_output=json.dumps(
+            {
+                "schema_version": "seektalent.liepin_city_picker.v1",
+                "section": "expected",
+                "controlRef": "24",
+                "open": False,
+                "searchInputRef": None,
+                "searchValue": "",
+                "candidates": [],
+                "selectedCities": [],
+                "confirmRefs": [],
+            }
+        ),
         outputs={
             ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
             ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (

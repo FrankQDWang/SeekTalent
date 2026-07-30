@@ -24,7 +24,7 @@ from seektalent.providers.liepin.opencli_card_text import (
 
 FIXED_READONLY_EVAL_PROBES = frozenset(
     {
-        "liepin_city_choose_ref",
+        "liepin_city_picker_state",
         "liepin_detail_url_for_card",
         "liepin_detail_resume_payload",
         "liepin_search_query_value",
@@ -1081,8 +1081,8 @@ def _fixed_readonly_eval_probe_script(*, probe_name: str, ref: str) -> str:
         raise OpenCliBrowserError("liepin_opencli_forbidden_command")
     if probe_name == "liepin_detail_resume_payload":
         return _liepin_detail_resume_payload_probe_script()
-    if probe_name == "liepin_city_choose_ref":
-        return _liepin_city_choose_ref_probe_script(section=ref)
+    if probe_name == "liepin_city_picker_state":
+        return _liepin_city_picker_state_probe_script(section=ref)
     if probe_name == "liepin_search_query_value":
         return _liepin_search_query_value_probe_script(ref=ref)
     if probe_name != "liepin_detail_url_for_card":
@@ -1150,20 +1150,82 @@ def _liepin_search_query_value_probe_script(*, ref: str) -> str:
 """.replace("__REF__", ref)
 
 
-def _liepin_city_choose_ref_probe_script(*, section: str) -> str:
+def _liepin_city_picker_state_probe_script(*, section: str) -> str:
     if section not in {"current", "expected"}:
         raise OpenCliBrowserError("liepin_opencli_forbidden_command")
     title = "目前城市" if section == "current" else "期望城市"
-    return (
-        "(() => {"
-        "const clean = (value) => String(value || '').replace(/\\s+/g, '').trim();"
-        "const boxes = Array.from(document.querySelectorAll('.sfilter-city'));"
-        f"const box = boxes.find((item) => clean(item.querySelector('.search-item-title')?.textContent).includes('{title}'));"
-        "const button = box && Array.from(box.querySelectorAll('.btn-choose')).find((item) => clean(item.textContent) === '其他');"
-        "const ref = button && button.getAttribute('data-opencli-ref');"
-        "return /^[A-Za-z0-9_-]{1,64}$/.test(ref || '') ? ref : null;"
-        "})()"
-    )
+    return r"""
+(() => {
+  const schema = "seektalent.liepin_city_picker.v1";
+  const section = "__SECTION__";
+  const title = "__TITLE__";
+  const clean = (value) => String(value || "").replace(/\s+/g, " ").trim();
+  const compact = (value) => clean(value).replace(/\s+/g, "");
+  const validRef = (value) => /^[A-Za-z0-9_-]{1,64}$/.test(value || "");
+  const visible = (node) => {
+    if (!node || !node.ownerDocument || !node.getBoundingClientRect) return false;
+    const style = node.ownerDocument.defaultView.getComputedStyle(node);
+    if (!style || style.display === "none" || style.visibility === "hidden") return false;
+    const rect = node.getBoundingClientRect();
+    return rect.width > 0 && rect.height > 0;
+  };
+  const refOf = (node) => {
+    if (!node) return null;
+    const direct = node.getAttribute && node.getAttribute("data-opencli-ref");
+    if (validRef(direct)) return direct;
+    const child = node.querySelector && node.querySelector("[data-opencli-ref]");
+    const nested = child && child.getAttribute("data-opencli-ref");
+    return validRef(nested) ? nested : null;
+  };
+  const boxes = Array.from(document.querySelectorAll(".sfilter-city"));
+  const box = boxes.find((item) =>
+    compact(item.querySelector(".search-item-title")?.textContent).includes(title)
+  );
+  const control = box && Array.from(box.querySelectorAll(".btn-choose, button, label, span"))
+    .find((item) => visible(item) && compact(item.textContent) === "其他");
+  const searchInput = Array.from(document.querySelectorAll("input"))
+    .find((item) => visible(item) && clean(item.getAttribute("placeholder")) === "搜索城市");
+  const modal = searchInput && (
+    searchInput.closest("[role='dialog'], .ant-modal, .city-modal") || searchInput.parentElement
+  );
+  const candidateRoot = modal || document;
+  const candidates = [];
+  const addCandidate = (node, kind) => {
+    if (!visible(node) || node.closest("[role='menuitem'], .ant-city-menu-list")) return;
+    const ref = refOf(node);
+    const label = clean(node.textContent).slice(0, 80);
+    if (!ref || !label || candidates.some((item) => item.ref === ref)) return;
+    candidates.push({ ref, kind, label });
+  };
+  Array.from(candidateRoot.querySelectorAll(".suggest-list li")).slice(0, 12)
+    .forEach((node) => addCandidate(node, "suggestion"));
+  Array.from(candidateRoot.querySelectorAll(".data-list .ant-tag-checkable, .data-list li")).slice(0, 24)
+    .forEach((node) => addCandidate(node, "final"));
+  const selectedCities = Array.from(
+    candidateRoot.querySelectorAll(".ant-tag-checkable-checked")
+  )
+    .filter((node) => visible(node) && !node.closest(".ant-city-menu-list"))
+    .map((node) => clean(node.textContent).slice(0, 80))
+    .filter(Boolean)
+    .slice(0, 9);
+  const confirmRefs = Array.from(candidateRoot.querySelectorAll("button"))
+    .filter((node) => visible(node) && compact(node.textContent) === "确认")
+    .map(refOf)
+    .filter(Boolean)
+    .slice(0, 2);
+  return JSON.stringify({
+    schema_version: schema,
+    section,
+    controlRef: refOf(control),
+    open: Boolean(searchInput || candidates.length || selectedCities.length),
+    searchInputRef: refOf(searchInput),
+    searchValue: searchInput ? clean(searchInput.value).slice(0, 80) : "",
+    candidates: candidates.slice(0, 24),
+    selectedCities,
+    confirmRefs
+  });
+})()
+""".replace("__SECTION__", section).replace("__TITLE__", title)
 
 
 def _liepin_detail_resume_payload_probe_script() -> str:
