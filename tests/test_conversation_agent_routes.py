@@ -7,6 +7,7 @@ from fastapi.testclient import TestClient
 
 from seektalent.config import AppSettings
 from seektalent.progress import ProgressEvent
+from seektalent.runtime.orchestrator import WorkflowRuntime
 from seektalent_runtime_control.models import RuntimeControlEventInput, RuntimeRunRecord
 from seektalent_ui.server import create_app
 from tests.conversation_agent_test_support import sample_requirement_sheet, save_approved_requirement
@@ -63,6 +64,23 @@ class DeterministicRouteRuntime:
                     payload={"stage": "source", "sourceId": "cts", "candidateCount": 2},
                 )
             )
+        return {"status": "completed"}
+
+
+class CapturingLiepinWorkflowRuntime(WorkflowRuntime):
+    instances: list[CapturingLiepinWorkflowRuntime] = []
+
+    def __init__(self, settings: AppSettings) -> None:
+        self.settings = settings
+        self.source_operation_executor = None
+        self.received: dict[str, object] = {}
+        type(self).instances.append(self)
+
+    async def run_async(self, **kwargs: object) -> object:
+        self.received = dict(kwargs)
+        runtime_start_callback = kwargs.get("runtime_start_callback")
+        if callable(runtime_start_callback):
+            runtime_start_callback("workflow_runtime_liepin_factory_1")
         return {"status": "completed"}
 
 
@@ -210,7 +228,7 @@ def test_submit_jd_route_offloads_sync_work_to_threadpool(tmp_path: Path, monkey
     assert calls == ["submit_jd"]
 
 
-def test_workflow_start_route_uses_app_factory_runtime_wrapper(tmp_path: Path) -> None:
+def test_workflow_start_route_uses_app_factory_runtime(tmp_path: Path) -> None:
     DeterministicRouteRuntime.workflow_calls = []
     client = _client(tmp_path)
     _ensure_local_actor(client)
@@ -266,6 +284,104 @@ def test_workflow_start_route_uses_app_factory_runtime_wrapper(tmp_path: Path) -
     assert DeterministicRouteRuntime.workflow_calls
     assert DeterministicRouteRuntime.workflow_calls[0]["job_title"] == "Python 平台负责人"
     assert any(event.event_type == "runtime_source_result" for event in events)
+
+
+def test_agent_factory_persists_production_liepin_source_context(tmp_path: Path) -> None:
+    from seektalent_conversation_agent.factory import build_agent_service
+
+    settings = make_settings(
+        workspace_root=str(tmp_path),
+        liepin_worker_mode="opencli",
+        liepin_browser_action_backend="opencli",
+        liepin_session_store_key_id="factory-context-test",
+    )
+    service = build_agent_service(
+        settings=settings,
+        runtime_factory=DeterministicRouteRuntime,
+    )
+    runtime_store = service.service_action_adapter.runtime_store
+    executor = service.service_action_adapter.workflow_executor
+    assert runtime_store is not None
+    assert executor is not None
+    approved = save_approved_requirement(
+        runtime_store,
+        conversation_id="agent_conv_factory_context",
+    )
+
+    run = executor.enqueue_workflow_run(
+        conversation_id="agent_conv_factory_context",
+        workbench_session_id=None,
+        approved_requirement=approved,
+        job_title="AI Agent 工程师",
+        jd_text="工作地点：苏州、杭州",
+        notes=None,
+        source_ids=["liepin"],
+    )
+
+    snapshot = runtime_store.get_snapshot(runtime_run_id=run.runtime_run_id)
+    assert snapshot is not None
+    source_context = snapshot.snapshot["workflowInput"]["sourceContext"]
+    assert source_context["compliance_gate_ref"].startswith("gate_")
+
+
+def test_agent_factory_installs_liepin_cards_operation_executor(tmp_path: Path) -> None:
+    from seektalent.liepin_cards_source_operation import (
+        LiepinCardsSourceOperationExecutor,
+    )
+    from seektalent_conversation_agent.factory import build_agent_service
+
+    CapturingLiepinWorkflowRuntime.instances = []
+    settings = make_settings(
+        workspace_root=str(tmp_path),
+        liepin_worker_mode="opencli",
+        liepin_browser_action_backend="opencli",
+        liepin_session_store_key_id="factory-cards-test",
+    )
+    service = build_agent_service(
+        settings=settings,
+        runtime_factory=CapturingLiepinWorkflowRuntime,
+    )
+    runtime_store = service.service_action_adapter.runtime_store
+    executor = service.service_action_adapter.workflow_executor
+    assert runtime_store is not None
+    assert executor is not None
+    approved = save_approved_requirement(
+        runtime_store,
+        conversation_id="agent_conv_factory_cards",
+    )
+    run = executor.enqueue_workflow_run(
+        conversation_id="agent_conv_factory_cards",
+        workbench_session_id=None,
+        approved_requirement=approved,
+        job_title="AI Agent 工程师",
+        jd_text="工作地点：苏州、杭州",
+        notes=None,
+        source_ids=["liepin"],
+    )
+    claim = runtime_store.claim_next_runnable_run(
+        executor_id="factory-cards-worker",
+        claimed_at="2026-07-30T08:00:00.000000Z",
+        lease_expires_at="2099-01-01T00:00:00.000000Z",
+        runtime_run_id=run.runtime_run_id,
+    )
+    assert claim is not None
+
+    asyncio.run(
+        executor.execute_claimed_run(
+            runtime_run_id=run.runtime_run_id,
+            executor_id=claim.lease.executor_id,
+            attempt_no=claim.lease.attempt_no,
+        )
+    )
+
+    runtime = CapturingLiepinWorkflowRuntime.instances[-1]
+    assert isinstance(
+        runtime.source_operation_executor,
+        LiepinCardsSourceOperationExecutor,
+    )
+    source_context = runtime.received["source_context"]
+    assert isinstance(source_context, dict)
+    assert source_context["compliance_gate_ref"].startswith("gate_")
 
 
 def test_agent_message_user_text_route_uses_memory_recall_before_agent_run(tmp_path: Path) -> None:

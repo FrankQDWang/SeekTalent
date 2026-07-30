@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 
 from seektalent.config import AppSettings
 from seektalent.models import RequirementSheet
 from seektalent.prompting import PromptRegistry
+from seektalent.providers.liepin.runtime_context import (
+    local_opencli_liepin_source_context,
+)
 from seektalent_conversation_agent.budget import AgentBudgetPolicy
 from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_conversation_agent.service import ConversationAgentService
@@ -17,22 +20,6 @@ from seektalent_runtime_control.detail import RuntimeDetailService
 from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
 from seektalent_runtime_control.service import RuntimeControlService
 from seektalent_runtime_control.store import RuntimeControlStore
-
-
-class RuntimeLikeAdapter:
-    supports_resume_context = False
-
-    def __init__(self, runtime: object) -> None:
-        self.runtime = runtime
-
-    async def run_async(self, **kwargs: object) -> object:
-        run_async = getattr(self.runtime, "run_async", None)
-        if not callable(run_async):
-            raise ConversationAgentError("agent_workflow_runtime_unavailable")
-        result = run_async(**kwargs)
-        if not isinstance(result, Awaitable):
-            raise ConversationAgentError("agent_workflow_runtime_invalid_result")
-        return await result
 
 
 class RuntimeRequirementExecutor:
@@ -81,8 +68,9 @@ def build_agent_service(
     workflow_executor = WorkflowRuntimeExecutor(
         store=runtime_store,
         settings=settings,
-        runtime_factory=lambda: RuntimeLikeAdapter(runtime_factory(settings)),
+        runtime_factory=lambda: runtime_factory(settings),
         command_service=command_service,
+        source_context_provider=local_opencli_liepin_source_context,
     )
     detail_service = RuntimeDetailService(store=runtime_store)
     agent_prompt = PromptRegistry(settings.prompt_dir).load("conversation_agent")
