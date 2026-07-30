@@ -17,7 +17,7 @@ class SequenceEvalCommands(FakeCommands):
     def __init__(
         self,
         *,
-        eval_outputs: list[str],
+        eval_outputs: list[str | BaseException],
         outputs: dict[tuple[str, ...], str | list[str]] | None = None,
     ) -> None:
         super().__init__(outputs=outputs)
@@ -618,6 +618,79 @@ def test_liepin_city_picker_retry_reconciles_open_selected_picker_before_new_eff
     assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "64")) == 1
     assert ("opencli", "browser", "seektalent-liepin", "click", "66") in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "fill", "60", "上海") not in commands.calls
+
+
+def test_liepin_city_picker_retry_probe_unavailable_does_not_assume_picker_closed(
+    tmp_path: Path,
+) -> None:
+    state_before = """
+    <span>期望城市：</span>
+    [23]<span>其他</span>
+    """
+    picker_state = """
+    [60]<input autocomplete=off placeholder=搜索城市 type=text value=上海 />
+    """
+    selected_picker_state = """
+    [60]<input autocomplete=off placeholder=搜索城市 type=text value=上海 />
+    <i>已选（1/9）</i>
+    [66]<button><span>确认</span></button>
+    """
+    probe_candidate = json.dumps(
+        {
+            "schema_version": "seektalent.liepin_city_picker.v1",
+            "section": "expected",
+            "controlRef": "23",
+            "open": True,
+            "searchInputRef": "60",
+            "searchValue": "上海",
+            "candidates": [{"ref": "64", "kind": "suggestion", "label": "中国 · 上海"}],
+            "selectedCities": [],
+            "confirmRefs": ["66"],
+        },
+        ensure_ascii=False,
+    )
+    status_unavailable = OpenCliBrowserError("liepin_opencli_status_unavailable")
+    state_status_unavailable = subprocess.CalledProcessError(
+        1,
+        ["opencli"],
+        stderr="status unavailable",
+    )
+    commands = SequenceEvalCommands(
+        eval_outputs=[
+            probe_candidate,
+            probe_candidate,
+            status_unavailable,
+            status_unavailable,
+        ],
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): (
+                "https://h.liepin.com/search/getConditionItem#session"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                picker_state,
+                state_status_unavailable,
+                selected_picker_state,
+                selected_picker_state,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "click", "23"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "64"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "66"): '{"clicked":true}',
+        },
+    )
+
+    with pytest.raises(OpenCliBrowserError) as raised:
+        _runner(commands, lease_dir=tmp_path)._select_liepin_native_filter(
+            filter_name="city",
+            section="expected",
+            label="上海",
+            current_state=OpenCliBrowserResult(ok=True, action="state", private_output=state_before),
+            events=[],
+        )
+
+    assert raised.value.safe_reason_code == "liepin_opencli_status_unavailable"
+    assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "23")) == 1
+    assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "64")) == 1
+    assert ("opencli", "browser", "seektalent-liepin", "click", "66") not in commands.calls
 
 
 def test_liepin_city_picker_probe_rejects_confirm_when_only_other_city_is_selected(
