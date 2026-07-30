@@ -1183,18 +1183,34 @@ def _liepin_city_picker_state_probe_script(*, section: str) -> str:
   );
   const control = box && Array.from(box.querySelectorAll(".btn-choose, button, label, span"))
     .find((item) => visible(item) && compact(item.textContent) === "其他");
-  const searchInput = Array.from(document.querySelectorAll("input"))
-    .find((item) => visible(item) && clean(item.getAttribute("placeholder")) === "搜索城市");
+  const exactSearchInputs = Array.from(document.querySelectorAll("input"))
+    .filter((item) => clean(item.getAttribute("placeholder")) === "搜索城市");
+  const searchInputNode = exactSearchInputs[0] || null;
+  const searchInput = exactSearchInputs.find((item) => visible(item)) || null;
   const pickerAncestors = [];
   for (let node = searchInput && searchInput.parentElement; node && node !== document.body; node = node.parentElement) {
     pickerAncestors.push(node);
   }
+  const citySurfacePresent = pickerAncestors.some((node) =>
+    visible(node) && Boolean(node.querySelector(".suggest-list, .data-list, .ant-city-menu-list"))
+  );
+  const confirmPresent = pickerAncestors.some((node) =>
+    visible(node) && Array.from(node.querySelectorAll("button"))
+      .some((item) => visible(item) && compact(item.textContent) === "确认")
+  );
   const pickerRoot = pickerAncestors.find((node) => {
     const citySurface = node.querySelector(".suggest-list, .data-list, .ant-city-menu-list");
     const confirm = Array.from(node.querySelectorAll("button"))
       .some((item) => visible(item) && compact(item.textContent) === "确认");
     return visible(node) && Boolean(citySurface) && confirm;
   }) || null;
+  const pickerPhase = pickerRoot
+    ? "open"
+    : searchInput
+      ? "input_visible_root_incomplete"
+      : searchInputNode
+        ? "input_hidden"
+        : "closed";
   const candidateRoot = pickerRoot;
   const candidates = [];
   const addCandidate = (node, kind) => {
@@ -1231,7 +1247,12 @@ def _liepin_city_picker_state_probe_script(*, section: str) -> str:
     searchValue: pickerRoot ? clean(searchInput.value).slice(0, 80) : "",
     candidates: candidates.slice(0, 24),
     selectedCities,
-    confirmRefs
+    confirmRefs,
+    pickerPhase,
+    searchInputPresent: Boolean(searchInputNode),
+    searchInputVisible: Boolean(searchInput),
+    citySurfacePresent,
+    confirmPresent
   });
 })()
 """.replace("__SECTION__", section).replace("__TITLE__", title)

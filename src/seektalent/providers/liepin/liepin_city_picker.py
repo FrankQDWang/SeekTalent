@@ -34,6 +34,13 @@ def observe_picker_ready(
             site.wait_time(seconds=1)
         state = site.state()
         reason = state.safe_reason_code
+        probe_evidence: dict[str, object] = {
+            "probe_status": "not_observed",
+            "probe_search_input_present": None,
+            "probe_search_input_visible": None,
+            "probe_city_surface_present": None,
+            "probe_confirm_present": None,
+        }
         if state.ok:
             state_text = _opencli_result_text(state)
             if native_filter_selection_applied(state_text, section=section, label=label):
@@ -43,7 +50,10 @@ def observe_picker_ready(
             elif native_filter_city_picker_option_visible(state_text, label=label):
                 reason = "requested_city_option_ready"
             else:
-                picker_state = _picker_state_for_readiness(site, section=section)
+                picker_state, probe_evidence = _picker_state_for_readiness(
+                    site,
+                    section=section,
+                )
                 if picker_state is not None and picker_state.get("readinessIncomplete") is True:
                     reason = "city_picker_probe_incomplete"
                 elif picker_state is not None and _picker_selection_contains(picker_state, label=label):
@@ -65,6 +75,7 @@ def observe_picker_ready(
                 "phase": "city_picker_readiness",
                 "attempt": attempt,
                 "reason": reason,
+                **probe_evidence,
             }
         )
         if not state.ok:
@@ -454,6 +465,58 @@ def parse_picker_probe_output(
     ):
         raise OpenCliBrowserError("liepin_opencli_malformed_state")
     payload["confirmRefs"] = list(confirm_refs)
+    evidence_keys = (
+        "pickerPhase",
+        "searchInputPresent",
+        "searchInputVisible",
+        "citySurfacePresent",
+        "confirmPresent",
+    )
+    present_evidence_keys = tuple(key for key in evidence_keys if key in parsed)
+    if present_evidence_keys and len(present_evidence_keys) != len(evidence_keys):
+        raise OpenCliBrowserError("liepin_opencli_malformed_state")
+    if present_evidence_keys:
+        picker_phase = parsed["pickerPhase"]
+        readiness_evidence = (
+            parsed["searchInputPresent"],
+            parsed["searchInputVisible"],
+            parsed["citySurfacePresent"],
+            parsed["confirmPresent"],
+        )
+        evidence_is_consistent = (
+            picker_phase == "closed"
+            and readiness_evidence == (False, False, False, False)
+            or picker_phase == "input_hidden"
+            and readiness_evidence == (True, False, False, False)
+            or picker_phase == "input_visible_root_incomplete"
+            and readiness_evidence[:2] == (True, True)
+            and readiness_evidence[2:] != (True, True)
+            or picker_phase == "open"
+            and readiness_evidence == (True, True, True, True)
+        )
+        if (
+            picker_phase
+            not in {
+                "closed",
+                "input_hidden",
+                "input_visible_root_incomplete",
+                "open",
+            }
+            or not all(isinstance(value, bool) for value in readiness_evidence)
+            or parsed["open"] != (picker_phase == "open")
+            or not evidence_is_consistent
+        ):
+            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+        payload["pickerPhase"] = picker_phase
+        for key, value in zip(evidence_keys[1:], readiness_evidence, strict=True):
+            payload[key] = value
+    else:
+        is_open = parsed["open"]
+        payload["pickerPhase"] = "open" if is_open else "closed"
+        payload["searchInputPresent"] = is_open
+        payload["searchInputVisible"] = is_open
+        payload["citySurfacePresent"] = is_open
+        payload["confirmPresent"] = is_open
     if parsed["open"]:
         incomplete_open = (
             "searchInputRef" not in payload
@@ -494,17 +557,33 @@ def _picker_state_for_readiness(
     site: LiepinSiteAdapter,
     *,
     section: str,
-) -> dict[str, object] | None:
+) -> tuple[dict[str, object] | None, dict[str, object]]:
     try:
-        return _read_picker_state(
+        payload = _read_picker_state(
             site,
             section=section,
             allow_incomplete_open=True,
         )
     except OpenCliBrowserError as exc:
         if exc.safe_reason_code == "liepin_opencli_status_unavailable":
-            return None
+            return None, {
+                "probe_status": "unavailable",
+                "probe_search_input_present": None,
+                "probe_search_input_visible": None,
+                "probe_city_surface_present": None,
+                "probe_confirm_present": None,
+            }
         raise
+    probe_status = str(payload["pickerPhase"])
+    if payload.get("readinessIncomplete") is True:
+        probe_status = "open_incomplete"
+    return payload, {
+        "probe_status": probe_status,
+        "probe_search_input_present": payload["searchInputPresent"],
+        "probe_search_input_visible": payload["searchInputVisible"],
+        "probe_city_surface_present": payload["citySurfacePresent"],
+        "probe_confirm_present": payload["confirmPresent"],
+    }
 
 
 def _read_picker_state(

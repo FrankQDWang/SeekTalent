@@ -58,6 +58,25 @@ def _closed_picker_probe(*, control_ref: str = "23") -> str:
     )
 
 
+def _picker_probe_with_readiness(
+    *,
+    phase: str,
+    evidence: tuple[bool, bool, bool, bool],
+    control_ref: str = "23",
+) -> str:
+    payload = json.loads(_closed_picker_probe(control_ref=control_ref))
+    payload.update(
+        {
+            "pickerPhase": phase,
+            "searchInputPresent": evidence[0],
+            "searchInputVisible": evidence[1],
+            "citySurfacePresent": evidence[2],
+            "confirmPresent": evidence[3],
+        }
+    )
+    return json.dumps(payload, ensure_ascii=False)
+
+
 def _read_action_trace(tmp_path: Path, source_run_id: str) -> dict[str, object]:
     paths = list(
         (tmp_path / "protected" / "pi-trace" / source_run_id).glob(
@@ -1243,6 +1262,40 @@ def test_liepin_city_picker_probe_never_falls_back_to_document_scope() -> None:
     assert "modal || document" not in script
     assert "candidateRoot = pickerRoot" in script
     assert "open: Boolean(pickerRoot)" in script
+    assert "pickerPhase" in script
+    assert "searchInputPresent" in script
+    assert "searchInputVisible" in script
+    assert "citySurfacePresent" in script
+    assert "confirmPresent" in script
+
+
+@pytest.mark.parametrize(
+    "evidence",
+    [
+        {"pickerPhase": "closed"},
+        {
+            "pickerPhase": "open",
+            "searchInputPresent": True,
+            "searchInputVisible": True,
+            "citySurfacePresent": True,
+            "confirmPresent": True,
+        },
+    ],
+)
+def test_liepin_city_picker_probe_readiness_evidence_fails_closed_when_inconsistent(
+    evidence: dict[str, object],
+) -> None:
+    payload = json.loads(_closed_picker_probe())
+    payload.update(evidence)
+
+    with pytest.raises(OpenCliBrowserError) as raised:
+        city_picker.parse_picker_probe_output(
+            json.dumps(payload),
+            section="expected",
+            allow_incomplete_open=True,
+        )
+
+    assert raised.value.safe_reason_code == "liepin_opencli_malformed_state"
 
 
 def test_liepin_city_picker_closed_probe_rejects_base_page_modal_fields() -> None:
@@ -1313,6 +1366,123 @@ def test_liepin_city_picker_fails_closed_when_user_closes_picker(
 
     assert raised.value.safe_reason_code == "liepin_opencli_filter_option_unavailable"
     assert not any(call[3] == "fill" for call in commands.calls if len(call) > 3)
+
+
+@pytest.mark.parametrize(
+    ("readiness_probes", "expected_probe_status", "expected_probe_evidence"),
+    [
+        (
+            [
+                _picker_probe_with_readiness(
+                    phase="closed",
+                    evidence=(False, False, False, False),
+                )
+            ],
+            "closed",
+            (False, False, False, False),
+        ),
+        (
+            [
+                OpenCliBrowserError("liepin_opencli_status_unavailable"),
+            ],
+            "unavailable",
+            (None, None, None, None),
+        ),
+        (
+            [
+                _picker_probe_with_readiness(
+                    phase="input_visible_root_incomplete",
+                    evidence=(True, True, True, False),
+                )
+            ],
+            "input_visible_root_incomplete",
+            (True, True, True, False),
+        ),
+    ],
+)
+def test_liepin_city_picker_failed_canary_chain_records_focused_probe_status(
+    tmp_path: Path,
+    readiness_probes: list[str | BaseException],
+    expected_probe_status: str,
+    expected_probe_evidence: tuple[bool | None, bool | None, bool | None, bool | None],
+) -> None:
+    state_before = "<span>期望城市：</span>\n[23]<span>其他</span>"
+    commands = SequenceEvalCommands(
+        eval_outputs=[
+            _picker_probe_with_readiness(
+                phase="closed",
+                evidence=(False, False, False, False),
+            ),
+            *(readiness_probes * 3),
+        ],
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): (
+                "https://h.liepin.com/search/getConditionItem#session"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_before,
+                state_before,
+                state_before,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "click", "23"): (
+                '{"clicked":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "wait", "time", "1"): "{}",
+        },
+    )
+    events: list[dict[str, object]] = []
+
+    result = _runner(commands, lease_dir=tmp_path)._apply_liepin_native_filters(
+        native_filters={"city": {"section": "expected", "label": "苏州"}},
+        current_state=OpenCliBrowserResult(
+            ok=True,
+            action="state",
+            private_output=state_before,
+        ),
+        events=events,
+    )
+
+    assert result.ok is False
+    assert result.safe_reason_code == "liepin_opencli_filter_unapplied"
+    assert commands.calls.count(
+        ("opencli", "browser", "seektalent-liepin", "click", "23")
+    ) == 1
+    opened = [
+        event
+        for event in events
+        if event.get("action_kind") == "open_native_filter_menu"
+    ]
+    assert len(opened) == 1
+    assert opened[0]["control_authority"] == "focused_probe"
+    readiness = [
+        event
+        for event in events
+        if event.get("phase") == "city_picker_readiness"
+    ]
+    assert [event["attempt"] for event in readiness] == [1, 2, 3]
+    assert [event["reason"] for event in readiness] == [
+        "city_picker_not_ready",
+        "city_picker_not_ready",
+        "city_picker_not_ready",
+    ]
+    assert [event["probe_status"] for event in readiness] == [
+        expected_probe_status,
+        expected_probe_status,
+        expected_probe_status,
+    ]
+    assert all("probe_search_input_present" in event for event in readiness)
+    assert all("probe_search_input_visible" in event for event in readiness)
+    assert all("probe_city_surface_present" in event for event in readiness)
+    assert all("probe_confirm_present" in event for event in readiness)
+    assert [
+        (
+            event["probe_search_input_present"],
+            event["probe_search_input_visible"],
+            event["probe_city_surface_present"],
+            event["probe_confirm_present"],
+        )
+        for event in readiness
+    ] == [expected_probe_evidence] * 3
 
 
 def test_search_liepin_cards_uses_other_city_picker_for_expected_city(tmp_path: Path) -> None:

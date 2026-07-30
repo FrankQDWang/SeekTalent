@@ -2780,11 +2780,9 @@ class LiepinSiteAdapter:
         state = current_state
         reconcile_city_picker_before_retry = False
         picker_effect_started = False
-
         def mark_picker_effect_started() -> None:
             nonlocal picker_effect_started
             picker_effect_started = True
-
         for attempt_index in range(3):
             clicked_option = False
             picker_effect_started = False
@@ -2819,9 +2817,12 @@ class LiepinSiteAdapter:
                     force_city_picker
                     or not native_filter_option_visible_in_section(state_text, section=section, label=label)
                 ):
+                    control_authority = "state_fallback"
                     if exact_city_filter:
                         control_ref = self._liepin_city_choose_ref_from_dom(section=section)
-                        if control_ref is None:
+                        if control_ref is not None:
+                            control_authority = "focused_probe"
+                        else:
                             control_ref = native_filter_control_ref_in_section(state_text, section=section)
                     else:
                         control_ref = native_filter_control_ref_in_section(state_text, section=section)
@@ -2830,9 +2831,11 @@ class LiepinSiteAdapter:
                     if control_ref is not None:
                         self._click_native_filter_ref(control_ref)
                     else:
+                        control_authority = "menu_fallback"
                         self._click_native_filter_menu(filter_name, section=section)
                     events.append(
-                        dict(action_kind="open_native_filter_menu", filter=filter_name, section=section, value=label, ok=True)
+                        dict(action_kind="open_native_filter_menu", filter=filter_name, section=section, value=label,
+                             ok=True, control_authority=control_authority, control_ref_present=control_ref is not None)
                     )
                     if exact_city_filter:
                         city_picker_active = True
