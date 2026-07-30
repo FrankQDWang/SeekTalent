@@ -101,6 +101,17 @@ def test_liepin_filter_selection_title_chip_stops_at_next_title_boundary() -> No
     assert native_filter_selection_applied(state_text, section="expected", label="苏州") is False
 
 
+def test_liepin_filter_selection_title_chip_stops_before_same_depth_candidate_body() -> None:
+    state_text = """
+    [50]<label title=期望城市 />
+      [51]<span role=img tabindex=-1 />
+    王** 男 34岁 工作5年 硕士 上海
+    求职期望：上海 数据开发专家
+    """
+
+    assert native_filter_selection_applied(state_text, section="expected", label="上海") is False
+
+
 def test_liepin_filter_planning_uses_other_city_picker_for_secondary_city() -> None:
     state_text = """
     [20]<label>期望城市：</label>
