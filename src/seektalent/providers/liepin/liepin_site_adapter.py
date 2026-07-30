@@ -2814,6 +2814,7 @@ class LiepinSiteAdapter:
         events: list[dict[str, object]],
     ) -> OpenCliBrowserResult:
         state = current_state
+        reconcile_city_picker_before_retry = False
         for attempt_index in range(3):
             clicked_option = False
             city_option_ref: str | None = None
@@ -2835,8 +2836,12 @@ class LiepinSiteAdapter:
                         }
                     )
                     return state
-                if exact_city_filter and attempt_index > 0:
-                    city_picker_active = city_picker.picker_is_open(self, section=section)
+                if exact_city_filter and reconcile_city_picker_before_retry:
+                    picker_state = city_picker.picker_open_state(self, section=section)
+                    if picker_state == "unavailable":
+                        raise OpenCliBrowserError("liepin_opencli_status_unavailable")
+                    city_picker_active = picker_state == "open"
+                    reconcile_city_picker_before_retry = False
                 force_city_picker = exact_city_filter and attempt_index > 0 and not city_picker_active
                 if not city_picker_active and (
                     force_city_picker
@@ -2876,20 +2881,10 @@ class LiepinSiteAdapter:
                     if native_filter_selection_applied(state_text, section=section, label=label):
                         return state
                 if city_picker_active:
-                    pending_confirm, confirm_ref = city_picker.pending_confirm_ref(
-                        self, section=section, label=label, state_text=state_text
+                    state, city_option_ref, pending_confirm, confirm_ref = city_picker.resolve_picker_action(
+                        self, section=section, label=label, state=state, state_text=state_text, events=events
                     )
-                    if pending_confirm and confirm_ref is None:
-                        raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
-                    if not pending_confirm:
-                        state, city_option_ref = city_picker.find_liepin_city_filter_option(
-                            self,
-                            section=section,
-                            label=label,
-                            current_state=state,
-                            events=events,
-                        )
-                        state_text = _opencli_result_text(state)
+                    state_text = _opencli_result_text(state)
                 if not pending_confirm:
                     if city_option_ref is not None:
                         self._click_native_filter_ref(city_option_ref)
@@ -2996,6 +2991,10 @@ class LiepinSiteAdapter:
                     raise
                 if exc.safe_reason_code not in RETRYABLE_NATIVE_FILTER_REASONS or attempt_index == 2:
                     raise
+                reconcile_city_picker_before_retry = reconcile_city_picker_before_retry or (
+                    exact_city_filter and clicked_option
+                    and exc.safe_reason_code == "liepin_opencli_status_unavailable"
+                )
                 events.append(
                     {
                         "action_kind": "apply_native_filter_retry",
