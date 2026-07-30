@@ -131,7 +131,21 @@ def native_filter_selection_applied(state_text: str, *, section: str, label: str
                 None,
             )
             if title_section:
-                chip_text = _normalize_liepin_filter_text("".join(lines[index : index + 6]))
+                chip_lines = [raw_line]
+                parent_indent = len(raw_line) - len(raw_line.lstrip())
+                for child_line in lines[index + 1 :]:
+                    normalized_child = _normalize_liepin_filter_text(child_line)
+                    if not normalized_child:
+                        continue
+                    child_indent = len(child_line) - len(child_line.lstrip())
+                    if child_indent <= parent_indent:
+                        break
+                    if "title=" in normalized_child or _line_starts_known_filter_section(child_line):
+                        break
+                    if "<label" in child_line:
+                        break
+                    chip_lines.append(child_line)
+                chip_text = _normalize_liepin_filter_text("".join(chip_lines))
                 if any(candidate in chip_text for candidate in accepted_labels):
                     return True
             continue

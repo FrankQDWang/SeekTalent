@@ -1185,10 +1185,17 @@ def _liepin_city_picker_state_probe_script(*, section: str) -> str:
     .find((item) => visible(item) && compact(item.textContent) === "其他");
   const searchInput = Array.from(document.querySelectorAll("input"))
     .find((item) => visible(item) && clean(item.getAttribute("placeholder")) === "搜索城市");
-  const modal = searchInput && (
-    searchInput.closest("[role='dialog'], .ant-modal, .city-modal") || searchInput.parentElement
-  );
-  const candidateRoot = modal || document;
+  const pickerAncestors = [];
+  for (let node = searchInput && searchInput.parentElement; node && node !== document.body; node = node.parentElement) {
+    pickerAncestors.push(node);
+  }
+  const pickerRoot = pickerAncestors.find((node) => {
+    const citySurface = node.querySelector(".suggest-list, .data-list, .ant-city-menu-list");
+    const confirm = Array.from(node.querySelectorAll("button"))
+      .some((item) => visible(item) && compact(item.textContent) === "确认");
+    return visible(node) && Boolean(citySurface) && confirm;
+  }) || null;
+  const candidateRoot = pickerRoot;
   const candidates = [];
   const addCandidate = (node, kind) => {
     if (!visible(node) || node.closest("[role='menuitem'], .ant-city-menu-list")) return;
@@ -1197,18 +1204,20 @@ def _liepin_city_picker_state_probe_script(*, section: str) -> str:
     if (!ref || !label || candidates.some((item) => item.ref === ref)) return;
     candidates.push({ ref, kind, label });
   };
-  Array.from(candidateRoot.querySelectorAll(".suggest-list li")).slice(0, 12)
+  Array.from(candidateRoot ? candidateRoot.querySelectorAll(".suggest-list li") : []).slice(0, 12)
     .forEach((node) => addCandidate(node, "suggestion"));
-  Array.from(candidateRoot.querySelectorAll(".data-list .ant-tag-checkable, .data-list li")).slice(0, 24)
+  Array.from(
+    candidateRoot ? candidateRoot.querySelectorAll(".data-list .ant-tag-checkable, .data-list li") : []
+  ).slice(0, 24)
     .forEach((node) => addCandidate(node, "final"));
   const selectedCities = Array.from(
-    candidateRoot.querySelectorAll(".ant-tag-checkable-checked")
+    candidateRoot ? candidateRoot.querySelectorAll(".ant-tag-checkable-checked") : []
   )
     .filter((node) => visible(node) && !node.closest(".ant-city-menu-list"))
     .map((node) => clean(node.textContent).slice(0, 80))
     .filter(Boolean)
     .slice(0, 9);
-  const confirmRefs = Array.from(candidateRoot.querySelectorAll("button"))
+  const confirmRefs = Array.from(candidateRoot ? candidateRoot.querySelectorAll("button") : [])
     .filter((node) => visible(node) && compact(node.textContent) === "确认")
     .map(refOf)
     .filter(Boolean)
@@ -1217,9 +1226,9 @@ def _liepin_city_picker_state_probe_script(*, section: str) -> str:
     schema_version: schema,
     section,
     controlRef: refOf(control),
-    open: Boolean(searchInput || candidates.length || selectedCities.length),
-    searchInputRef: refOf(searchInput),
-    searchValue: searchInput ? clean(searchInput.value).slice(0, 80) : "",
+    open: Boolean(pickerRoot),
+    searchInputRef: pickerRoot ? refOf(searchInput) : null,
+    searchValue: pickerRoot ? clean(searchInput.value).slice(0, 80) : "",
     candidates: candidates.slice(0, 24),
     selectedCities,
     confirmRefs

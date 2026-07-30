@@ -207,6 +207,8 @@ def picker_selection_contains(payload: dict[str, object], *, label: str) -> bool
 
 
 def picker_confirm_ref(payload: dict[str, object]) -> str | None:
+    if payload.get("open") is not True:
+        return None
     refs = payload.get("confirmRefs")
     if not isinstance(refs, list):
         return None
@@ -218,6 +220,11 @@ def picker_control_ref(site: LiepinSiteAdapter, *, section: str) -> str | None:
     payload = _picker_state_or_none(site, section=section)
     control_ref = payload.get("controlRef") if payload is not None else None
     return control_ref if isinstance(control_ref, str) else None
+
+
+def picker_is_open(site: LiepinSiteAdapter, *, section: str) -> bool:
+    payload = _picker_state_or_none(site, section=section)
+    return payload is not None and payload.get("open") is True
 
 
 def pending_confirm_ref(
@@ -308,6 +315,17 @@ def parse_picker_probe_output(output: str, *, section: str) -> dict[str, object]
     ):
         raise OpenCliBrowserError("liepin_opencli_malformed_state")
     payload["confirmRefs"] = list(confirm_refs)
+    if parsed["open"]:
+        if "searchInputRef" not in payload:
+            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+    elif (
+        "searchInputRef" in payload
+        or payload["searchValue"]
+        or payload["candidates"]
+        or payload["selectedCities"]
+        or payload["confirmRefs"]
+    ):
+        raise OpenCliBrowserError("liepin_opencli_malformed_state")
     return payload
 
 
@@ -331,11 +349,15 @@ def _picker_state_or_none(
 
 
 def _picker_search_matches(payload: dict[str, object], *, label: str) -> bool:
+    if payload.get("open") is not True:
+        return False
     value = payload.get("searchValue")
     return isinstance(value, str) and _normalized_city(value) == _normalized_city(label)
 
 
 def _picker_selection_contains(payload: dict[str, object], *, label: str) -> bool:
+    if payload.get("open") is not True:
+        return False
     selected = payload.get("selectedCities")
     return isinstance(selected, list) and any(
         isinstance(value, str) and _city_label_matches(value, label)
@@ -344,6 +366,8 @@ def _picker_selection_contains(payload: dict[str, object], *, label: str) -> boo
 
 
 def _picker_candidate_ref(payload: dict[str, object], *, label: str) -> str | None:
+    if payload.get("open") is not True:
+        return None
     candidates = payload.get("candidates")
     if not isinstance(candidates, list):
         return None
@@ -371,7 +395,7 @@ def _city_label_matches(visible_label: str, requested_label: str) -> bool:
     requested = _normalized_city(requested_label)
     if not visible or not requested:
         return False
-    return visible == requested or visible.endswith(f"·{requested}")
+    return visible in {requested, f"全{requested}"} or visible.endswith(f"·{requested}")
 
 
 def _normalized_city(value: str) -> str:

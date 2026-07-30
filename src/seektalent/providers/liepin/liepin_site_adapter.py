@@ -2817,6 +2817,10 @@ class LiepinSiteAdapter:
         for attempt_index in range(3):
             clicked_option = False
             city_option_ref: str | None = None
+            exact_city_filter = filter_name == "city" and section in {"current", "expected"}
+            city_picker_active = False
+            pending_confirm = False
+            confirm_ref: str | None = None
             try:
                 state_text = _opencli_result_text(state)
                 if native_filter_selection_applied(state_text, section=section, label=label):
@@ -2831,12 +2835,15 @@ class LiepinSiteAdapter:
                         }
                     )
                     return state
-                force_city_picker = filter_name == "city" and section in {"current", "expected"} and attempt_index > 0
-                if force_city_picker or not native_filter_option_visible_in_section(
-                    state_text, section=section, label=label
+                if exact_city_filter and attempt_index > 0:
+                    city_picker_active = city_picker.picker_is_open(self, section=section)
+                force_city_picker = exact_city_filter and attempt_index > 0 and not city_picker_active
+                if not city_picker_active and (
+                    force_city_picker
+                    or not native_filter_option_visible_in_section(state_text, section=section, label=label)
                 ):
                     control_ref = native_filter_control_ref_in_section(state_text, section=section)
-                    if control_ref is None and filter_name == "city" and section in {"current", "expected"}:
+                    if control_ref is None and exact_city_filter:
                         control_ref = self._liepin_city_choose_ref_from_dom(section=section)
                     if control_ref is not None:
                         self._click_native_filter_ref(control_ref)
@@ -2851,7 +2858,8 @@ class LiepinSiteAdapter:
                             "ok": True,
                         }
                     )
-                    if filter_name == "city" and section in {"current", "expected"}:
+                    if exact_city_filter:
+                        city_picker_active = True
                         state = city_picker.observe_picker_ready(self, section=section, label=label, events=events)
                     else:
                         self._wait_for_text_condition(label)
@@ -2867,48 +2875,48 @@ class LiepinSiteAdapter:
                     state_text = _opencli_result_text(state)
                     if native_filter_selection_applied(state_text, section=section, label=label):
                         return state
-                if (
-                    filter_name == "city"
-                    and section in {"current", "expected"}
-                    and not native_filter_option_visible_in_section(state_text, section=section, label=label)
-                ):
-                    state, city_option_ref = city_picker.find_liepin_city_filter_option(
-                        self,
-                        section=section,
-                        label=label,
-                        current_state=state,
-                        events=events,
-                    )
-                    state_text = _opencli_result_text(state)
-                if city_option_ref is not None:
-                    self._click_native_filter_ref(city_option_ref)
-                else:
-                    self._click_native_filter_option(label, state_text=state_text, section=section)
-                clicked_option = True
-                state = self.state()
-                events.append(
-                    {
-                        "action_kind": "observe_after_native_filter",
-                        "filter": filter_name,
-                        "section": section,
-                        "ok": state.ok,
-                    }
-                )
-                if not state.ok:
-                    raise OpenCliBrowserError(state.safe_reason_code)
-                state_text = _opencli_result_text(state)
-                if (
-                    filter_name == "city"
-                    and section in {"current", "expected"}
-                    and not native_filter_selection_applied(state_text, section=section, label=label)
-                ):
+                if city_picker_active:
                     pending_confirm, confirm_ref = city_picker.pending_confirm_ref(
                         self, section=section, label=label, state_text=state_text
                     )
                     if pending_confirm and confirm_ref is None:
                         raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
-                else:
-                    pending_confirm, confirm_ref = False, None
+                    if not pending_confirm:
+                        state, city_option_ref = city_picker.find_liepin_city_filter_option(
+                            self,
+                            section=section,
+                            label=label,
+                            current_state=state,
+                            events=events,
+                        )
+                        state_text = _opencli_result_text(state)
+                if not pending_confirm:
+                    if city_option_ref is not None:
+                        self._click_native_filter_ref(city_option_ref)
+                    else:
+                        self._click_native_filter_option(label, state_text=state_text, section=section)
+                    clicked_option = True
+                    state = self.state()
+                    events.append(
+                        {
+                            "action_kind": "observe_after_native_filter",
+                            "filter": filter_name,
+                            "section": section,
+                            "ok": state.ok,
+                        }
+                    )
+                    if not state.ok:
+                        raise OpenCliBrowserError(state.safe_reason_code)
+                    state_text = _opencli_result_text(state)
+                    if (
+                        exact_city_filter
+                        and not native_filter_selection_applied(state_text, section=section, label=label)
+                    ):
+                        pending_confirm, confirm_ref = city_picker.pending_confirm_ref(
+                            self, section=section, label=label, state_text=state_text
+                        )
+                        if pending_confirm and confirm_ref is None:
+                            raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
                 if pending_confirm and confirm_ref is not None:
                     self._click_native_filter_ref(confirm_ref)
                     events.append(
