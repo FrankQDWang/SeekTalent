@@ -361,7 +361,7 @@ def test_agent_factory_installs_liepin_cards_operation_executor(tmp_path: Path) 
     claim = runtime_store.claim_next_runnable_run(
         executor_id="factory-cards-worker",
         claimed_at="2026-07-30T08:00:00.000000Z",
-        lease_expires_at="2026-07-30T08:01:00.000000Z",
+        lease_expires_at="2099-01-01T00:00:00.000000Z",
         runtime_run_id=run.runtime_run_id,
     )
     assert claim is not None
