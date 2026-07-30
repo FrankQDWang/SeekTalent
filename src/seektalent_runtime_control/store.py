@@ -5687,6 +5687,10 @@ def _recoverable_checkpoint_from_run_row(
             run_source_ids=run_source_ids,
             run_source_ids_valid=run_source_ids_valid,
             candidate_truth_valid=candidate_truth_valid,
+            source_operations_main_committed=_all_source_operations_main_committed(
+                conn,
+                runtime_run_id=run_row["runtime_run_id"],
+            ),
         ),
     )
     if invalid_reason is not None:
@@ -5695,6 +5699,27 @@ def _recoverable_checkpoint_from_run_row(
             reason_code=invalid_reason,
         )
     return checkpoint
+
+
+def _all_source_operations_main_committed(
+    conn: sqlite3.Connection,
+    *,
+    runtime_run_id: str,
+) -> bool:
+    row = conn.execute(
+        """
+        SELECT 1
+        FROM runtime_control_source_operations
+        WHERE runtime_run_id = ?
+          AND (
+            operation_phase != 'main_committed'
+            OR main_commit_ref IS NULL
+          )
+        LIMIT 1
+        """,
+        (runtime_run_id,),
+    ).fetchone()
+    return row is None
 
 
 def _checkpoint_continuation_cursor(

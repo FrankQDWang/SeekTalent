@@ -170,6 +170,161 @@ def test_detail_claim_high_watermark_can_advance_after_checkpoint(tmp_path) -> N
     ].browser_open_attempt_count == 1
 
 
+def test_recovery_requires_every_source_operation_to_be_main_committed(
+    tmp_path,
+) -> None:
+    store = _seed_running_store(tmp_path)
+    checkpoint = store.write_checkpoint_v2(
+        checkpoint_id="checkpoint-source-operation-gate",
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-1",
+        attempt_no=1,
+        stage="finalization",
+        round_no=None,
+        safe_boundary="before_finalization",
+        accepted_requirement_revision_id="approved-1",
+        source_ids=["liepin"],
+        projection=checkpoint_projection(_run_state()),
+        detail_claim_revision=0,
+        detail_claim_hash=None,
+        created_at="2026-07-28T00:00:02.000000Z",
+    )
+    with store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO runtime_control_source_operations (
+              runtime_run_id, operation_id, source_id, operation_kind,
+              canonical_request_hash, idempotency_key,
+              accepted_requirement_revision_id, runtime_attempt_no,
+              runtime_attempt_authority_ref, operation_phase,
+              dispatch_intent_ref, conclusive_observation_ref,
+              source_operation_disposition, retry_posture,
+              reconciliation_revision, main_commit_ref, ledger_revision
+            )
+            VALUES (?, ?, 'liepin', 'cards', ?, ?, ?, 1, ?,
+                    'observed', ?, ?, 'completed', 'no_retry', 0, NULL, 3)
+            """,
+            (
+                "runtime_run_1",
+                "operation-recovery-gate",
+                "a" * 64,
+                "idempotency-recovery-gate",
+                "approved-1",
+                "runtime-attempt://runtime_run_1/1",
+                "dispatch://operation-recovery-gate",
+                "observation://operation-recovery-gate",
+            ),
+        )
+
+    blocked = store.get_latest_recoverable_checkpoint(
+        runtime_run_id="runtime_run_1"
+    )
+    assert blocked == RuntimeCheckpointLoadFailure(
+        checkpoint_id=checkpoint.checkpoint_id,
+        reason_code="runtime_checkpoint_safe_boundary_invalid",
+    )
+
+    with store._connect() as conn:
+        conn.execute(
+            """
+            UPDATE runtime_control_source_operations
+            SET operation_phase = 'main_committed',
+                main_commit_ref = ?,
+                ledger_revision = ledger_revision + 1
+            WHERE runtime_run_id = ? AND operation_id = ?
+            """,
+            (
+                "main-commit://operation-recovery-gate",
+                "runtime_run_1",
+                "operation-recovery-gate",
+            ),
+        )
+
+    assert store.get_latest_recoverable_checkpoint(
+        runtime_run_id="runtime_run_1"
+    ) == checkpoint
+
+
+def test_exact_latest_checkpoint_recovers_same_run_without_replaying_source_effect(
+    tmp_path,
+) -> None:
+    from seektalent_runtime_control.recovery import RuntimeRecoveryService
+
+    store = _seed_running_store(tmp_path)
+    checkpoint = store.write_checkpoint_v2(
+        checkpoint_id="checkpoint-same-run-recovery",
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-1",
+        attempt_no=1,
+        stage="round",
+        round_no=1,
+        safe_boundary="after_round_controller",
+        accepted_requirement_revision_id="approved-1",
+        source_ids=["liepin"],
+        projection=checkpoint_projection(_state_with_round_and_finalization()),
+        detail_claim_revision=0,
+        detail_claim_hash=None,
+        created_at="2026-07-28T00:00:02.000000Z",
+    )
+    with store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO runtime_control_source_operations (
+              runtime_run_id, operation_id, source_id, operation_kind,
+              canonical_request_hash, idempotency_key,
+              accepted_requirement_revision_id, runtime_attempt_no,
+              runtime_attempt_authority_ref, operation_phase,
+              dispatch_intent_ref, conclusive_observation_ref,
+              source_operation_disposition, retry_posture,
+              reconciliation_revision, main_commit_ref, ledger_revision
+            )
+            VALUES (?, ?, 'liepin', 'cards', ?, ?, ?, 1, ?,
+                    'main_committed', ?, ?, 'completed', 'no_retry', 0, ?, 4)
+            """,
+            (
+                "runtime_run_1",
+                "operation-already-committed",
+                "b" * 64,
+                "idempotency-already-committed",
+                "approved-1",
+                "runtime-attempt://runtime_run_1/1",
+                "dispatch://operation-already-committed",
+                "observation://operation-already-committed",
+                "main-commit://operation-already-committed",
+            ),
+        )
+
+    decisions = RuntimeRecoveryService(
+        store=store,
+        now=lambda: "2026-07-28T00:10:01.000000Z",
+    ).recover_start_timeouts(resume_recoverable=True)
+    lease = store.acquire_executor_lease(
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-2",
+        acquired_at="2026-07-28T00:10:02.000000Z",
+        lease_expires_at="2026-07-28T00:20:02.000000Z",
+    )
+
+    assert [decision.reason_code for decision in decisions] == [
+        "runtime_checkpoint_restored"
+    ]
+    run = store.get_run("runtime_run_1")
+    assert run.status == "resume_requested"
+    assert lease.runtime_run_id == "runtime_run_1"
+    assert lease.attempt_no == 2
+    assert run.latest_checkpoint_id == checkpoint.checkpoint_id
+    with store._connect() as conn:
+        operation_count = conn.execute(
+            """
+            SELECT COUNT(*)
+            FROM runtime_control_source_operations
+            WHERE runtime_run_id = ?
+            """,
+            ("runtime_run_1",),
+        ).fetchone()[0]
+    assert operation_count == 1
+
+
 def test_checkpoint_rejects_injected_detail_claim_binding(tmp_path) -> None:
     store = _seed_running_store(tmp_path)
 

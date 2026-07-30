@@ -141,7 +141,12 @@ def _serve(
                 )
             else:
                 raise RuntimeError("liepin_source_sidecar_unexpected_message")
-    except (OSError, RuntimeError, TypeError, ValueError, ValidationError):
+    except Exception as exc:  # noqa: BLE001 - sidecar must fail with a privacy-safe first cause
+        _write_safe_exit_diagnostic(
+            boundary="sidecar_loop",
+            operation_kind="unknown",
+            safe_reason_code=_safe_sidecar_exception_reason(exc),
+        )
         return 70
     finally:
         if session is not None:
@@ -151,6 +156,16 @@ def _serve(
         if journal is not None:
             journal.close()
     return 0
+
+
+def _safe_sidecar_exception_reason(error: Exception) -> str:
+    if isinstance(error, LiepinBrowserEffectBoundaryError):
+        return error.safe_reason_code
+    if isinstance(error, ValidationError):
+        return "liepin_sidecar_payload_invalid"
+    if isinstance(error, SidecarReadinessError):
+        return "liepin_sidecar_transport_unavailable"
+    return "liepin_sidecar_unexpected_failure"
 
 
 def _handle_cards_submit(

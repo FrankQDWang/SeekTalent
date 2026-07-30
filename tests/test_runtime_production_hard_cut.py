@@ -95,6 +95,41 @@ def test_prod_legacy_write_returns_410_without_database_mutation(
     assert _table_counts(workbench_db_path(settings)) == before
 
 
+def test_execution_plane_readiness_reports_all_production_runners(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(
+        workspace_root=str(tmp_path),
+        runtime_mode="prod",
+        liepin_worker_mode="disabled",
+        liepin_browser_action_backend="disabled",
+        liepin_api_token="production-test-api-token",
+        liepin_account_binding_secret="production-test-binding-secret",
+        liepin_stream_token_secret="production-test-stream-secret",
+    )
+    app = create_app(settings=settings, runtime_factory=_NoopRuntime)
+
+    with TestClient(
+        app,
+        base_url="http://localhost",
+        client=("127.0.0.1", 50000),
+    ) as client:
+        response = client.get("/api/health/execution-ready")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert {
+        component["name"] for component in payload["components"]
+    } == {
+        "runtime_runner",
+        "workflow_start_requested",
+        "requirement_extraction_requested",
+    }
+    assert all(component["alive"] for component in payload["components"])
+    assert payload["browserLane"] is None
+
+
 def test_source_operation_is_injected_during_runtime_construction(
     tmp_path: Path,
 ) -> None:

@@ -2,19 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import sqlite3
 import threading
 import time
 from collections.abc import Callable
 from typing import cast
 from uuid import uuid4
 
-from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
-from seektalent_runtime_control.recovery import RuntimeRecoveryService
 from seektalent_runtime_control.models import RuntimeWorkerClaim
+from seektalent_runtime_control.recovery import RuntimeRecoveryService
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_runtime_control.worker import RuntimeExecutionWorker
+from seektalent_ui.execution_health import ExecutionComponentHealth, ExecutionHealthTracker
 
 
 logger = logging.getLogger(__name__)
@@ -22,7 +21,7 @@ logger = logging.getLogger(__name__)
 DEFAULT_POLL_INTERVAL_SECONDS = 1.0
 DEFAULT_RECOVERY_INTERVAL_SECONDS = 30.0
 DEFAULT_STOP_TIMEOUT_SECONDS = 5.0
-_EXPECTED_RUNNER_ERRORS = (RuntimeControlError, sqlite3.Error, RuntimeError, ValueError, TypeError, OSError)
+MAX_FAILURE_BACKOFF_SECONDS = 30.0
 
 
 class _StopAwareRuntimeControlStore:
@@ -83,6 +82,8 @@ class WorkbenchV2RuntimeQueueRunner:
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._health = ExecutionHealthTracker("runtime_runner")
+        self._consecutive_failures = 0
 
     def start(self) -> None:
         with self._lock:
@@ -96,6 +97,7 @@ class WorkbenchV2RuntimeQueueRunner:
                 daemon=True,
             )
             self._thread.start()
+            self._health.restarted()
 
     def stop(self, *, timeout: float = DEFAULT_STOP_TIMEOUT_SECONDS) -> None:
         bounded_timeout = max(0.0, timeout)
@@ -125,10 +127,17 @@ class WorkbenchV2RuntimeQueueRunner:
 
     def wake(self, runtime_run_id: str | None = None) -> None:
         del runtime_run_id
+        self.start()
         self._wake_event.set()
 
     def _run_in_thread(self) -> None:
-        asyncio.run(self._run_loop())
+        while not self._stop_event.is_set():
+            try:
+                asyncio.run(self._run_loop())
+                return
+            except Exception as exc:  # noqa: BLE001 - keep the execution plane available
+                self._record_failure(exc, boundary="thread")
+                self._wait_after_failure()
 
     async def _run_loop(self) -> None:
         recovery = RuntimeRecoveryService(store=self.store)
@@ -147,37 +156,32 @@ class WorkbenchV2RuntimeQueueRunner:
         )
         next_recovery_at = 0.0
         while not self._stop_event.is_set():
+            self._health.heartbeat()
             now = self._monotonic()
             if now >= next_recovery_at:
                 recovery_failed = False
                 try:
-                    recovery.recover_start_timeouts(resume_recoverable=False)
-                except _EXPECTED_RUNNER_ERRORS as exc:
+                    recovery.recover_start_timeouts(resume_recoverable=True)
+                except Exception as exc:  # noqa: BLE001 - recovery failure must not kill the runner
                     recovery_failed = True
-                    logger.warning(
-                        "workbench v2 runtime recovery failed: %s: %s",
-                        type(exc).__name__,
-                        exc,
-                    )
+                    self._record_failure(exc, boundary="recovery")
                 next_recovery_at = now + self.recovery_interval_seconds
                 if self._stop_event.is_set():
                     break
                 if recovery_failed:
-                    self._wait_for_work()
+                    self._wait_after_failure()
                     continue
 
             if self._stop_event.is_set():
                 break
             try:
                 runtime_run = await worker.run_once()
-            except _EXPECTED_RUNNER_ERRORS as exc:
-                logger.warning(
-                    "workbench v2 runtime poll failed: %s: %s",
-                    type(exc).__name__,
-                    exc,
-                )
-                self._wait_for_work()
+            except Exception as exc:  # noqa: BLE001 - a claimed run remains lease-governed
+                self._record_failure(exc, boundary="poll")
+                self._wait_after_failure()
                 continue
+            self._consecutive_failures = 0
+            self._health.success()
             if runtime_run is not None:
                 continue
             self._wait_for_work()
@@ -187,3 +191,23 @@ class WorkbenchV2RuntimeQueueRunner:
             return
         self._wake_event.wait(self.poll_interval_seconds)
         self._wake_event.clear()
+
+    def _record_failure(self, error: Exception, *, boundary: str) -> None:
+        self._health.failure(error)
+        self._consecutive_failures += 1
+        logger.warning(
+            "workbench v2 runtime runner failure",
+            extra={"boundary": boundary, "exception_type": type(error).__name__},
+        )
+
+    def _wait_after_failure(self) -> None:
+        backoff = min(
+            self.poll_interval_seconds * (2 ** min(self._consecutive_failures - 1, 5)),
+            MAX_FAILURE_BACKOFF_SECONDS,
+        )
+        self._wake_event.wait(backoff)
+        self._wake_event.clear()
+
+    def health_snapshot(self) -> ExecutionComponentHealth:
+        thread = self._thread
+        return self._health.snapshot(alive=thread is not None and thread.is_alive())

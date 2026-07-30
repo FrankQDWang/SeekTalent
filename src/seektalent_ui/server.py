@@ -20,7 +20,6 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from seektalent.config import AppSettings, load_process_env
 from seektalent.dev_mode import DevModeStatus, build_dev_mode_env_diagnostics
 from seektalent.product_env import MANAGED_OPENCLI_COMMAND_MARKER
-from seektalent.providers.liepin.runtime_context import local_opencli_liepin_source_context
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
 from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.workbench_internal_secrets import ensure_workbench_internal_liepin_env
@@ -217,6 +216,36 @@ def create_app(
             response.headers["Access-Control-Allow-Methods"] = "GET, POST, PATCH, PUT, OPTIONS"
             response.headers["Vary"] = "Origin"
         return response
+
+    @app.get("/api/health/execution-ready", include_in_schema=False)
+    def execution_ready() -> JSONResponse:
+        components = [
+            runner.health_snapshot()
+            for runner in (
+                app.state.workbench_v2_runtime_runner,
+                app.state.workflow_start_outbox_runner,
+                app.state.requirement_extraction_outbox_runner,
+            )
+        ]
+        ready = all(component.alive for component in components)
+        browser_lane = runtime_control_store.get_browser_lane()
+        content: dict[str, object] = {
+            "schemaVersion": "seektalent.execution-readiness.v1",
+            "status": "ready" if ready else "not_ready",
+            "components": [component.as_dict() for component in components],
+            "browserLane": (
+                None
+                if browser_lane is None
+                else {
+                    "laneKey": browser_lane.lane_key,
+                    "status": browser_lane.status,
+                    "operationKind": browser_lane.operation_kind,
+                    "fencingToken": browser_lane.fencing_token,
+                    "lastFailureCode": browser_lane.last_failure_code,
+                }
+            ),
+        }
+        return JSONResponse(status_code=200 if ready else 503, content=content)
 
     app.include_router(workbench_routes.router)
     app.include_router(agent_routes.router)

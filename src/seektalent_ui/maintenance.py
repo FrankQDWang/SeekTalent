@@ -26,6 +26,10 @@ from seektalent.corpus.store import DEFAULT_TENANT_ID as CORPUS_DEFAULT_TENANT_I
 from seektalent.corpus.store import DEFAULT_WORKSPACE_ID as CORPUS_DEFAULT_WORKSPACE_ID
 from seektalent.corpus.store import CorpusStore
 from seektalent.providers.liepin.store import LiepinStore
+from seektalent.support_bundle import (
+    SupportBundleError,
+    create_execution_support_bundle,
+)
 from seektalent_runtime_control.retention import (
     RuntimeControlRetentionPolicy,
     RuntimeRetentionResult,
@@ -838,7 +842,23 @@ def main(argv: Sequence[str] | None = None) -> int:
                     f"shm_bytes={database.shm_size_bytes}"
                 )
             return 1 if result.status == "failed" else 0
-    except MaintenanceError as exc:
+        if args.command == "support-bundle":
+            path = create_execution_support_bundle(
+                settings=AppSettings(
+                    project_root=args.workspace_root,
+                    runtime_mode=args.runtime_mode,
+                    artifacts_dir=(
+                        str(args.artifacts_dir)
+                        if args.artifacts_dir is not None
+                        else None
+                    ),
+                ),
+                runtime_run_id=args.runtime_run_id,
+                output_dir=args.output_dir,
+            )
+            print(f"support_bundle: {path}")
+            return 0
+    except (MaintenanceError, SupportBundleError) as exc:
         print(str(exc), file=sys.stderr)
         return 1
 
@@ -929,6 +949,16 @@ def _build_parser() -> argparse.ArgumentParser:
     operator_health.add_argument("--artifacts-dir", type=Path, default=None)
     operator_health.add_argument("--llm-cache-dir", type=Path, default=None)
     operator_health.add_argument("--required-free-bytes", type=int, default=1_000_000_000)
+
+    support_bundle = subparsers.add_parser(
+        "support-bundle",
+        help="Create a local allowlisted execution support bundle without uploading it.",
+    )
+    support_bundle.add_argument("--workspace-root", type=Path, default=Path.cwd())
+    support_bundle.add_argument("--runtime-mode", choices=("prod", "dev"), default="prod")
+    support_bundle.add_argument("--runtime-run-id", default=None)
+    support_bundle.add_argument("--artifacts-dir", type=Path, default=None)
+    support_bundle.add_argument("--output-dir", type=Path, default=None)
 
     return parser
 

@@ -28,6 +28,7 @@ class RuntimeCheckpointValidationContext:
     run_source_ids: tuple[str, ...]
     run_source_ids_valid: bool
     candidate_truth_valid: bool
+    source_operations_main_committed: bool
 
 
 @dataclass(frozen=True)
@@ -106,6 +107,7 @@ def _after_round_controller_is_valid(
             == checkpoint.round_no
         )
         and context.candidate_truth_valid
+        and context.source_operations_main_committed
         and _cursor_matches(checkpoint, next_phase="rounds")
     )
 
@@ -117,6 +119,7 @@ def _before_finalization_is_valid(
     return (
         _checkpoint_matches_run(checkpoint, context)
         and context.candidate_truth_valid
+        and context.source_operations_main_committed
         and _cursor_matches(checkpoint, next_phase="finalization")
     )
 
@@ -136,6 +139,7 @@ def _after_finalization_is_valid(
         and not isinstance(finalization_revision, bool)
         and finalization_revision > 0
         and context.candidate_truth_valid
+        and context.source_operations_main_committed
         and _cursor_matches(checkpoint, next_phase="complete")
     )
 
@@ -155,6 +159,7 @@ def _paused_boundary_is_valid(
     return (
         _checkpoint_matches_run(checkpoint, context)
         and context.candidate_truth_valid
+        and context.source_operations_main_committed
         and _cursor_matches(checkpoint, next_phase="rounds")
     )
 

@@ -1,13 +1,11 @@
 from __future__ import annotations
 
 import logging
-import sqlite3
 import threading
 from datetime import datetime, timedelta, timezone
 
-from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_conversation_agent.service import ConversationAgentService
-from seektalent_runtime_control.errors import RuntimeControlError
+from seektalent_ui.execution_health import ExecutionComponentHealth, ExecutionHealthTracker
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +37,7 @@ class _BaseOutboxRunner:
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._health = ExecutionHealthTracker(self.event_type)
 
     def start(self) -> None:
         with self._lock:
@@ -52,6 +51,7 @@ class _BaseOutboxRunner:
                 daemon=True,
             )
             self._thread.start()
+            self._health.restarted()
 
     def stop(self, *, timeout: float = 5.0) -> None:
         self._stop_event.set()
@@ -80,22 +80,39 @@ class _BaseOutboxRunner:
                 continue
             try:
                 self._process_item(item.outbox_id)
-            except (ConversationAgentError, RuntimeControlError, sqlite3.Error):
-                logger.exception("WTS outbox item failed.", extra={"outbox_id": item.outbox_id})
+            except Exception as exc:  # noqa: BLE001 - durable outbox retry remains bounded
+                self._health.failure(exc)
+                logger.warning(
+                    "WTS outbox item failed: %s (%s)",
+                    type(exc).__name__,
+                    getattr(exc, "reason_code", "outbox_unexpected_failure"),
+                    extra={
+                        "event_type": self.event_type,
+                        "exception_type": type(exc).__name__,
+                    },
+                )
                 self._handle_processing_error(item.outbox_id)
             processed += 1
         return processed
 
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():
+            self._health.heartbeat()
             try:
                 processed = self.run_once()
-            except sqlite3.Error as exc:
-                if "unable to open database file" in str(exc):
-                    logger.warning("WTS outbox runner database is unavailable.")
-                else:
-                    logger.exception("WTS outbox runner could not poll claimable items.")
+            except Exception as exc:  # noqa: BLE001 - keep polling after an unknown failure
+                self._health.failure(exc)
+                logger.warning(
+                    "WTS outbox runner poll failed: %s",
+                    type(exc).__name__,
+                    extra={
+                        "event_type": self.event_type,
+                        "exception_type": type(exc).__name__,
+                    },
+                )
                 processed = 0
+            else:
+                self._health.success()
             if processed > 0:
                 continue
             self._wake_event.wait(self.poll_interval_seconds)
@@ -115,6 +132,10 @@ class _BaseOutboxRunner:
 
     def _mark_final_failure(self, aggregate_id: str, *, updated_at: str) -> None:
         del aggregate_id, updated_at
+
+    def health_snapshot(self) -> ExecutionComponentHealth:
+        thread = self._thread
+        return self._health.snapshot(alive=thread is not None and thread.is_alive())
 
 
 class WorkflowStartOutboxRunner(_BaseOutboxRunner):
@@ -137,6 +158,8 @@ class RequirementExtractionOutboxRunner(_BaseOutboxRunner):
     thread_name = "seektalent-wts-requirement-extraction-outbox-runner"
 
     def wake(self) -> None:
+        if self._thread is not None:
+            self.start()
         self._wake_event.set()
 
     def _process_item(self, outbox_id: str) -> object:

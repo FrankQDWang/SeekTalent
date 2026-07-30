@@ -402,7 +402,7 @@ def test_empty_queue_waits_instead_of_exiting_or_hot_looping(
     assert not runner._thread.is_alive()
 
 
-def test_expected_poll_error_waits_then_continues_on_next_hint(
+def test_unknown_poll_error_waits_then_continues_on_next_hint(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -417,7 +417,7 @@ def test_expected_poll_error_waits_then_continues_on_next_hint(
             nonlocal calls
             calls += 1
             if calls == 1:
-                raise RuntimeError("transient poll failure")
+                raise KeyError("PRIVATE_RUNTIME_FAILURE")
             processed.set()
             return None
 
@@ -436,7 +436,11 @@ def test_expected_poll_error_waits_then_continues_on_next_hint(
         runner.stop()
 
     assert calls == 2
-    assert "workbench v2 runtime poll failed: RuntimeError: transient poll failure" in caplog.text
+    assert "workbench v2 runtime runner failure" in caplog.text
+    assert "PRIVATE_RUNTIME_FAILURE" not in caplog.text
+    health = runner.health_snapshot()
+    assert health.first_failure_type == "KeyError"
+    assert health.failure_count == 1
 
 
 def test_poll_operational_error_waits_then_processes_later_task(
@@ -473,7 +477,9 @@ def test_poll_operational_error_waits_then_processes_later_task(
         runner.stop()
 
     assert calls == 2
-    assert "workbench v2 runtime poll failed: OperationalError: database is locked" in caplog.text
+    assert "workbench v2 runtime runner failure" in caplog.text
+    assert "database is locked" not in caplog.text
+    assert runner.health_snapshot().first_failure_type == "OperationalError"
 
 
 def test_recovery_operational_error_waits_then_poller_processes_task(
@@ -490,7 +496,7 @@ def test_recovery_operational_error_waits_then_poller_processes_task(
         def recover_start_timeouts(self, *, resume_recoverable: bool = True) -> list[object]:
             nonlocal recovery_calls
             recovery_calls += 1
-            assert resume_recoverable is False
+            assert resume_recoverable is True
             raise sqlite3.OperationalError("recovery database is locked")
 
     class _ProcessingWorker:
@@ -521,10 +527,11 @@ def test_recovery_operational_error_waits_then_poller_processes_task(
         runner.stop()
 
     assert recovery_calls == 1
-    assert "workbench v2 runtime recovery failed: OperationalError: recovery database is locked" in caplog.text
+    assert "workbench v2 runtime runner failure" in caplog.text
+    assert "recovery database is locked" not in caplog.text
 
 
-def test_periodic_recovery_always_disables_recoverable_resume(
+def test_periodic_recovery_enables_strict_recoverable_resume(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     recovery_calls: list[bool] = []
@@ -562,10 +569,10 @@ def test_periodic_recovery_always_disables_recoverable_resume(
     _assert_set(second_recovery)
     runner.stop()
 
-    assert recovery_calls == [False, False]
+    assert recovery_calls == [True, True]
 
 
-def test_expired_recoverable_lease_fails_closed_in_runner(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_expired_invalid_checkpoint_fails_closed_in_runner(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = _runtime_store(tmp_path)
     _create_unaccepted_run(store, "runtime-expired", status="running", created_at="2026-06-08T00:00:00.000000Z")
     store.acquire_executor_lease(
@@ -612,7 +619,7 @@ def test_expired_recoverable_lease_fails_closed_in_runner(tmp_path, monkeypatch:
     runner.stop()
 
     run = store.get_run("runtime-expired")
-    assert resume_flags == [False]
+    assert resume_flags == [True]
     assert run.status == "failed"
     assert (
         run.stop_reason_code
