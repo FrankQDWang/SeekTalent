@@ -21,6 +21,7 @@ from seektalent_runtime_control.models import (
     RuntimeControlEventInput,
 )
 from seektalent_runtime_control.commands import RuntimeCommandService
+from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
 from seektalent_runtime_control.requirements import draft_from_requirement_sheet
 from seektalent_runtime_control.store import RuntimeControlStore
@@ -1087,6 +1088,94 @@ def test_runtime_service_recheck_failure_does_not_start_browser_business_run(
     assert result.outcome == "readiness_blocked"
     assert result.runtime_run.runtime_run_id == run.runtime_run_id
     assert result.failure_cause_code == "liepin_opencli_extension_disconnected"
+    assert _runtime_run_count(store) == 1
+
+
+def test_runtime_service_recheck_refuses_unresolved_source_effect(
+    tmp_path: Path,
+) -> None:
+    store = _store(tmp_path)
+    runtime_run_ids = iter(["rtrun_1", "rtrun_2"])
+    readiness_calls: list[str] = []
+
+    async def readiness_probe() -> None:
+        readiness_calls.append("checked")
+
+    service = _service_with_store(
+        store=store,
+        runtime_factory=lambda: RecordingRequirementExtractor(
+            _requirement_sheet()
+        ),
+        runtime_run_id_factory=lambda: next(runtime_run_ids),
+        liepin_readiness_probe=readiness_probe,
+        now=lambda: NOW,
+    )
+    run = service.start_run(
+        "agentv2_unresolved",
+        WorkbenchV2RuntimeInput(
+            jobTitle="AI 平台工程师",
+            jd="需要 Python 和 Agent 工作流经验",
+            notes=None,
+        ),
+        _requirement_sheet(),
+    )
+    store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="starting",
+        current_stage="startup",
+        updated_at=NOW,
+    )
+    store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="running",
+        current_stage="source_lanes",
+        updated_at=NOW,
+    )
+    store.update_run_status(
+        runtime_run_id=run.runtime_run_id,
+        status="failed",
+        current_stage="source_lanes",
+        completed_at=NOW,
+        updated_at=NOW,
+    )
+    with store._connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO runtime_control_source_operations (
+              runtime_run_id, operation_id, source_id, operation_kind,
+              canonical_request_hash, idempotency_key,
+              accepted_requirement_revision_id, runtime_attempt_no,
+              runtime_attempt_authority_ref, operation_phase,
+              dispatch_intent_ref, conclusive_observation_ref,
+              source_operation_disposition, retry_posture,
+              reconciliation_revision, main_commit_ref, ledger_revision
+            )
+            VALUES (?, 'operation-unknown', 'liepin', 'cards', ?, ?,
+                    ?, 1, ?, 'dispatch_intent', ?, NULL, NULL,
+                    'reconcile_first', 0, NULL, 2)
+            """,
+            (
+                run.runtime_run_id,
+                "a" * 64,
+                "idempotency-operation-unknown",
+                run.approved_requirement_revision_id,
+                f"runtime-attempt://{run.runtime_run_id}/1",
+                "dispatch://operation-unknown",
+            ),
+        )
+
+    with pytest.raises(
+        RuntimeControlError,
+        match="runtime_source_operation_unresolved",
+    ):
+        asyncio.run(
+            service.recheck_liepin_and_continue(
+                run.runtime_run_id,
+                idempotency_key="recheck-unresolved",
+            )
+        )
+
+    assert readiness_calls == []
     assert _runtime_run_count(store) == 1
 
 

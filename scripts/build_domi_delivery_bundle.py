@@ -5,6 +5,7 @@ import hashlib
 import json
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -12,6 +13,11 @@ from pathlib import Path
 
 from seektalent.browser_bridge_install import install_browser_bridge_bundle
 from seektalent.browser_bridge_manifest import load_browser_bridge_bundle
+from seektalent.browser_bridge_manifest import (
+    WTSCLI_EXTENSION_ID,
+    WTSCLI_FORK_COMMIT,
+)
+from seektalent.version import __version__
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,11 +37,18 @@ def build_delivery_bundle(
     seektalent_wheel: Path,
     node: Path,
     platform_name: str,
+    source_revision: str | None = None,
 ) -> Path:
     """Build one downloadable SeekTalent package with its exact WTSCLI pair."""
     if platform_name not in SUPPORTED_PLATFORMS:
         raise ValueError(f"unsupported delivery platform: {platform_name}")
     admitted = load_browser_bridge_bundle(browser_bridge_bundle)
+    exact_source_revision = source_revision or _source_revision()
+    if (
+        len(exact_source_revision) != 40
+        or any(character not in "0123456789abcdef" for character in exact_source_revision)
+    ):
+        raise ValueError("exact lowercase source revision is required")
     if (
         seektalent_wheel.is_symlink()
         or not seektalent_wheel.is_file()
@@ -84,9 +97,18 @@ def build_delivery_bundle(
         manifest = {
             "schema_version": 1,
             "platform": platform_name,
+            "product_version": __version__,
+            "source_revision": exact_source_revision,
+            "product_build_id": (
+                f"seektalent-{__version__}+{exact_source_revision}"
+            ),
             "bridge_build_id": admitted.bridge_build_id,
             "wtscli_version": admitted.requirement.cli.version,
+            "wtscli_fork_commit": WTSCLI_FORK_COMMIT,
             "extension_version": admitted.extension_version,
+            "extension_id_sha256": hashlib.sha256(
+                WTSCLI_EXTENSION_ID.encode()
+            ).hexdigest(),
             "extension_directory": "~/.seektalent/chrome-extension/wtscli",
             "browser_bridge_bundle": "wtscli-browser-bridge",
             "browser_bridge_manifest_sha256": _sha256(
@@ -157,6 +179,16 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _source_revision() -> str:
+    return subprocess.run(
+        ["git", "rev-parse", "HEAD"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Build a platform SeekTalent package with the exact WTSCLI pair.",
@@ -165,6 +197,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--wtscli-bundle-dir", type=Path, required=True)
     parser.add_argument("--seektalent-wheel", type=Path, required=True)
     parser.add_argument("--node", type=Path, required=True)
+    parser.add_argument("--source-revision")
     parser.add_argument(
         "--platform",
         dest="platform_name",
@@ -182,6 +215,7 @@ def main(argv: list[str] | None = None) -> int:
         seektalent_wheel=args.seektalent_wheel,
         node=args.node,
         platform_name=args.platform_name,
+        source_revision=args.source_revision,
     )
     print(archive)
     return 0

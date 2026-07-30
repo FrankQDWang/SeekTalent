@@ -219,6 +219,9 @@ def create_app(
 
     @app.get("/api/health/execution-ready", include_in_schema=False)
     def execution_ready() -> JSONResponse:
+        from datetime import UTC, datetime
+
+        observed_at = datetime.now(UTC)
         components = [
             runner.health_snapshot()
             for runner in (
@@ -227,12 +230,80 @@ def create_app(
                 app.state.requirement_extraction_outbox_runner,
             )
         ]
-        ready = all(component.alive for component in components)
+        component_payloads = []
+        for component in components:
+            heartbeat = (
+                datetime.fromisoformat(
+                    component.last_heartbeat_at.replace(
+                        "Z",
+                        "+00:00",
+                    )
+                )
+                if component.last_heartbeat_at is not None
+                else None
+            )
+            stale = (
+                heartbeat is None
+                or (observed_at - heartbeat).total_seconds() > 10
+            )
+            item = component.as_dict()
+            item["stale"] = stale
+            item["status"] = (
+                "ready"
+                if component.alive and not stale
+                else "not_ready"
+            )
+            component_payloads.append(item)
         browser_lane = runtime_control_store.get_browser_lane()
+        lane_expired = bool(
+            browser_lane is not None
+            and browser_lane.status == "active"
+            and browser_lane.lease_expires_at is not None
+            and datetime.fromisoformat(
+                browser_lane.lease_expires_at.replace(
+                    "Z",
+                    "+00:00",
+                )
+            )
+            <= observed_at
+        )
+        expired_executor_leases = [
+            lease
+            for lease in runtime_control_store.list_active_executor_leases()
+            if datetime.fromisoformat(
+                lease.lease_expires_at.replace("Z", "+00:00")
+            )
+            <= observed_at
+        ]
+        oldest_backlog_at = (
+            app.state.agent_conversation_service.outbox_store
+            .oldest_unfinished_created_at()
+        )
+        backlog_stale = bool(
+            oldest_backlog_at
+            and (
+                observed_at
+                - datetime.fromisoformat(
+                    oldest_backlog_at.replace("Z", "+00:00")
+                )
+            ).total_seconds()
+            > 300
+        )
+        ready = (
+            all(item["status"] == "ready" for item in component_payloads)
+            and not lane_expired
+            and not expired_executor_leases
+            and not backlog_stale
+        )
         content: dict[str, object] = {
             "schemaVersion": "seektalent.execution-readiness.v1",
             "status": "ready" if ready else "not_ready",
-            "components": [component.as_dict() for component in components],
+            "components": component_payloads,
+            "oldestBacklogAt": oldest_backlog_at,
+            "backlogStale": backlog_stale,
+            "expiredExecutorLeaseCount": len(
+                expired_executor_leases
+            ),
             "browserLane": (
                 None
                 if browser_lane is None
@@ -242,6 +313,7 @@ def create_app(
                     "operationKind": browser_lane.operation_kind,
                     "fencingToken": browser_lane.fencing_token,
                     "lastFailureCode": browser_lane.last_failure_code,
+                    "expired": lane_expired,
                 }
             ),
         }

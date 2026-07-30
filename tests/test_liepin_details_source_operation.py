@@ -63,6 +63,7 @@ from seektalent.source_port.operation_dispatch import (
     RelativeMonotonicDeadlineV1,
 )
 from seektalent_runtime_control.errors import RuntimeControlError
+from seektalent_runtime_control.browser_lane import LIEPIN_BROWSER_LANE
 from tests.test_runtime_control_checkpoint_v2 import _seed_running_store
 from tests.test_runtime_control_source_operations import _acceptance
 
@@ -201,6 +202,95 @@ def test_details_operation_deadline_uses_browser_effect_budget(
     )
 
     assert identity.deadline.value == 120_000
+
+
+def test_main_committed_details_replay_does_not_wait_for_browser_lane(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = _seed_running_store(tmp_path)
+    settings = AppSettings(
+        _env_file=None,
+        workspace_root=str(tmp_path),
+        runtime_control_path=str(store.path),
+    )
+    executor = LiepinCardsSourceOperationExecutor(
+        settings=settings,
+        store=store,
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-1",
+        attempt_no=1,
+        accepted_requirement_revision_id="approved-1",
+        runtime_attempt_authority_ref="runtime-attempt://runtime_run_1/1",
+    )
+    request = _request(
+        runtime_run_id="runtime_run_1",
+        source_lane_run_id=(
+            "runtime_run_1:source:1:liepin:round:1:lane:1"
+        ),
+    )
+    operation_id = stable_liepin_details_operation_id(request)
+    request_hash = canonical_liepin_details_request_hash(request)
+    artifact_ref, _artifact_hash = write_liepin_details_artifact(
+        executor._details_artifact_root,
+        _artifact(
+            operation_id=operation_id,
+            canonical_request_hash=request_hash,
+        ),
+    )
+    with store._connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO runtime_control_source_operations (
+              runtime_run_id, operation_id, source_id, operation_kind,
+              canonical_request_hash, idempotency_key,
+              accepted_requirement_revision_id, runtime_attempt_no,
+              runtime_attempt_authority_ref, operation_phase,
+              dispatch_intent_ref, conclusive_observation_ref,
+              source_operation_disposition, retry_posture,
+              reconciliation_revision, main_commit_ref, ledger_revision
+            )
+            VALUES ('runtime_run_1', ?, 'liepin', 'details', ?, ?,
+                    'approved-1', 1, 'runtime-attempt://runtime_run_1/1',
+                    'main_committed', ?, ?, 'completed', 'no_retry',
+                    0, 'checkpoint://details-committed', 4)
+            """,
+            (
+                operation_id,
+                request_hash,
+                f"idempotency-{operation_id}",
+                f"dispatch://{operation_id}",
+                artifact_ref,
+            ),
+        )
+    occupied = store.try_acquire_browser_lane(
+        lane_key=LIEPIN_BROWSER_LANE,
+        owner_id="owner-other",
+        owner_process_id=999,
+        process_boot_id="process-other",
+        runtime_run_id="runtime_run_other",
+        operation_id="operation-other",
+        operation_kind="cards",
+        acquired_at="2026-07-28T00:00:00.000000Z",
+        lease_expires_at="2099-01-01T00:00:00.000000Z",
+    )
+    assert occupied is not None
+    monkeypatch.setattr(
+        executor,
+        "_exchange_details",
+        lambda _submit: (_ for _ in ()).throw(
+            AssertionError("committed replay must not dispatch")
+        ),
+    )
+
+    envelope, structured = executor._execute_details(request)
+
+    assert envelope["status"] == "succeeded"
+    assert structured["resume"] == {"name": "candidate"}
+    lane = store.get_browser_lane()
+    assert lane is not None
+    assert lane.owner_id == "owner-other"
+    assert lane.status == "active"
 
 
 def test_details_frames_require_authenticated_ack_before_terminal() -> None:

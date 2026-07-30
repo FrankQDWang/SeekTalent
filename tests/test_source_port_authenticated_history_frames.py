@@ -727,5 +727,12 @@ def test_source_port_frame_kernel_has_no_project_side_effect_dependency_or_busin
 
     runner = (PROJECT_ROOT / "src" / "seektalent_workbench_v2" / "runtime_runner.py").read_text(encoding="utf-8")
     pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    assert "resume_recoverable=False" in runner
+    assert "resume_recoverable=True" in runner
+    recovery = (
+        PROJECT_ROOT
+        / "src"
+        / "seektalent_runtime_control"
+        / "checkpoint_recovery.py"
+    ).read_text(encoding="utf-8")
+    assert "source_operations_main_committed" in recovery
     assert "source-port" not in pyproject

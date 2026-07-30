@@ -86,7 +86,7 @@ def _install_bounded_runtime(
     daemon = _Daemon()
     probe_calls: list[dict[str, object]] = []
     connect_calls: list[tuple[object, float]] = []
-    monkeypatch.setattr(gate_module, "ensure_opencli_runtime", lambda: runtime)
+    monkeypatch.setattr(gate_module, "inspect_opencli_runtime", lambda: runtime)
     monkeypatch.setattr(
         gate_module,
         "_check_environment",
@@ -115,13 +115,12 @@ def _install_bounded_runtime(
         assert actual is runtime
         return daemon
 
-    monkeypatch.setattr(gate_module, "connect_installed_opencli_daemon", connect)
-
-    def probe(**kwargs: object) -> str | None:
-        probe_calls.append(kwargs)
-        return reason
-
-    monkeypatch.setattr(gate_module, "probe_wtscli_liepin_session", probe)
+    monkeypatch.setattr(
+        gate_module,
+        "connect_existing_opencli_daemon_read_only",
+        connect,
+    )
+    del reason
     return runtime, daemon, probe_calls, connect_calls
 
 
@@ -146,7 +145,7 @@ def test_production_gate_observes_bridge_without_browser_writes(
     assert daemon.closed is True
 
 
-def test_production_gate_prepare_maps_direct_wtscli_failure_and_closes_transport(
+def test_production_gate_has_no_public_mutating_prepare(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _runtime, daemon, probe_calls, connect_calls = _install_bounded_runtime(
@@ -155,13 +154,10 @@ def test_production_gate_prepare_maps_direct_wtscli_failure_and_closes_transport
     )
     gate = ProductionLiepinVerifySessionGate(make_settings())
 
-    with pytest.raises(LiepinWorkerModeError, match="需要登录") as raised:
-        asyncio.run(gate.prepare())
-
-    assert raised.value.code == "liepin_opencli_login_required"
-    assert len(connect_calls) == 1
-    assert len(probe_calls) == 1
-    assert daemon.closed is True
+    assert not hasattr(gate, "prepare")
+    assert connect_calls == []
+    assert probe_calls == []
+    assert daemon.closed is False
 
 
 def test_production_gate_stops_before_verify_session_when_environment_is_not_ready(

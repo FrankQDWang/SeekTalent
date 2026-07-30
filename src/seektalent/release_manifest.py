@@ -56,7 +56,10 @@ SHA256_RE = re.compile(r"[0-9a-f]{64}\Z")
 GIT_SHA_RE = re.compile(r"[0-9a-f]{40}\Z")
 BUILD_ID_RE = re.compile(r"st1-[0-9a-f]{32}\Z")
 OPAQUE_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/+\-=]{0,127}\Z")
-VERSION_RE = re.compile(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){1,3}(?:[-+][0-9A-Za-z.-]+)?\Z")
+VERSION_RE = re.compile(
+    r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){1,3}"
+    r"(?:(?:a|b|rc)[0-9]+|[-+][0-9A-Za-z.-]+)?\Z"
+)
 OS_BUILD_RE = re.compile(r"(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){1,3}\Z")
 UTC_RFC3339_RE = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z\Z")
 
@@ -132,6 +135,15 @@ def _validate_version(value: str) -> str:
 
 
 def _version_key(value: str) -> tuple[tuple[int, ...], int, str]:
+    pep440_prerelease = re.fullmatch(
+        r"([0-9]+(?:\.[0-9]+){1,3})((?:a|b|rc)[0-9]+)",
+        value,
+    )
+    if pep440_prerelease is not None:
+        value = (
+            f"{pep440_prerelease.group(1)}-"
+            f"{pep440_prerelease.group(2)}"
+        )
     core, separator, suffix = value.partition("-")
     core, plus, build = core.partition("+")
     suffix = suffix or build

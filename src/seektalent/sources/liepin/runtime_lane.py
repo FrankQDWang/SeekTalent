@@ -76,8 +76,21 @@ def liepin_backend_posture(settings: AppSettings) -> dict[str, str]:
 
 async def run_liepin_first_page_expansion(*, settings: AppSettings,
         request: SourceFirstPageExpansionRequest,
-        detail_open_claim_ledger: DetailOpenClaimLedger) -> SourceFirstPageExpansionResult:
-    client = build_liepin_worker_client(settings)
+        detail_open_claim_ledger: DetailOpenClaimLedger,
+        cards_operation_executor=None) -> SourceFirstPageExpansionResult:
+    if (
+        settings.liepin_worker_mode == "opencli"
+        and cards_operation_executor is None
+    ):
+        raise RuntimeError("liepin_source_operation_executor_required")
+    client = (
+        build_liepin_worker_client(
+            settings,
+            cards_operation_executor=cards_operation_executor,
+        )
+        if cards_operation_executor is not None
+        else build_liepin_worker_client(settings)
+    )
     provider = _build_provider(settings=settings, worker_client=client)
     try:
         result = await provider.handle_first_page_continuation_with_detail_open_claim_ledger(
@@ -127,6 +140,11 @@ async def run_liepin_source_lane(
     detail_open_claim_ledger: DetailOpenClaimLedger | None = None,
     cards_operation_executor=None,
 ) -> RuntimeSourceLaneResult:
+    if (
+        settings.liepin_worker_mode == "opencli"
+        and cards_operation_executor is None
+    ):
+        raise RuntimeError("liepin_source_operation_executor_required")
     runtime_run_id = request.runtime_run_id or f"runtime-source-lane:{request.source}"
     source_plan_id = request.source_plan_id or f"{runtime_run_id}:source:0:liepin"
     source_lane_run_id = request.source_lane_run_id or f"{source_plan_id}:lane:{request.attempt}"
@@ -311,6 +329,11 @@ async def run_liepin_logical_query_bundle(
     detail_open_claim_ledger: DetailOpenClaimLedger | None = None,
     cards_operation_executor=None,
 ) -> RuntimeSourceLaneResult:
+    if (
+        settings.liepin_worker_mode == "opencli"
+        and cards_operation_executor is None
+    ):
+        raise RuntimeError("liepin_source_operation_executor_required")
     if not logical_queries:
         raise ValueError("Liepin logical query bundle requires at least one logical query.")
     compiled_bundle = (

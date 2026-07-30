@@ -221,7 +221,7 @@ def test_recovery_requires_every_source_operation_to_be_main_committed(
     )
     assert blocked == RuntimeCheckpointLoadFailure(
         checkpoint_id=checkpoint.checkpoint_id,
-        reason_code="runtime_checkpoint_safe_boundary_invalid",
+        reason_code="runtime_source_operation_unresolved",
     )
 
     with store._connect() as conn:
@@ -243,6 +243,191 @@ def test_recovery_requires_every_source_operation_to_be_main_committed(
     assert store.get_latest_recoverable_checkpoint(
         runtime_run_id="runtime_run_1"
     ) == checkpoint
+
+
+@pytest.mark.parametrize(
+    "checkpoint_posture",
+    ["absent", "missing", "corrupt"],
+)
+def test_unresolved_source_operation_precedes_every_checkpoint_failure(
+    tmp_path,
+    checkpoint_posture: str,
+) -> None:
+    from seektalent_runtime_control.recovery import RuntimeRecoveryService
+
+    store = _seed_running_store(tmp_path)
+    if checkpoint_posture == "missing":
+        with store._connect() as conn:
+            conn.execute(
+                """
+                UPDATE runtime_control_runs
+                SET latest_checkpoint_id = 'checkpoint-missing'
+                WHERE runtime_run_id = 'runtime_run_1'
+                """
+            )
+    elif checkpoint_posture == "corrupt":
+        checkpoint = store.write_checkpoint_v2(
+            checkpoint_id="checkpoint-corrupt",
+            runtime_run_id="runtime_run_1",
+            executor_id="executor-1",
+            attempt_no=1,
+            stage="finalization",
+            round_no=None,
+            safe_boundary="before_finalization",
+            accepted_requirement_revision_id="approved-1",
+            source_ids=["liepin"],
+            projection=checkpoint_projection(_run_state()),
+            detail_claim_revision=0,
+            detail_claim_hash=None,
+            created_at="2026-07-28T00:00:02.000000Z",
+        )
+        with store._connect() as conn:
+            conn.execute(
+                """
+                UPDATE runtime_control_checkpoints
+                    SET control_state_hash = ?
+                WHERE checkpoint_id = ?
+                """,
+                ("0" * 64, checkpoint.checkpoint_id),
+            )
+    _insert_unresolved_source_operation(
+        store,
+        operation_id=f"operation-{checkpoint_posture}",
+    )
+
+    blocked = store.get_latest_recoverable_checkpoint(
+        runtime_run_id="runtime_run_1"
+    )
+    decisions = RuntimeRecoveryService(
+        store=store,
+        now=lambda: "2026-07-28T00:10:01.000000Z",
+    ).recover_start_timeouts(resume_recoverable=True)
+
+    assert isinstance(blocked, RuntimeCheckpointLoadFailure)
+    assert blocked.reason_code == "runtime_source_operation_unresolved"
+    assert [decision.reason_code for decision in decisions] == [
+        "runtime_source_operation_unresolved"
+    ]
+    assert store.get_run("runtime_run_1").status == "needs_attention"
+
+
+def test_conclusive_source_reconciliation_resumes_same_attention_run(
+    tmp_path,
+) -> None:
+    from seektalent_runtime_control.recovery import RuntimeRecoveryService
+
+    store = _seed_running_store(tmp_path)
+    _insert_unresolved_source_operation(
+        store,
+        operation_id="operation-reconciled",
+    )
+    RuntimeRecoveryService(
+        store=store,
+        now=lambda: "2026-07-28T00:10:01.000000Z",
+    ).recover_start_timeouts(resume_recoverable=True)
+    with store._connect() as connection:
+        connection.execute(
+            """
+            UPDATE runtime_control_source_operations
+            SET operation_phase = 'main_committed',
+                conclusive_observation_ref = 'artifact://terminal/result',
+                source_operation_disposition = 'completed',
+                retry_posture = 'no_retry',
+                main_commit_ref = 'checkpoint://terminal/result',
+                ledger_revision = ledger_revision + 1
+            WHERE runtime_run_id = 'runtime_run_1'
+              AND operation_id = 'operation-reconciled'
+            """
+        )
+
+    resumed = store.resolve_source_operation_recovery_attention(
+        runtime_run_id="runtime_run_1",
+        resolved_at="2026-07-28T00:10:02.000000Z",
+    )
+
+    assert resumed.runtime_run_id == "runtime_run_1"
+    assert resumed.status == "resume_requested"
+    with store._connect() as connection:
+        attention = connection.execute(
+            """
+            SELECT status FROM runtime_control_recovery_attention
+            WHERE runtime_run_id = 'runtime_run_1'
+            """
+        ).fetchone()
+    assert attention["status"] == "resolved"
+
+
+def test_no_effect_reconciliation_resumes_same_attention_run_for_safe_redispatch(
+    tmp_path,
+) -> None:
+    from seektalent_runtime_control.recovery import RuntimeRecoveryService
+
+    store = _seed_running_store(tmp_path)
+    _insert_unresolved_source_operation(
+        store,
+        operation_id="operation-no-effect",
+    )
+    RuntimeRecoveryService(
+        store=store,
+        now=lambda: "2026-07-28T00:10:01.000000Z",
+    ).recover_start_timeouts(resume_recoverable=True)
+    with store._connect() as connection:
+        connection.execute(
+            """
+            UPDATE runtime_control_source_operations
+            SET operation_phase = 'reconciled',
+                dispatch_intent_ref = NULL,
+                conclusive_observation_ref = NULL,
+                source_operation_disposition = NULL,
+                retry_posture = 'safe_retry',
+                reconciliation_revision = 1,
+                ledger_revision = ledger_revision + 1
+            WHERE runtime_run_id = 'runtime_run_1'
+              AND operation_id = 'operation-no-effect'
+            """
+        )
+        connection.execute(
+            """
+            INSERT INTO runtime_control_source_reconciliations (
+              reconciliation_id, runtime_run_id, operation_id, source_id,
+              operation_kind, canonical_request_hash, idempotency_key,
+              accepted_requirement_revision_id, runtime_attempt_no,
+              runtime_attempt_authority_ref, history_result_ref,
+              history_result_digest, history_outcome, history_conclusion,
+              decision_kind, dispatch_intent_ref,
+              conclusive_observation_ref, source_operation_disposition,
+              retry_posture, expected_ledger_revision,
+              expected_reconciliation_revision, committed_at,
+              committed_operation_phase, committed_ledger_revision,
+              committed_reconciliation_revision
+            )
+            SELECT
+              'reconciliation-no-effect', runtime_run_id, operation_id,
+              source_id, operation_kind, canonical_request_hash,
+              idempotency_key, accepted_requirement_revision_id,
+              runtime_attempt_no, runtime_attempt_authority_ref,
+              'sha256:' || ?, ?, 'matched', 'accepted_no_dispatch',
+              'no_dispatch_proved', NULL, NULL, NULL, 'safe_retry',
+              ledger_revision - 1, 0, ?,
+              'reconciled', ledger_revision, 1
+            FROM runtime_control_source_operations
+            WHERE runtime_run_id = 'runtime_run_1'
+              AND operation_id = 'operation-no-effect'
+            """,
+            (
+                "b" * 64,
+                "b" * 64,
+                "2026-07-28T00:10:02.000000Z",
+            ),
+        )
+
+    resumed = store.resolve_source_operation_recovery_attention(
+        runtime_run_id="runtime_run_1",
+        resolved_at="2026-07-28T00:10:03.000000Z",
+    )
+
+    assert resumed.runtime_run_id == "runtime_run_1"
+    assert resumed.status == "resume_requested"
 
 
 def test_exact_latest_checkpoint_recovers_same_run_without_replaying_source_effect(
@@ -1749,7 +1934,10 @@ def test_v15_migration_interruption_rolls_back_and_retries(
     monkeypatch.setattr(store_module, "_migrate_v15_to_v16", original)
     store.initialize()
     with sqlite3.connect(store.path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 17
+        assert (
+            conn.execute("PRAGMA user_version").fetchone()[0]
+            == store_module.RUNTIME_CONTROL_SCHEMA_VERSION
+        )
 
 
 def _seed_running_store(tmp_path):
@@ -1839,6 +2027,37 @@ def _seed_running_store(tmp_path):
         lease_expires_at="2026-07-28T00:10:00.000000Z",
     )
     return store
+
+
+def _insert_unresolved_source_operation(
+    store,
+    *,
+    operation_id: str,
+) -> None:
+    with store._connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO runtime_control_source_operations (
+              runtime_run_id, operation_id, source_id, operation_kind,
+              canonical_request_hash, idempotency_key,
+              accepted_requirement_revision_id, runtime_attempt_no,
+              runtime_attempt_authority_ref, operation_phase,
+              dispatch_intent_ref, conclusive_observation_ref,
+              source_operation_disposition, retry_posture,
+              reconciliation_revision, main_commit_ref, ledger_revision
+            )
+            VALUES ('runtime_run_1', ?, 'liepin', 'cards', ?, ?, 'approved-1',
+                    1, 'runtime-attempt://runtime_run_1/1',
+                    'dispatch_intent', ?, NULL, NULL, 'reconcile_first',
+                    0, NULL, 2)
+            """,
+            (
+                operation_id,
+                "d" * 64,
+                f"idempotency-{operation_id}",
+                f"dispatch://{operation_id}",
+            ),
+        )
 
 
 def _state_with_round_and_finalization() -> RunState:

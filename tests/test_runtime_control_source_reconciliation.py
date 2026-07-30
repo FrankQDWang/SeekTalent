@@ -170,7 +170,7 @@ def test_v10_reconciliation_migration_preserves_existing_rows_exactly(tmp_path: 
             WHERE type = 'table' AND name = 'runtime_control_source_reconciliations'
             """
         ).fetchone()[0]
-    assert version == RUNTIME_CONTROL_SCHEMA_VERSION == 17
+    assert version == RUNTIME_CONTROL_SCHEMA_VERSION
     assert _reconciliation_rows(store.path) == before
     assert (
         "source_operation_disposition IN ('completed', 'partial', 'user_action_required', 'incompatible', 'failed')"
@@ -553,7 +553,11 @@ def test_raw_history_result_is_not_mutation_authority_and_cas_has_only_the_close
             production_callers.append(path.as_posix())
     assert production_callers == []
     runner = Path("src/seektalent_workbench_v2/runtime_runner.py").read_text(encoding="utf-8")
-    assert "recover_start_timeouts(resume_recoverable=False)" in runner
+    assert "recover_start_timeouts(resume_recoverable=True)" in runner
+    store_source = Path("src/seektalent_runtime_control/store.py").read_text(
+        encoding="utf-8"
+    )
+    assert "_all_source_operations_main_committed" in store_source
 
 
 def _store_with_operation(tmp_path: Path):

@@ -5,6 +5,7 @@ param(
   [string]$WtscliBundleDir = $env:SEEKTALENT_WTSCLI_BUNDLE_DIR,
   [string]$BrowserBridgeHelper = $env:SEEKTALENT_BROWSER_BRIDGE_HELPER,
   [string]$PreparedWtscliRuntime = $env:SEEKTALENT_WTSCLI_PREPARED_RUNTIME,
+  [string]$DeliveryManifest = $env:SEEKTALENT_DELIVERY_MANIFEST,
   [string]$InstallHome = $env:SEEKTALENT_INSTALL_HOME
 )
 
@@ -20,6 +21,7 @@ function Install-SeekTalentDomi {
     [string]$WtscliBundleDir = $env:SEEKTALENT_WTSCLI_BUNDLE_DIR,
     [string]$BrowserBridgeHelper = $env:SEEKTALENT_BROWSER_BRIDGE_HELPER,
     [string]$PreparedWtscliRuntime = $env:SEEKTALENT_WTSCLI_PREPARED_RUNTIME,
+    [string]$DeliveryManifest = $env:SEEKTALENT_DELIVERY_MANIFEST,
     [string]$InstallHome = $env:SEEKTALENT_INSTALL_HOME
   )
 
@@ -77,6 +79,31 @@ function Install-SeekTalentDomi {
   if (-not (Test-Path -Path $PreparedWtscliRuntime -PathType Leaf)) {
     Fail "wtscli_runtime_missing" "The prepared WTSCLI runtime was not found in the SeekTalent product package: $PreparedWtscliRuntime"
   }
+  if (-not $DeliveryManifest) {
+    $DeliveryManifest = Join-Path $PSScriptRoot "delivery-manifest.json"
+  }
+  $DeliveryManifestArgs = @()
+  $ExactDeliveryRequested = (
+    $ProductWheel -or
+    (Test-Path -Path $DeliveryManifest -PathType Leaf) -or
+    $Version -eq "0.8.0rc1"
+  )
+  if ($ExactDeliveryRequested) {
+    if (-not $ProductWheel -or -not (Test-Path -Path $DeliveryManifest -PathType Leaf)) {
+      Fail "delivery_manifest_missing" "The exact SeekTalent wheel and delivery manifest are required."
+    }
+    $DeliveryIdentity = Get-Content -Raw -Path $DeliveryManifest | ConvertFrom-Json
+    $WheelHash = (Get-FileHash -Algorithm SHA256 -Path $ProductWheel).Hash.ToLowerInvariant()
+    if (
+      $DeliveryIdentity.schema_version -ne 1 -or
+      $DeliveryIdentity.product_version -ne $Version -or
+      $DeliveryIdentity.seektalent_wheel -ne (Split-Path -Leaf $ProductWheel) -or
+      $DeliveryIdentity.seektalent_wheel_sha256 -ne $WheelHash
+    ) {
+      Fail "delivery_manifest_identity_mismatch" "The exact SeekTalent wheel does not match the delivery manifest."
+    }
+    $DeliveryManifestArgs = @("--delivery-manifest", $DeliveryManifest)
+  }
 
   $Prefix = Join-Path $InstallHome ".seektalent\python-prefix\$Version"
   $SitePackages = Join-Path $Prefix "Lib\site-packages"
@@ -106,6 +133,7 @@ function Install-SeekTalentDomi {
       --domi-node $DomiNode `
       --browser-bridge-bundle-dir $WtscliBundleDir `
       --browser-bridge-prepared-runtime-dir $PreparedRuntimeDir `
+      @DeliveryManifestArgs `
       --bin-dir $BinDir `
       --print-json
     if ($LASTEXITCODE -ne 0) {
@@ -133,7 +161,7 @@ function Install-SeekTalentDomi {
 
 if ($MyInvocation.MyCommand.Path -and $MyInvocation.InvocationName -ne ".") {
   try {
-    Install-SeekTalentDomi -Version $Version -DomiPython $DomiPython -DomiNode $DomiNode -WtscliBundleDir $WtscliBundleDir -BrowserBridgeHelper $BrowserBridgeHelper -PreparedWtscliRuntime $PreparedWtscliRuntime -InstallHome $InstallHome
+    Install-SeekTalentDomi -Version $Version -DomiPython $DomiPython -DomiNode $DomiNode -WtscliBundleDir $WtscliBundleDir -BrowserBridgeHelper $BrowserBridgeHelper -PreparedWtscliRuntime $PreparedWtscliRuntime -DeliveryManifest $DeliveryManifest -InstallHome $InstallHome
   } catch {
     Write-Error $_
     exit 1

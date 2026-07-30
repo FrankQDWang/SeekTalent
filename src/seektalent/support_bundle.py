@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 from importlib import metadata as importlib_metadata
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -12,6 +13,16 @@ from typing import Callable
 from uuid import uuid4
 
 from seektalent.config import AppSettings
+from seektalent.browser_bridge_manifest import (
+    WTSCLI_BUILD_ID,
+    WTSCLI_EXTENSION_ID,
+    WTSCLI_FORK_COMMIT,
+    WTSCLI_VERSION,
+)
+from seektalent.domi_bootstrap import (
+    INSTALL_RECEIPT_RELATIVE_PATH,
+    INSTALL_RECEIPT_SCHEMA,
+)
 from seektalent.version import __version__
 
 
@@ -30,9 +41,13 @@ def create_execution_support_bundle(
     now: Callable[[], datetime] | None = None,
 ) -> Path:
     created_at = (now or (lambda: datetime.now(UTC)))().astimezone(UTC)
-    root = output_dir or settings.artifacts_path / "support-bundles"
-    root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    root.chmod(0o700)
+    parent = output_dir or settings.artifacts_path / "support-bundles"
+    parent.mkdir(parents=True, exist_ok=True)
+    root = parent / (
+        f"execution-support-{created_at.strftime('%Y%m%dT%H%M%SZ')}-"
+        f"{uuid4().hex[:12]}"
+    )
+    root.mkdir(mode=0o700)
     database_path = settings.runtime_control_path
     payload: dict[str, object] = {
         "schemaVersion": SUPPORT_BUNDLE_SCHEMA,
@@ -41,6 +56,7 @@ def create_execution_support_bundle(
             "name": "seektalent",
             "version": _installed_version(),
         },
+        "executionIdentity": _execution_identity(),
         "runtimeControl": {
             "databaseAvailable": database_path.is_file(),
             "schemaVersion": None,
@@ -48,7 +64,11 @@ def create_execution_support_bundle(
             "checkpoints": [],
             "sourceOperations": [],
             "browserLane": None,
+            "browserLaneResolutions": [],
             "failureEnvelopes": [],
+            "executionFailures": [],
+            "componentHealth": [],
+            "phaseDurations": [],
         },
         "privacy": {
             "allowlistOnly": True,
@@ -66,10 +86,7 @@ def create_execution_support_bundle(
             )
         except sqlite3.Error as exc:
             raise SupportBundleError("support_bundle_runtime_control_unavailable") from exc
-    destination = root / (
-        f"execution-support-{created_at.strftime('%Y%m%dT%H%M%SZ')}-"
-        f"{uuid4().hex[:12]}.json"
-    )
+    destination = root / "bundle.json"
     encoded = json.dumps(
         payload,
         ensure_ascii=False,
@@ -109,7 +126,16 @@ def _runtime_control_payload(
             "checkpoints": _checkpoints(connection, selected_run_ids),
             "sourceOperations": _source_operations(connection, selected_run_ids),
             "browserLane": _browser_lane(connection),
+            "browserLaneResolutions": _browser_lane_resolutions(
+                connection
+            ),
             "failureEnvelopes": _failure_envelopes(connection, selected_run_ids),
+            "executionFailures": _execution_failures(connection),
+            "componentHealth": _component_health(connection),
+            "phaseDurations": _phase_durations(
+                connection,
+                selected_run_ids,
+            ),
         }
     finally:
         connection.close()
@@ -232,6 +258,104 @@ def _failure_envelopes(
     )
 
 
+def _browser_lane_resolutions(
+    connection: sqlite3.Connection,
+) -> list[dict[str, object]]:
+    if not _table_exists(
+        connection,
+        "runtime_control_browser_lane_resolutions",
+    ):
+        return []
+    return [
+        dict(row)
+        for row in connection.execute(
+            """
+            SELECT lane_key, fencing_token, runtime_run_id,
+                   operation_id, outcome, history_conclusion,
+                   evidence_ref, evidence_digest, resolved_at
+            FROM runtime_control_browser_lane_resolutions
+            ORDER BY resolved_at DESC
+            LIMIT 20
+            """
+        ).fetchall()
+    ]
+
+
+def _execution_failures(
+    connection: sqlite3.Connection,
+) -> list[dict[str, object]]:
+    if not _table_exists(
+        connection,
+        "runtime_control_execution_failures",
+    ):
+        return []
+    return [
+        dict(row)
+        for row in connection.execute(
+            """
+            SELECT runtime_run_id, component, boundary,
+                   safe_reason_code, exception_type,
+                   exception_fingerprint, failure_role, occurred_at
+            FROM runtime_control_execution_failures
+            ORDER BY occurred_at DESC
+            LIMIT 100
+            """
+        ).fetchall()
+    ]
+
+
+def _component_health(
+    connection: sqlite3.Connection,
+) -> list[dict[str, object]]:
+    if not _table_exists(
+        connection,
+        "runtime_control_component_health",
+    ):
+        return []
+    return [
+        dict(row)
+        for row in connection.execute(
+            """
+            SELECT component, alive, last_heartbeat_at, last_success_at,
+                   first_failure_at, first_failure_type, failure_count,
+                   restart_count, observed_at
+            FROM runtime_control_component_health
+            ORDER BY component
+            """
+        ).fetchall()
+    ]
+
+
+def _phase_durations(
+    connection: sqlite3.Connection,
+    runtime_run_ids: tuple[str, ...],
+) -> list[dict[str, object]]:
+    rows = _query_for_runs(
+        connection,
+        """
+        SELECT runtime_run_id, stage, MIN(created_at) AS started_at,
+               MAX(created_at) AS last_observed_at
+        FROM runtime_control_events
+        WHERE runtime_run_id IN ({placeholders})
+        GROUP BY runtime_run_id, stage
+        ORDER BY runtime_run_id, started_at
+        """,
+        runtime_run_ids,
+    )
+    for row in rows:
+        started = datetime.fromisoformat(
+            str(row["started_at"]).replace("Z", "+00:00")
+        )
+        observed = datetime.fromisoformat(
+            str(row["last_observed_at"]).replace("Z", "+00:00")
+        )
+        row["durationSeconds"] = max(
+            0.0,
+            (observed - started).total_seconds(),
+        )
+    return rows
+
+
 def _query_for_runs(
     connection: sqlite3.Connection,
     sql: str,
@@ -264,3 +388,97 @@ def _installed_version() -> str:
         return importlib_metadata.version("seektalent")
     except importlib_metadata.PackageNotFoundError:
         return __version__
+
+
+def _execution_identity() -> dict[str, object]:
+    install_root = Path(
+        os.environ.get("SEEKTALENT_INSTALL_HOME", str(Path.home()))
+    )
+    receipt_path = install_root / INSTALL_RECEIPT_RELATIVE_PATH
+    receipt: dict[str, object] | None = None
+    receipt_reason: str | None = None
+    if receipt_path.is_file() and not receipt_path.is_symlink():
+        try:
+            candidate = json.loads(receipt_path.read_text(encoding="utf-8"))
+            if (
+                isinstance(candidate, dict)
+                and candidate.get("schemaVersion")
+                == INSTALL_RECEIPT_SCHEMA
+                and _receipt_matches_expected_identity(candidate)
+            ):
+                receipt = {
+                    key: candidate.get(key)
+                    for key in (
+                        "schemaVersion",
+                        "productVersion",
+                        "sourceRevision",
+                        "productBuildId",
+                        "wheelSha256",
+                        "deliveryManifestSha256",
+                        "bridgeBuildId",
+                        "wtscliVersion",
+                        "wtscliForkCommit",
+                        "extensionVersion",
+                        "extensionIdSha256",
+                    )
+                }
+            else:
+                receipt_reason = "install_receipt_identity_mismatch"
+        except (OSError, json.JSONDecodeError):
+            receipt_reason = "install_receipt_invalid"
+    else:
+        receipt_reason = "install_receipt_missing"
+    return {
+        "expected": {
+            "packageVersion": __version__,
+            "bridgeBuildId": WTSCLI_BUILD_ID,
+            "wtscliVersion": WTSCLI_VERSION,
+            "wtscliForkCommit": WTSCLI_FORK_COMMIT,
+            "extensionVersion": WTSCLI_VERSION,
+            "extensionIdSha256": hashlib.sha256(
+                WTSCLI_EXTENSION_ID.encode()
+            ).hexdigest(),
+        },
+        "receiptAvailable": receipt is not None,
+        "receiptReasonCode": receipt_reason,
+        "receipt": receipt,
+    }
+
+
+def _receipt_matches_expected_identity(
+    receipt: dict[str, object],
+) -> bool:
+    source_revision = receipt.get("sourceRevision")
+    product_version = receipt.get("productVersion")
+    extension_hash = hashlib.sha256(
+        WTSCLI_EXTENSION_ID.encode()
+    ).hexdigest()
+    return (
+        product_version == _installed_version()
+        and isinstance(source_revision, str)
+        and len(source_revision) == 40
+        and all(
+            character in "0123456789abcdef"
+            for character in source_revision
+        )
+        and receipt.get("productBuildId")
+        == f"seektalent-{product_version}+{source_revision}"
+        and _sha256_text(receipt.get("wheelSha256"))
+        and _sha256_text(receipt.get("deliveryManifestSha256"))
+        and receipt.get("bridgeBuildId") == WTSCLI_BUILD_ID
+        and receipt.get("wtscliVersion") == WTSCLI_VERSION
+        and receipt.get("wtscliForkCommit") == WTSCLI_FORK_COMMIT
+        and receipt.get("extensionVersion") == WTSCLI_VERSION
+        and receipt.get("extensionIdSha256") == extension_hash
+    )
+
+
+def _sha256_text(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(
+            character in "0123456789abcdef"
+            for character in value
+        )
+    )

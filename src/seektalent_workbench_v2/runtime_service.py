@@ -5,7 +5,6 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
-import asyncio
 from inspect import signature
 from typing import Literal, Protocol, runtime_checkable
 from uuid import uuid4
@@ -306,6 +305,10 @@ class WorkbenchV2RuntimeService:
         idempotency_key: str,
     ) -> WorkbenchV2RuntimeRecoveryResult:
         current = self.store.get_run(runtime_run_id)
+        if self.store.has_unresolved_source_operations(runtime_run_id):
+            raise RuntimeControlError(
+                "runtime_source_operation_unresolved"
+            )
         if current.status in {
             "queued",
             "starting",
@@ -381,20 +384,14 @@ class WorkbenchV2RuntimeService:
             return
         if self.settings is None:
             raise RuntimeControlError("workbench_v2_liepin_recheck_unavailable")
-        from seektalent.liepin_readiness_operation import (
-            prepare_production_liepin_readiness,
+        del runtime_run_id, idempotency_key
+        from seektalent.liepin_verify_session_gate import (
+            create_production_liepin_verify_session_gate,
         )
 
-        operation_id = "prepare-" + sha256(
-            f"{runtime_run_id}:{idempotency_key}".encode("utf-8")
-        ).hexdigest()
-        await asyncio.to_thread(
-            prepare_production_liepin_readiness,
-            settings=self.settings,
-            store=self.store,
-            runtime_run_id=runtime_run_id,
-            operation_id=operation_id,
-        )
+        await create_production_liepin_verify_session_gate(
+            self.settings
+        ).verify()
 
     def _draft_revision_id(self, operation_key: str) -> str:
         if self._custom_draft_revision_id_factory:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import subprocess
 import sys
@@ -9,6 +10,12 @@ from pathlib import Path
 import pytest
 
 from seektalent import domi_bootstrap
+from seektalent.browser_bridge_manifest import (
+    WTSCLI_BUILD_ID,
+    WTSCLI_EXTENSION_ID,
+    WTSCLI_FORK_COMMIT,
+    WTSCLI_VERSION,
+)
 from tests.browser_bridge_bundle_fixtures import write_browser_bridge_bundle
 
 
@@ -115,10 +122,38 @@ def test_bootstrap_installs_prepared_runtime_only_with_its_exact_bundle(
     prepared_runtime = tmp_path / "prepared-runtime"
     write_browser_bridge_bundle(bundle)
     prepared_runtime.mkdir()
+    delivery_manifest = tmp_path / "delivery-manifest.json"
+    delivery_manifest.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "product_version": "0.8.0rc1",
+                "source_revision": "a" * 40,
+                "product_build_id": (
+                    "seektalent-0.8.0rc1+" + "a" * 40
+                ),
+                "seektalent_wheel_sha256": "b" * 64,
+                "bridge_build_id": WTSCLI_BUILD_ID,
+                "wtscli_version": WTSCLI_VERSION,
+                "wtscli_fork_commit": WTSCLI_FORK_COMMIT,
+                "extension_version": WTSCLI_VERSION,
+                "extension_id_sha256": hashlib.sha256(
+                    WTSCLI_EXTENSION_ID.encode()
+                ).hexdigest(),
+            }
+        ),
+        encoding="utf-8",
+    )
     captured: dict[str, object] = {}
+    captured_receipt: dict[str, object] = {}
 
     def fake_install(**kwargs: object) -> None:
         captured.update(kwargs)
+        for source, target in kwargs["additional_targets"]:
+            if target == home / domi_bootstrap.INSTALL_RECEIPT_RELATIVE_PATH:
+                captured_receipt.update(
+                    json.loads(source.read_text(encoding="utf-8"))
+                )
 
     monkeypatch.setattr(domi_bootstrap, "install_browser_bridge_bundle", fake_install)
 
@@ -129,6 +164,8 @@ def test_bootstrap_installs_prepared_runtime_only_with_its_exact_bundle(
         domi_node=domi_node,
         browser_bridge_bundle_dir=bundle,
         browser_bridge_prepared_runtime_dir=prepared_runtime,
+        delivery_manifest_path=delivery_manifest,
+        package_version="0.8.0rc1",
     )
 
     assert captured["bundle_dir"] == bundle
@@ -138,8 +175,12 @@ def test_bootstrap_installs_prepared_runtime_only_with_its_exact_bundle(
     additional_targets = captured["additional_targets"]
     assert isinstance(additional_targets, tuple)
     assert [target for _source, target in additional_targets] == [
-        home / ".seektalent" / "bin"
+        home / ".seektalent" / "bin",
+        home / domi_bootstrap.INSTALL_RECEIPT_RELATIVE_PATH,
     ]
+    assert captured_receipt["sourceRevision"] == "a" * 40
+    assert captured_receipt["productVersion"] == "0.8.0rc1"
+    assert captured_receipt["bridgeBuildId"] == WTSCLI_BUILD_ID
 
     with pytest.raises(
         domi_bootstrap.DomiBootstrapError,

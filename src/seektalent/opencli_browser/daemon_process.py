@@ -92,6 +92,31 @@ def connect_installed_opencli_daemon(
     raise last_error
 
 
+def connect_existing_opencli_daemon_read_only(
+    runtime: OpenCliRuntime,
+    *,
+    context_id: str | None = None,
+    verify_timeout_seconds: float = 0.3,
+) -> OpenCliDaemonClient:
+    """Connect to an existing daemon without starting, restarting, or repair."""
+    manifest = runtime.bridge_manifest
+    if manifest is None:
+        raise OpenCliBrowserError(OPENCLI_BRIDGE_INTEGRITY_FAILED)
+    requirement = runtime.requirement or load_bridge_requirement(manifest)
+    client = OpenCliDaemonClient(
+        requirement=requirement,
+        context_id=context_id,
+    )
+    try:
+        client.verify_bridge(
+            timeout_seconds=max(0.001, verify_timeout_seconds)
+        )
+    except Exception:
+        client.close()
+        raise
+    return client
+
+
 def _restart_installed_daemon(
     runtime: OpenCliRuntime,
     *,

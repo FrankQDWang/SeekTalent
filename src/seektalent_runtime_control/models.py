@@ -22,7 +22,7 @@ RunStatus = Literal[
     "failed",
 ]
 RunKind = Literal["primary", "rerun", "fork"]
-ClaimReason = Literal["queued", "resume_requested"]
+ClaimReason = Literal["queued", "resume_requested", "resource_wait"]
 
 
 class RuntimeRunRecord(BaseModel):

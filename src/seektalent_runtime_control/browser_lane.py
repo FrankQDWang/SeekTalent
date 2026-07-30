@@ -3,16 +3,19 @@
 from __future__ import annotations
 
 import os
+import logging
 import re
 import threading
 import time
 from dataclasses import dataclass
+from collections.abc import Callable
 from typing import Literal, Protocol
 from uuid import uuid4
 
 from seektalent_runtime_control.errors import RuntimeControlError
 
 
+logger = logging.getLogger(__name__)
 LIEPIN_BROWSER_LANE = "liepin_browser"
 BROWSER_LANE_SCHEMA_STATEMENTS = (
     """
@@ -39,6 +42,23 @@ BROWSER_LANE_SCHEMA_STATEMENTS = (
         'cards', 'details', 'continuation', 'recheck',
         'prepare_readiness'
       ))
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS runtime_control_browser_lane_resolutions (
+      resolution_id TEXT PRIMARY KEY,
+      lane_key TEXT NOT NULL,
+      fencing_token INTEGER NOT NULL,
+      runtime_run_id TEXT NOT NULL,
+      operation_id TEXT NOT NULL,
+      outcome TEXT NOT NULL,
+      history_conclusion TEXT,
+      evidence_ref TEXT NOT NULL,
+      evidence_digest TEXT NOT NULL,
+      resolved_at TEXT NOT NULL,
+      CHECK (lane_key = 'liepin_browser'),
+      CHECK (outcome IN ('no_effect', 'terminal_observed', 'unknown')),
+      CHECK (length(evidence_digest) = 64)
     )
     """,
     """
@@ -151,6 +171,7 @@ class BrowserLaneGuard:
         lease_seconds: float = 30.0,
         poll_interval_seconds: float = 0.1,
         monotonic=time.monotonic,
+        on_lease_lost: Callable[[], None] | None = None,
     ) -> None:
         if wait_timeout_seconds <= 0 or lease_seconds <= 0:
             raise ValueError("browser lane timeouts must be positive")
@@ -167,6 +188,7 @@ class BrowserLaneGuard:
         self._lease_seconds = lease_seconds
         self._poll_interval_seconds = poll_interval_seconds
         self._monotonic = monotonic
+        self._on_lease_lost = on_lease_lost
         self._owner_id = f"browser-owner-{uuid4().hex}"
         self._lease: BrowserLaneLease | None = None
         self._heartbeat_stop = threading.Event()
@@ -217,14 +239,68 @@ class BrowserLaneGuard:
             if self._heartbeat_error is not None
             else _safe_failure_code(exc)
         )
-        self._store.release_browser_lane(
-            lane_key=lease.lane_key,
-            owner_id=lease.owner_id,
-            fencing_token=lease.fencing_token,
-            released_at=self._now(),
-            status="failed" if failure else "completed",
-            failure_code=failure_code,
-        )
+        # A failed heartbeat leaves the lane durably unresolved. Killing the
+        # owned sidecar cannot prove that a command already accepted by the
+        # long-lived browser daemon stopped. A later owner may proceed only
+        # after explicit reconciliation resolves this fence.
+        if self._heartbeat_error is not None:
+            recorder = getattr(
+                self._store,
+                "record_execution_failure",
+                None,
+            )
+            if callable(recorder):
+                try:
+                    recorder(
+                        runtime_run_id=self._runtime_run_id,
+                        component="browser_lane",
+                        boundary="heartbeat",
+                        safe_reason_code=(
+                            "browser_lane_heartbeat_failed"
+                        ),
+                        error=self._heartbeat_error,
+                        failure_role=(
+                            "secondary" if exc is not None else "primary"
+                        ),
+                        occurred_at=self._now(),
+                    )
+                except Exception:
+                    if exc is None:
+                        raise
+        if self._heartbeat_error is None:
+            try:
+                self._store.release_browser_lane(
+                    lane_key=lease.lane_key,
+                    owner_id=lease.owner_id,
+                    fencing_token=lease.fencing_token,
+                    released_at=self._now(),
+                    status="failed" if failure else "completed",
+                    failure_code=failure_code,
+                )
+            except Exception as cleanup_error:
+                recorder = getattr(
+                    self._store,
+                    "record_execution_failure",
+                    None,
+                )
+                if callable(recorder):
+                    try:
+                        recorder(
+                            runtime_run_id=self._runtime_run_id,
+                            component="browser_lane",
+                            boundary="release",
+                            safe_reason_code=(
+                                "browser_lane_release_failed"
+                            ),
+                            error=cleanup_error,
+                            failure_role="secondary" if exc is not None else "primary",
+                            occurred_at=self._now(),
+                        )
+                    except Exception:
+                        if exc is None:
+                            raise
+                if exc is None:
+                    raise
         if exc is None and self._heartbeat_error is not None:
             raise RuntimeControlError(
                 "liepin_browser_lane_heartbeat_failed"
@@ -256,6 +332,14 @@ class BrowserLaneGuard:
                 )
             except Exception as error:  # noqa: BLE001 - the guard must surface a dead heartbeat
                 self._heartbeat_error = error
+                if self._on_lease_lost is not None:
+                    try:
+                        self._on_lease_lost()
+                    except Exception as callback_error:  # noqa: BLE001
+                        logger.debug(
+                            "browser lane fence callback failed: %s",
+                            type(callback_error).__name__,
+                        )
                 self._heartbeat_stop.set()
                 return
 
@@ -295,11 +379,7 @@ class BrowserLaneStoreMixin:
                 """,
                 (lane_key,),
             ).fetchone()
-            if (
-                row is not None
-                and row["status"] == "active"
-                and row["lease_expires_at"] > acquired_at
-            ):
+            if row is not None and row["status"] == "active":
                 connection.commit()
                 return None
             fencing_token = (
@@ -441,6 +521,171 @@ class BrowserLaneStoreMixin:
                 (lane_key,),
             ).fetchone()
         return _snapshot_from_row(row)
+
+    def resolve_expired_browser_lane_after_reconciliation(
+        self,
+        *,
+        fencing_token: int,
+        runtime_run_id: str,
+        operation_id: str,
+        outcome: Literal[
+            "no_effect",
+            "terminal_observed",
+            "unknown",
+        ],
+        history_conclusion: str | None,
+        evidence_ref: str,
+        evidence_digest: str,
+        resolved_at: str,
+    ) -> bool:
+        """Terminalize an orphaned fence only from durable reconciliation."""
+        if (
+            _SAFE_ID.fullmatch(evidence_ref) is None
+            or re.fullmatch(r"[0-9a-f]{64}", evidence_digest) is None
+        ):
+            raise ValueError("browser_lane_resolution_evidence_invalid")
+        if outcome == "no_effect" and history_conclusion not in {
+            None,
+            "accepted_no_dispatch",
+        }:
+            raise ValueError("browser_lane_no_effect_evidence_invalid")
+        with self._connect() as connection:  # type: ignore[attr-defined]
+            connection.execute("BEGIN IMMEDIATE")
+            lane = connection.execute(
+                """
+                SELECT * FROM runtime_control_browser_lanes
+                WHERE lane_key = 'liepin_browser'
+                """
+            ).fetchone()
+            if (
+                lane is None
+                or lane["status"] != "active"
+                or int(lane["fencing_token"]) != fencing_token
+                or lane["runtime_run_id"] != runtime_run_id
+                or lane["operation_id"] != operation_id
+                or lane["lease_expires_at"] > resolved_at
+            ):
+                connection.rollback()
+                raise RuntimeControlError(
+                    "liepin_browser_lane_resolution_conflict"
+                )
+            operation = connection.execute(
+                """
+                SELECT operation_phase, conclusive_observation_ref,
+                       source_operation_disposition
+                FROM runtime_control_source_operations
+                WHERE runtime_run_id = ? AND operation_id = ?
+                """,
+                (runtime_run_id, operation_id),
+            ).fetchone()
+            if operation is None:
+                connection.rollback()
+                raise RuntimeControlError(
+                    "liepin_browser_lane_source_operation_missing"
+                )
+            reconciliation = connection.execute(
+                """
+                SELECT *
+                FROM runtime_control_source_reconciliations
+                WHERE runtime_run_id = ? AND operation_id = ?
+                  AND history_result_ref = ?
+                  AND history_result_digest = ?
+                  AND (
+                    history_conclusion = ?
+                    OR (
+                      history_conclusion IS NULL
+                      AND ? IS NULL
+                    )
+                  )
+                ORDER BY committed_reconciliation_revision DESC
+                LIMIT 1
+                """,
+                (
+                    runtime_run_id,
+                    operation_id,
+                    evidence_ref,
+                    evidence_digest,
+                    history_conclusion,
+                    history_conclusion,
+                ),
+            ).fetchone()
+            expected_decision = {
+                "unknown": "unresolved",
+                "no_effect": "no_dispatch_proved",
+                "terminal_observed": "conclusive_observation",
+            }[outcome]
+            if (
+                reconciliation is None
+                or reconciliation["decision_kind"]
+                != expected_decision
+            ):
+                connection.rollback()
+                raise RuntimeControlError(
+                    "liepin_browser_lane_reconciliation_evidence_missing"
+                )
+            if outcome == "no_effect" and (
+                reconciliation["retry_posture"] != "safe_retry"
+                or reconciliation["dispatch_intent_ref"] is not None
+            ):
+                connection.rollback()
+                raise RuntimeControlError(
+                    "liepin_browser_lane_no_effect_evidence_missing"
+                )
+            if outcome == "terminal_observed" and (
+                operation["operation_phase"]
+                not in {"reconciled", "main_committed"}
+                or operation["conclusive_observation_ref"] is None
+                or operation["source_operation_disposition"]
+                == "reconciliation_unknown"
+                or reconciliation["conclusive_observation_ref"]
+                != operation["conclusive_observation_ref"]
+            ):
+                connection.rollback()
+                raise RuntimeControlError(
+                    "liepin_browser_lane_terminal_evidence_missing"
+                )
+            connection.execute(
+                """
+                INSERT INTO runtime_control_browser_lane_resolutions (
+                  resolution_id, lane_key, fencing_token, runtime_run_id,
+                  operation_id, outcome, history_conclusion, evidence_ref,
+                  evidence_digest, resolved_at
+                )
+                VALUES (?, 'liepin_browser', ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    f"lane-resolution-{uuid4().hex}",
+                    fencing_token,
+                    runtime_run_id,
+                    operation_id,
+                    outcome,
+                    history_conclusion,
+                    evidence_ref,
+                    evidence_digest,
+                    resolved_at,
+                ),
+            )
+            if outcome == "unknown":
+                connection.commit()
+                return False
+            connection.execute(
+                """
+                UPDATE runtime_control_browser_lanes
+                SET status = 'failed', lease_expires_at = NULL,
+                    released_at = ?, last_failure_code = ?,
+                    updated_at = ?
+                WHERE lane_key = 'liepin_browser'
+                  AND fencing_token = ? AND status = 'active'
+                """,
+                (
+                    resolved_at,
+                    "liepin_browser_lane_reconciled",
+                    resolved_at,
+                    fencing_token,
+                ),
+            )
+            connection.commit()
+        return True
 
     def get_browser_lane(
         self,

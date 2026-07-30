@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from inspect import Parameter, signature
+import logging
 from typing import Protocol, runtime_checkable
 from uuid import uuid4
 
@@ -13,6 +14,7 @@ from seektalent_runtime_control.checkpoint_v2 import (
     checkpoint_projection,
     legacy_checkpoint_projection,
 )
+from seektalent_runtime_control.browser_lane import BrowserLaneBusyError
 from seektalent_runtime_control.commands import RuntimeCommandService
 from seektalent_runtime_control.event_sink import RuntimeControlEventSink, RuntimeEventSink
 from seektalent_runtime_control.errors import RuntimeControlError
@@ -29,6 +31,15 @@ from seektalent_runtime_control.store import RuntimeCheckpointLoadFailure, Runti
 
 SourceContext = dict[str, str | int | bool | None]
 SourceContextProvider = Callable[[Sequence[str], AppSettings | None], SourceContext | None]
+logger = logging.getLogger(__name__)
+
+
+class RuntimeFactory(Protocol):
+    def __call__(
+        self,
+        *,
+        source_operation_executor: object | None,
+    ) -> object: ...
 
 
 @runtime_checkable
@@ -42,7 +53,7 @@ class WorkflowRuntimeExecutor:
         *,
         store: RuntimeControlStore,
         settings: AppSettings | None = None,
-        runtime_factory: Callable[[], object] | None = None,
+        runtime_factory: RuntimeFactory | None = None,
         runtime_run_id_factory: Callable[[], str] | None = None,
         executor_id_factory: Callable[[], str] | None = None,
         checkpoint_id_factory: Callable[[], str] | None = None,
@@ -56,7 +67,12 @@ class WorkflowRuntimeExecutor:
             raise ValueError("settings is required when runtime_factory is not provided")
         self.store = store
         self.settings = settings
-        self.runtime_factory: Callable[[], object] = runtime_factory or (lambda: _build_default_runtime(settings))
+        self.runtime_factory: RuntimeFactory = runtime_factory or (
+            lambda *, source_operation_executor: _build_default_runtime(
+                settings,
+                source_operation_executor=source_operation_executor,
+            )
+        )
         self.runtime_run_id_factory = runtime_run_id_factory or (lambda: f"rtrun_{uuid4().hex}")
         self.executor_id_factory = executor_id_factory or (lambda: f"rtexec_{uuid4().hex}")
         self.checkpoint_id_factory = checkpoint_id_factory or (lambda: f"rtcheckpoint_{uuid4().hex}")
@@ -249,13 +265,6 @@ class WorkflowRuntimeExecutor:
                     f"executor-lease://{run.runtime_run_id}/{attempt_no}"
                 ),
             )
-        runtime = self._build_runtime(
-            source_operation_executor=cards_operation_executor,
-        )
-        if not isinstance(runtime, RuntimeLike):
-            if cards_operation_executor is not None:
-                cards_operation_executor.close()
-            raise RuntimeControlError("runtime_adapter_invalid")
         resume_checkpoint = self._load_resume_checkpoint(
             runtime_run_id=run.runtime_run_id,
             executor_id=executor_id,
@@ -274,6 +283,13 @@ class WorkflowRuntimeExecutor:
                 executor_id=executor_id,
                 attempt_no=attempt_no,
             )
+        runtime = self._build_runtime(
+            source_operation_executor=cards_operation_executor,
+        )
+        if not isinstance(runtime, RuntimeLike):
+            if cards_operation_executor is not None:
+                cards_operation_executor.close()
+            raise RuntimeControlError("runtime_adapter_invalid")
         detail_claim_revision, detail_claim_payload_hash = (
             self.store.get_detail_claim_revision(runtime_run_id=run.runtime_run_id)
         )
@@ -450,21 +466,49 @@ class WorkflowRuntimeExecutor:
                     .model_dump(mode="json")
                 )
             await runtime.run_async(**runtime_kwargs)
+        except BrowserLaneBusyError as exc:
+            if cards_operation_executor is not None:
+                self._close_source_executor_after_failure(
+                    cards_operation_executor,
+                    runtime_run_id=run.runtime_run_id,
+                    primary_error=exc,
+                )
+            return self._yield_for_browser_lane(
+                runtime_run_id=run.runtime_run_id,
+                executor_id=executor_id,
+                attempt_no=attempt_no,
+            )
         except (RuntimeError, ValueError, OSError) as exc:
             if cards_operation_executor is not None:
-                cards_operation_executor.close()
+                self._close_source_executor_after_failure(
+                    cards_operation_executor,
+                    runtime_run_id=run.runtime_run_id,
+                    primary_error=exc,
+                )
             reason_code = "runtime_run_failed" if runtime_started else "runtime_executor_start_failed"
+            self._record_execution_failure_safely(
+                runtime_run_id=run.runtime_run_id,
+                component="runtime_executor",
+                boundary=(
+                    "runtime_effect"
+                    if runtime_started
+                    else "runtime_start"
+                ),
+                safe_reason_code=reason_code,
+                error=exc,
+                failure_role="primary",
+                occurred_at=self.now(),
+            )
             self.store.append_executor_event(
                 _event(
                     runtime_run_id=run.runtime_run_id,
                     event_type=reason_code,
                     stage="runtime",
                     status="failed",
-                    summary=str(exc),
+                    summary=reason_code,
                     payload={
                         "reasonCode": reason_code,
                         "exceptionType": type(exc).__name__,
-                        "message": str(exc),
                     },
                     created_at=self.now(),
                 ),
@@ -487,9 +531,13 @@ class WorkflowRuntimeExecutor:
                     runtime_run_id=run.runtime_run_id
                 )
             raise
-        except BaseException:
+        except BaseException as exc:
             if cards_operation_executor is not None:
-                cards_operation_executor.close()
+                self._close_source_executor_after_failure(
+                    cards_operation_executor,
+                    runtime_run_id=run.runtime_run_id,
+                    primary_error=exc,
+                )
             raise
 
         if cards_operation_executor is not None:
@@ -499,6 +547,74 @@ class WorkflowRuntimeExecutor:
             executor_id=executor_id,
             attempt_no=attempt_no,
         )
+
+    def _close_source_executor_after_failure(
+        self,
+        source_executor: object,
+        *,
+        runtime_run_id: str,
+        primary_error: BaseException,
+    ) -> None:
+        del primary_error
+        try:
+            source_executor.close()  # type: ignore[attr-defined]
+        except Exception as cleanup_error:  # noqa: BLE001
+            self._record_execution_failure_safely(
+                runtime_run_id=runtime_run_id,
+                component="runtime_executor",
+                boundary="source_executor_close",
+                safe_reason_code="source_executor_close_failed",
+                error=cleanup_error,
+                failure_role="secondary",
+                occurred_at=self.now(),
+            )
+
+    def _record_execution_failure_safely(
+        self,
+        **values: object,
+    ) -> None:
+        try:
+            self.store.record_execution_failure(**values)
+        except Exception as persistence_error:  # noqa: BLE001
+            logger.debug(
+                "execution failure persistence failed: %s",
+                type(persistence_error).__name__,
+            )
+            return
+
+    def _yield_for_browser_lane(
+        self,
+        *,
+        runtime_run_id: str,
+        executor_id: str,
+        attempt_no: int,
+    ) -> RuntimeRunRecord:
+        yielded_at = self.now()
+        self.store.append_executor_event(
+            _event(
+                runtime_run_id=runtime_run_id,
+                event_type="runtime_resource_waiting",
+                stage="source",
+                status="pending",
+                summary="waiting for Liepin browser lane",
+                payload={
+                    "reasonCode": "liepin_browser_lane_busy",
+                    "resource": "liepin_browser",
+                },
+                created_at=yielded_at,
+            ),
+            executor_id=executor_id,
+            attempt_no=attempt_no,
+            run_status="resume_requested",
+        )
+        self.store.release_executor_lease(
+            runtime_run_id=runtime_run_id,
+            executor_id=executor_id,
+            attempt_no=attempt_no,
+            released_at=yielded_at,
+            reason_code="liepin_browser_lane_busy",
+        )
+        return self.store.get_run(runtime_run_id)
 
     def _settle_completed_run(
         self,
@@ -547,20 +663,11 @@ class WorkflowRuntimeExecutor:
         *,
         source_operation_executor: object | None,
     ) -> object:
-        if source_operation_executor is None:
-            return self.runtime_factory()
-        parameters = signature(self.runtime_factory).parameters.values()
-        accepts_kwargs = any(
-            parameter.kind == Parameter.VAR_KEYWORD
-            for parameter in parameters
-        )
-        names = {parameter.name for parameter in parameters}
-        if "source_operation_executor" in names or accepts_kwargs:
-            return self.runtime_factory(
-                source_operation_executor=source_operation_executor
-            )
-        raise RuntimeControlError(
-            "runtime_source_operation_injection_required"
+        if self.settings is None:
+            legacy_factory = self.runtime_factory
+            return legacy_factory()  # type: ignore[call-arg]
+        return self.runtime_factory(
+            source_operation_executor=source_operation_executor,
         )
 
     def _load_resume_checkpoint(

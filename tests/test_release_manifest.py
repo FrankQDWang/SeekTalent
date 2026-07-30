@@ -39,9 +39,9 @@ TARGETS = (
 )
 
 GOLDEN_MANIFEST_DIGESTS = {
-    ("windows", "x86_64"): "ef98599f4c45a121b6f5b7d21b6988921835eceb6580ac517a2d7a0b438e60d0",
-    ("macos", "x86_64"): "74e608fa892285fd30ab0b425ab483d73260398a6ed6788df724e0b9b4a73c07",
-    ("macos", "arm64"): "86cd5693582adc92c6b25b5057bc11e9ff8fd50d337c1835166d3ce1e40227e0",
+    ("windows", "x86_64"): "7d6b3aa1c793629d40d48d0c35055b52ce85ce668eef85b778e8e7c08d1440ae",
+    ("macos", "x86_64"): "4800e284490f6a0be407e5d08af4236bf3593501fc3b38e0fb7b3960278382ee",
+    ("macos", "arm64"): "dfa08c8df9a9c9469f5373fc45b127d4ea5b6d6431be1b9762c17f1aacf60391",
 }
 
 
@@ -164,7 +164,7 @@ def _manifest_payload(target: dict[str, str]) -> dict[str, object]:
         "manifest_id": f"manifest-{target['os']}-{target['arch']}",
         "release_series_id": "release-series-1",
         "product_name": "SeekTalent",
-        "product_version": "0.7.49",
+        "product_version": "0.8.0rc1",
         "product_build_id": "st1-" + "0" * 32,
         "source_revision": SOURCE_SHA,
         "source_tree_digest": SOURCE_TREE_SHA,

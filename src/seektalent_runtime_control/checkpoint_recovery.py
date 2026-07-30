@@ -12,6 +12,9 @@ RUNTIME_CHECKPOINT_SCHEMA_UNSUPPORTED = "runtime_checkpoint_schema_unsupported"
 RUNTIME_CHECKPOINT_CORRUPT = "runtime_checkpoint_corrupt"
 RUNTIME_CHECKPOINT_SAFE_BOUNDARY_UNREGISTERED = "runtime_checkpoint_safe_boundary_unregistered"
 RUNTIME_CHECKPOINT_SAFE_BOUNDARY_INVALID = "runtime_checkpoint_safe_boundary_invalid"
+RUNTIME_SOURCE_OPERATION_UNRESOLVED = (
+    "runtime_source_operation_unresolved"
+)
 
 
 @dataclass(frozen=True)
@@ -211,6 +214,15 @@ def decide_expired_lease_recovery(
             summary="executor lease expired before the pending pause reached a safe boundary",
         )
     if isinstance(checkpoint, RuntimeCheckpointLoadFailure):
+        if checkpoint.reason_code == RUNTIME_SOURCE_OPERATION_UNRESOLVED:
+            return RuntimeRecoveryPlan(
+                reason_code=checkpoint.reason_code,
+                target_status="needs_attention",
+                event_type="runtime_source_operation_needs_reconciliation",
+                event_status="blocked",
+                summary="source operation requires reconciliation",
+                checkpoint_id=checkpoint.checkpoint_id,
+            )
         return RuntimeRecoveryPlan(
             reason_code=checkpoint.reason_code,
             target_status="failed",

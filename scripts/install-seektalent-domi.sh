@@ -27,6 +27,7 @@ _seektalent_domi_install() {
   local wtscli_bundle_dir="${requested_bundle_dir:-${script_dir}/wtscli-browser-bridge}"
   local prepared_runtime_archive="${SEEKTALENT_WTSCLI_PREPARED_RUNTIME:-${script_dir}/wtscli-runtime.zip}"
   local admission_helper="${SEEKTALENT_BROWSER_BRIDGE_HELPER:-${script_dir}/install_staging_browser_bridge.py}"
+  local delivery_manifest="${SEEKTALENT_DELIVERY_MANIFEST:-${script_dir}/delivery-manifest.json}"
   local product_wheels=("${script_dir}"/seektalent-*.whl)
   local product_wheel=""
   if [[ "${#product_wheels[@]}" -eq 1 && -f "${product_wheels[0]}" ]]; then
@@ -91,6 +92,37 @@ _seektalent_domi_install() {
     _seektalent_domi_fail "wtscli_runtime_missing" "The prepared WTSCLI runtime was not found in the SeekTalent product package: ${prepared_runtime_archive}"
     return 1
   fi
+  local delivery_manifest_args=()
+  if [[ -n "${product_wheel}" || -f "${delivery_manifest}" || "${version}" == "0.8.0rc1" ]]; then
+    if [[ -z "${product_wheel}" || ! -f "${delivery_manifest}" ]]; then
+      _seektalent_domi_fail "delivery_manifest_missing" "The exact SeekTalent wheel and delivery manifest are required."
+      return 1
+    fi
+    if ! "${domi_python}" - "${delivery_manifest}" "${product_wheel}" "${version}" <<'PY'
+import hashlib
+import json
+import pathlib
+import sys
+
+manifest_path = pathlib.Path(sys.argv[1])
+wheel_path = pathlib.Path(sys.argv[2])
+version = sys.argv[3]
+payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+actual = hashlib.sha256(wheel_path.read_bytes()).hexdigest()
+if (
+    payload.get("schema_version") != 1
+    or payload.get("product_version") != version
+    or payload.get("seektalent_wheel") != wheel_path.name
+    or payload.get("seektalent_wheel_sha256") != actual
+):
+    raise SystemExit(1)
+PY
+    then
+      _seektalent_domi_fail "delivery_manifest_identity_mismatch" "The exact SeekTalent wheel does not match the delivery manifest."
+      return 1
+    fi
+    delivery_manifest_args=(--delivery-manifest "${delivery_manifest}")
+  fi
 
   local prefix="${install_home}/.seektalent/python-prefix/${version}"
   local site_packages="${prefix}/site-packages"
@@ -135,6 +167,7 @@ _seektalent_domi_install() {
       --domi-node "${domi_node}" \
       --browser-bridge-bundle-dir "${wtscli_bundle_dir}" \
       --browser-bridge-prepared-runtime-dir "${prepared_runtime_dir}" \
+      "${delivery_manifest_args[@]}" \
       --bin-dir "${bin_dir}" \
       --print-json || {
         rm -rf -- "${candidate_root}"

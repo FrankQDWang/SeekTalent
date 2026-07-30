@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import stat
@@ -13,6 +14,10 @@ from pathlib import Path
 from seektalent.browser_bridge_install import install_browser_bridge_bundle
 from seektalent.browser_bridge_manifest import (
     BrowserBridgeManifestError,
+    WTSCLI_BUILD_ID,
+    WTSCLI_EXTENSION_ID,
+    WTSCLI_FORK_COMMIT,
+    WTSCLI_VERSION,
     load_browser_bridge_bundle,
 )
 from seektalent.version import __version__
@@ -20,6 +25,8 @@ from seektalent.version import __version__
 
 DOMI_NODE_ENV_KEYS = ("SEEKTALENT_DOMI_NODE", "DOMI_NODE")
 DEFAULT_BIN_DIR = Path.home() / ".seektalent" / "bin"
+INSTALL_RECEIPT_RELATIVE_PATH = Path(".seektalent") / "install-receipt.json"
+INSTALL_RECEIPT_SCHEMA = "seektalent.install-receipt.v1"
 WINDOWS_DEFAULT_NODE_RELATIVE = Path("Domi") / "runtime" / "node" / "node.exe"
 MAC_DEFAULT_NODE_CANDIDATES = (
     Path("/Applications/Domi.app/Contents/Resources/extraResources/node/runtime/bin/node"),
@@ -65,6 +72,7 @@ def bootstrap_domi_workbench(
     bin_dir: Path | None = None,
     browser_bridge_bundle_dir: Path | None = None,
     browser_bridge_prepared_runtime_dir: Path | None = None,
+    delivery_manifest_path: Path | None = None,
     python_prefix_candidate: Path | None = None,
     python_prefix_target: Path | None = None,
     env: Mapping[str, str] | None = None,
@@ -96,6 +104,10 @@ def bootstrap_domi_workbench(
                 "browser_bridge_install_failed",
                 "The exact SeekTalent WTSCLI browser bridge bundle could not be installed.",
             ) from exc
+    delivery_identity = _delivery_identity(
+        delivery_manifest_path,
+        package_version=package_version,
+    )
 
     resolved_python = (domi_python or Path(sys.executable)).expanduser()
     _require_executable_runtime(
@@ -179,6 +191,25 @@ def bootstrap_domi_workbench(
                     )
                 )
             additional_targets.append((staged_bin, target_bin_dir))
+            if delivery_identity is not None:
+                staged_receipt = stage_root / "install-receipt.json"
+                staged_receipt.write_text(
+                    json.dumps(
+                        delivery_identity,
+                        ensure_ascii=False,
+                        indent=2,
+                        sort_keys=True,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                staged_receipt.chmod(0o600)
+                additional_targets.append(
+                    (
+                        staged_receipt,
+                        root / INSTALL_RECEIPT_RELATIVE_PATH,
+                    )
+                )
             try:
                 install_browser_bridge_bundle(
                     bundle_dir=browser_bridge_bundle_dir.expanduser(),
@@ -230,6 +261,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--package-version", default=__version__)
     parser.add_argument("--browser-bridge-bundle-dir", type=Path)
     parser.add_argument("--browser-bridge-prepared-runtime-dir", type=Path)
+    parser.add_argument("--delivery-manifest", type=Path)
     parser.add_argument("--python-prefix-candidate", type=Path)
     parser.add_argument("--python-prefix-target", type=Path)
     parser.add_argument("--print-json", action="store_true")
@@ -245,6 +277,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             package_version=args.package_version,
             browser_bridge_bundle_dir=args.browser_bridge_bundle_dir,
             browser_bridge_prepared_runtime_dir=args.browser_bridge_prepared_runtime_dir,
+            delivery_manifest_path=args.delivery_manifest,
             python_prefix_candidate=args.python_prefix_candidate,
             python_prefix_target=args.python_prefix_target,
         )
@@ -277,6 +310,72 @@ def _default_node_candidates(*, env: Mapping[str, str], platform: str, home: Pat
         home / ".domi" / "runtime" / "node" / "bin" / "node",
     )
     return (*MAC_DEFAULT_NODE_CANDIDATES, *home_candidates)
+
+
+def _delivery_identity(
+    manifest_path: Path | None,
+    *,
+    package_version: str,
+) -> dict[str, object] | None:
+    if manifest_path is None:
+        return None
+    try:
+        raw = manifest_path.read_bytes()
+        payload = json.loads(raw)
+    except (OSError, json.JSONDecodeError) as exc:
+        raise DomiBootstrapError(
+            "delivery_manifest_invalid",
+            "The exact SeekTalent delivery manifest is unavailable.",
+        ) from exc
+    expected = {
+        "schema_version": 1,
+        "product_version": package_version,
+        "bridge_build_id": WTSCLI_BUILD_ID,
+        "wtscli_version": WTSCLI_VERSION,
+        "wtscli_fork_commit": WTSCLI_FORK_COMMIT,
+        "extension_version": WTSCLI_VERSION,
+        "extension_id_sha256": hashlib.sha256(
+            WTSCLI_EXTENSION_ID.encode()
+        ).hexdigest(),
+    }
+    if (
+        not isinstance(payload, dict)
+        or any(payload.get(key) != value for key, value in expected.items())
+    ):
+        raise DomiBootstrapError(
+            "delivery_manifest_identity_mismatch",
+            "The delivery manifest does not match the installed product pair.",
+        )
+    source_revision = payload.get("source_revision")
+    wheel_sha256 = payload.get("seektalent_wheel_sha256")
+    product_build_id = payload.get("product_build_id")
+    if (
+        not isinstance(source_revision, str)
+        or len(source_revision) != 40
+        or any(character not in "0123456789abcdef" for character in source_revision)
+        or not isinstance(wheel_sha256, str)
+        or len(wheel_sha256) != 64
+        or not isinstance(product_build_id, str)
+        or product_build_id
+        != f"seektalent-{package_version}+{source_revision}"
+    ):
+        raise DomiBootstrapError(
+            "delivery_manifest_identity_mismatch",
+            "The delivery manifest does not bind an exact product build.",
+        )
+    return {
+        "schemaVersion": INSTALL_RECEIPT_SCHEMA,
+        "productVersion": package_version,
+        "sourceRevision": source_revision,
+        "productBuildId": product_build_id,
+        "wheelSha256": wheel_sha256,
+        "deliveryManifestSha256": hashlib.sha256(raw).hexdigest(),
+        "bridgeBuildId": WTSCLI_BUILD_ID,
+        "wtscliVersion": WTSCLI_VERSION,
+        "wtscliForkCommit": payload.get("wtscli_fork_commit"),
+        "extensionVersion": WTSCLI_VERSION,
+        "extensionIdSha256": expected["extension_id_sha256"],
+    }
 
 
 def _resolve_node_path(raw: str, *, platform: str) -> Path:

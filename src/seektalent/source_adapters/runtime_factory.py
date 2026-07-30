@@ -24,14 +24,25 @@ def build_source_enabled_runtime(
 
     return _build_source_enabled_runtime(
         settings,
-        retrieval_service=retrieval_service or _build_provider_retrieval_service(settings),
+        retrieval_service=retrieval_service
+        or _build_provider_retrieval_service(
+            settings,
+            source_operation_executor=source_operation_executor,
+        ),
         judge_limiter=judge_limiter,
         eval_remote_logging=eval_remote_logging,
         liepin_cards_operation_executor=source_operation_executor,
     )
 
 
-def _build_provider_retrieval_service(settings: AppSettings) -> RetrievalService:
+def _build_provider_retrieval_service(
+    settings: AppSettings,
+    *,
+    source_operation_executor: object | None,
+) -> RetrievalService:
     from seektalent.source_adapters.runtime_composition import build_provider_retrieval_service
 
-    return build_provider_retrieval_service(settings)
+    return build_provider_retrieval_service(
+        settings,
+        liepin_source_operation_executor=source_operation_executor,
+    )

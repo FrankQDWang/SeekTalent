@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from inspect import Parameter, signature
 
 from seektalent.config import AppSettings
 from seektalent.models import RequirementSheet
@@ -18,7 +17,9 @@ from seektalent_conversation_agent.store import ConversationStore
 from seektalent_conversation_agent.service_actions import AgentServiceActionAdapter
 from seektalent_runtime_control.commands import RuntimeCommandService
 from seektalent_runtime_control.detail import RuntimeDetailService
-from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
+from seektalent_runtime_control.executor import (
+    WorkflowRuntimeExecutor,
+)
 from seektalent_runtime_control.service import RuntimeControlService
 from seektalent_runtime_control.store import RuntimeControlStore
 
@@ -70,20 +71,12 @@ def build_agent_service(
         *,
         source_operation_executor: object | None = None,
     ) -> object:
-        if source_operation_executor is None:
+        if settings.liepin_worker_mode != "opencli":
             return runtime_factory(settings)
-        parameters = signature(runtime_factory).parameters.values()
-        accepts_kwargs = any(
-            parameter.kind == Parameter.VAR_KEYWORD
-            for parameter in parameters
+        return runtime_factory(
+            settings,
+            source_operation_executor=source_operation_executor,
         )
-        names = {parameter.name for parameter in parameters}
-        if "source_operation_executor" in names or accepts_kwargs:
-            return runtime_factory(
-                settings,
-                source_operation_executor=source_operation_executor,
-            )
-        raise RuntimeError("runtime_source_operation_injection_required")
 
     workflow_executor = WorkflowRuntimeExecutor(
         store=runtime_store,

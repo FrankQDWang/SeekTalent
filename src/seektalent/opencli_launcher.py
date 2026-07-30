@@ -168,6 +168,40 @@ def ensure_opencli_runtime(
     )
 
 
+def inspect_opencli_runtime(
+    *,
+    root: Path | None = None,
+    env: Mapping[str, str] | None = None,
+) -> OpenCliRuntime:
+    """Read installed runtime identity without locks, probes, repair, or writes."""
+    runtime_root = (root or RUNTIME_ROOT).expanduser().absolute()
+    external_node = _configured_node_from_env(env)
+    if external_node is None:
+        raise BootstrapError("domi_node_missing")
+    if not runtime_root.is_dir():
+        raise BootstrapError("opencli_offline_runtime_missing")
+    runtime_root = runtime_root.resolve(strict=True)
+    bridge_manifest = _bridge_manifest_path(runtime_root)
+    requirement = _load_bridge_requirement(bridge_manifest)
+    node = _require_domi_node_file(external_node)
+    install_dir = _opencli_install_dir(runtime_root, requirement.cli.version)
+    package_dir = _opencli_package_dir(install_dir, requirement)
+    opencli_main = _require_installed_opencli(
+        package_dir,
+        requirement=requirement,
+    )
+    _verify_runtime_bridge_identity(
+        package_dir / "bridge-identity.json",
+        requirement,
+    )
+    return OpenCliRuntime(
+        node=node,
+        opencli_main=opencli_main,
+        bridge_manifest=bridge_manifest,
+        requirement=requirement,
+    )
+
+
 def runtime_requirement(runtime: OpenCliRuntime) -> BrowserBridgeRequirement:
     if runtime.requirement is not None:
         return runtime.requirement

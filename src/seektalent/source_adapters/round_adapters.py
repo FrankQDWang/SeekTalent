@@ -39,7 +39,8 @@ def default_source_first_page_expander_provider(runtime: WorkflowRuntime,
         detail_open_claim_ledger: DetailOpenClaimLedger) -> Mapping[str, SourceFirstPageExpander]:
     async def expand_liepin(request):
         return await run_liepin_first_page_expansion(settings=runtime.settings, request=request,
-            detail_open_claim_ledger=detail_open_claim_ledger)
+            detail_open_claim_ledger=detail_open_claim_ledger,
+            cards_operation_executor=runtime.source_operation_executor)
     return {"liepin": expand_liepin}
 
 

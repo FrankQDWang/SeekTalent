@@ -30,11 +30,16 @@ from seektalent_runtime_control.browser_lane import (
     BrowserLaneStoreMixin,
     create_browser_lane_schema,
 )
+from seektalent_runtime_control.execution_failures import (
+    ExecutionFailureStoreMixin,
+    create_execution_failure_schema,
+)
 from seektalent_runtime_control.checkpoint_recovery import (
     RUNTIME_CHECKPOINT_CORRUPT,
     RUNTIME_CHECKPOINT_MISSING,
     RUNTIME_CHECKPOINT_RUN_MISMATCH,
     RUNTIME_CHECKPOINT_SCHEMA_UNSUPPORTED,
+    RUNTIME_SOURCE_OPERATION_UNRESOLVED,
     RuntimeCheckpointLoadFailure,
     RuntimeCheckpointValidationContext,
     RuntimeRecoveryDecision,
@@ -90,6 +95,11 @@ from seektalent_runtime_control.requirements import (
     RequirementAmendment,
     RequirementDraft,
     ReviewItem,
+)
+from seektalent_runtime_control.recovery_attention import (
+    create_recovery_attention_schema,
+    enter_recovery_attention,
+    resolve_recovery_attention,
 )
 from seektalent_runtime_control.run_acceptance import (
     RUN_ACCEPTANCE_JOINS,
@@ -150,7 +160,7 @@ from seektalent_runtime_control.source_reconciliation import (
 from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
 
 
-RUNTIME_CONTROL_SCHEMA_VERSION = 17
+RUNTIME_CONTROL_SCHEMA_VERSION = 20
 RUNTIME_CHECKPOINT_SCHEMA_VERSION = RUNTIME_CHECKPOINT_SCHEMA_V2
 RUNTIME_CONTROL_EVENT_SCHEMA_VERSION = "runtime-control-event/v1"
 MAX_RUNTIME_CONTROL_JSON_BYTES = 16 * 1024
@@ -176,7 +186,11 @@ _REQUIRED_STAGE_OUTPUT_KINDS = {
     "shortlist",
 }
 
-class RuntimeControlStore(BrowserLaneStoreMixin, NeedsAttentionStoreMixin):
+class RuntimeControlStore(
+    BrowserLaneStoreMixin,
+    ExecutionFailureStoreMixin,
+    NeedsAttentionStoreMixin,
+):
     def __init__(self, path: str | Path, *, busy_timeout_ms: int = 5000) -> None:
         self.path = Path(path)
         self.busy_timeout_ms = busy_timeout_ms
@@ -200,6 +214,8 @@ class RuntimeControlStore(BrowserLaneStoreMixin, NeedsAttentionStoreMixin):
                 validate_failed_outcome_schema(conn)
                 _needs_attention.validate_needs_attention_schema(conn)
                 create_browser_lane_schema(conn)
+                create_execution_failure_schema(conn)
+                create_recovery_attention_schema(conn)
                 self.compact_pending_terminal_checkpoints()
                 return
             if version > 0:
@@ -227,7 +243,9 @@ class RuntimeControlStore(BrowserLaneStoreMixin, NeedsAttentionStoreMixin):
                 run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                 conn.commit()
                 version = 7
-            if version in {7, 8, 9, 10, 11, 12, 13, 14, 15, 16}:
+            if version in {
+                7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
+            }:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
                     if version == 7:
@@ -271,6 +289,18 @@ class RuntimeControlStore(BrowserLaneStoreMixin, NeedsAttentionStoreMixin):
                     if version == 16:
                         create_browser_lane_schema(conn)
                         conn.execute("PRAGMA user_version = 17")
+                        version = 17
+                    if version == 17:
+                        create_browser_lane_schema(conn)
+                        conn.execute("PRAGMA user_version = 18")
+                        version = 18
+                    if version == 18:
+                        create_execution_failure_schema(conn)
+                        conn.execute("PRAGMA user_version = 19")
+                        version = 19
+                    if version == 19:
+                        create_recovery_attention_schema(conn)
+                        conn.execute("PRAGMA user_version = 20")
                     run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                     conn.commit()
                 except Exception:
@@ -282,6 +312,8 @@ class RuntimeControlStore(BrowserLaneStoreMixin, NeedsAttentionStoreMixin):
                 _create_source_reconciliation_schema(conn)
                 _create_source_operation_admission_expectation_schema(conn)
                 create_browser_lane_schema(conn)
+                create_execution_failure_schema(conn)
+                create_recovery_attention_schema(conn)
                 conn.execute("BEGIN IMMEDIATE")
                 with conn:
                     create_failure_envelope_schema(conn)
@@ -637,6 +669,26 @@ class RuntimeControlStore(BrowserLaneStoreMixin, NeedsAttentionStoreMixin):
         if row is None:
             raise RuntimeControlLookupError("source_operation_not_found")
         return source_operation_from_row(row)
+
+    def has_unresolved_source_operations(
+        self,
+        runtime_run_id: str,
+    ) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM runtime_control_source_operations
+                WHERE runtime_run_id = ?
+                  AND (
+                    operation_phase != 'main_committed'
+                    OR main_commit_ref IS NULL
+                  )
+                LIMIT 1
+                """,
+                (runtime_run_id,),
+            ).fetchone()
+        return row is not None
 
     def get_source_operation_admission_expectation(
         self,
@@ -1817,6 +1869,12 @@ class RuntimeControlStore(BrowserLaneStoreMixin, NeedsAttentionStoreMixin):
                     else run_row["current_round"]
                 )
                 terminal = plan.target_status in _TERMINAL_RUN_STATUSES
+                if plan.target_status == "needs_attention":
+                    enter_recovery_attention(
+                        conn,
+                        runtime_run_id=run_row["runtime_run_id"],
+                        entered_at=now,
+                    )
                 conn.execute(
                     """
                     UPDATE runtime_control_runs
@@ -1851,6 +1909,50 @@ class RuntimeControlStore(BrowserLaneStoreMixin, NeedsAttentionStoreMixin):
                 reason_code=plan.reason_code,
             )
         )
+
+    def resolve_source_operation_recovery_attention(
+        self,
+        *,
+        runtime_run_id: str,
+        resolved_at: str,
+    ) -> RuntimeRunRecord:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                run_row = _run_row(conn, runtime_run_id)
+                if (
+                    run_row is None
+                    or run_row["status"] != "needs_attention"
+                    or run_row["current_action_id"] is not None
+                    or _active_lease_row(conn, runtime_run_id) is not None
+                ):
+                    raise RuntimeControlError(
+                        "runtime_recovery_attention_not_active"
+                    )
+                resolve_recovery_attention(
+                    conn,
+                    runtime_run_id=runtime_run_id,
+                    resolved_at=resolved_at,
+                )
+                require_run_transition("needs_attention", "resume_requested")
+                conn.execute(
+                    """
+                    UPDATE runtime_control_runs
+                    SET status = 'resume_requested',
+                        product_outcome = NULL,
+                        updated_at = ?,
+                        state_revision = state_revision + 1
+                    WHERE runtime_run_id = ?
+                      AND status = 'needs_attention'
+                      AND current_action_id IS NULL
+                    """,
+                    (resolved_at, runtime_run_id),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return self.get_run(runtime_run_id)
 
     def save_requirement_draft(
         self,
@@ -4164,11 +4266,32 @@ class RuntimeControlStore(BrowserLaneStoreMixin, NeedsAttentionStoreMixin):
         with self._connect() as conn:
             conn.execute("BEGIN IMMEDIATE")
             try:
-                run_row = _next_runnable_run_row(conn, runtime_run_id=runtime_run_id)
+                run_row = _next_runnable_run_row(
+                    conn,
+                    runtime_run_id=runtime_run_id,
+                    claimed_at=claimed_at,
+                )
                 if run_row is None:
                     conn.commit()
                     return None
                 claim_reason = run_row["status"]
+                if claim_reason == "resume_requested":
+                    waiting_event = conn.execute(
+                        """
+                        SELECT event_type
+                        FROM runtime_control_events
+                        WHERE runtime_run_id = ?
+                        ORDER BY event_seq DESC
+                        LIMIT 1
+                        """,
+                        (run_row["runtime_run_id"],),
+                    ).fetchone()
+                    if (
+                        waiting_event is not None
+                        and waiting_event["event_type"]
+                        == "runtime_resource_waiting"
+                    ):
+                        claim_reason = "resource_wait"
                 attempt_row = conn.execute(
                     """
                     SELECT COALESCE(MAX(attempt_no), 0) AS latest_attempt
@@ -5644,6 +5767,17 @@ def _recoverable_checkpoint_from_run_row(
     run_row: sqlite3.Row,
 ) -> RuntimeCheckpoint | RuntimeCheckpointLoadFailure | None:
     checkpoint_id = run_row["latest_checkpoint_id"]
+    if not _all_source_operations_main_committed(
+        conn,
+        runtime_run_id=run_row["runtime_run_id"],
+    ):
+        return RuntimeCheckpointLoadFailure(
+            checkpoint_id=(
+                checkpoint_id
+                or f"source-operation:{run_row['runtime_run_id']}"
+            ),
+            reason_code=RUNTIME_SOURCE_OPERATION_UNRESOLVED,
+        )
     if checkpoint_id is None:
         return None
     checkpoint_row = conn.execute(
@@ -5678,6 +5812,7 @@ def _recoverable_checkpoint_from_run_row(
         }
         else True
     )
+    source_operations_main_committed = True
     invalid_reason = validate_recoverable_checkpoint(
         checkpoint,
         RuntimeCheckpointValidationContext(
@@ -5687,9 +5822,8 @@ def _recoverable_checkpoint_from_run_row(
             run_source_ids=run_source_ids,
             run_source_ids_valid=run_source_ids_valid,
             candidate_truth_valid=candidate_truth_valid,
-            source_operations_main_committed=_all_source_operations_main_committed(
-                conn,
-                runtime_run_id=run_row["runtime_run_id"],
+            source_operations_main_committed=(
+                source_operations_main_committed
             ),
         ),
     )
@@ -6754,12 +6888,14 @@ def _next_runnable_run_row(
     conn: sqlite3.Connection,
     *,
     runtime_run_id: str | None,
+    claimed_at: str,
 ) -> sqlite3.Row | None:
     clauses = ["run.status IN ('queued', 'resume_requested')"]
     params: list[object] = []
     if runtime_run_id is not None:
         clauses.append("run.runtime_run_id = ?")
         params.append(runtime_run_id)
+    params.append(claimed_at)
     return conn.execute(
         f"""
         SELECT run.*
@@ -6781,6 +6917,16 @@ def _next_runnable_run_row(
               WHERE source_operation.runtime_run_id = run.runtime_run_id
                 AND source_operation.retry_posture = 'reconcile_first'
             )
+          )
+          AND NOT EXISTS (
+            SELECT 1
+            FROM runtime_control_events AS latest_event
+            WHERE latest_event.runtime_run_id = run.runtime_run_id
+              AND latest_event.event_seq = run.latest_event_seq
+              AND latest_event.event_type = 'runtime_resource_waiting'
+              AND (
+                julianday(?) - julianday(latest_event.created_at)
+              ) * 86400.0 < 0.5
           )
         ORDER BY run.created_at ASC, run.runtime_run_id ASC
         LIMIT 1

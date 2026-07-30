@@ -738,9 +738,24 @@ def test_source_port_contract_has_neutral_import_closure_and_no_business_caller(
     }
 
 
-def test_production_recovery_gate_remains_closed() -> None:
+def test_production_recovery_gate_is_open_only_for_strict_same_run_truth() -> None:
     runner = (PROJECT_ROOT / "src" / "seektalent_workbench_v2" / "runtime_runner.py").read_text(encoding="utf-8")
     pyproject = (PROJECT_ROOT / "pyproject.toml").read_text(encoding="utf-8")
 
-    assert "resume_recoverable=False" in runner
+    assert "resume_recoverable=True" in runner
+    store = (
+        PROJECT_ROOT
+        / "src"
+        / "seektalent_runtime_control"
+        / "store.py"
+    ).read_text(encoding="utf-8")
+    checkpoint = (
+        PROJECT_ROOT
+        / "src"
+        / "seektalent_runtime_control"
+        / "checkpoint_recovery.py"
+    ).read_text(encoding="utf-8")
+    assert "_all_source_operations_main_committed" in store
+    assert "source_operations_main_committed" in checkpoint
+    assert "_cursor_matches" in checkpoint
     assert "source_port" not in pyproject

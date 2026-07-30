@@ -98,6 +98,7 @@ class WorkbenchV2RuntimeQueueRunner:
             )
             self._thread.start()
             self._health.restarted()
+            self._persist_health(alive=True)
 
     def stop(self, *, timeout: float = DEFAULT_STOP_TIMEOUT_SECONDS) -> None:
         bounded_timeout = max(0.0, timeout)
@@ -116,6 +117,7 @@ class WorkbenchV2RuntimeQueueRunner:
                 timeout,
             )
         if thread is None or not thread.is_alive():
+            self._persist_health(alive=False)
             return
         remaining = max(0.0, deadline - time.monotonic())
         thread.join(timeout=remaining)
@@ -124,6 +126,8 @@ class WorkbenchV2RuntimeQueueRunner:
                 "workbench v2 runtime runner did not stop within %.3f seconds; active execution remains lease-governed",
                 timeout,
             )
+        else:
+            self._persist_health(alive=False)
 
     def wake(self, runtime_run_id: str | None = None) -> None:
         del runtime_run_id
@@ -157,6 +161,7 @@ class WorkbenchV2RuntimeQueueRunner:
         next_recovery_at = 0.0
         while not self._stop_event.is_set():
             self._health.heartbeat()
+            self._persist_health(alive=True)
             now = self._monotonic()
             if now >= next_recovery_at:
                 recovery_failed = False
@@ -182,7 +187,10 @@ class WorkbenchV2RuntimeQueueRunner:
                 continue
             self._consecutive_failures = 0
             self._health.success()
+            self._persist_health(alive=True)
             if runtime_run is not None:
+                if getattr(runtime_run, "status", None) == "resume_requested":
+                    self._wait_for_work()
                 continue
             self._wait_for_work()
 
@@ -194,11 +202,40 @@ class WorkbenchV2RuntimeQueueRunner:
 
     def _record_failure(self, error: Exception, *, boundary: str) -> None:
         self._health.failure(error)
+        self._persist_health(alive=True)
+        recorder = getattr(
+            self.store,
+            "record_execution_failure",
+            None,
+        )
+        if callable(recorder):
+            try:
+                recorder(
+                    runtime_run_id=None,
+                    component="runtime_runner",
+                    boundary=boundary,
+                    safe_reason_code="runtime_runner_unexpected_failure",
+                    error=error,
+                    failure_role="primary",
+                    occurred_at=self.store_now(),
+                )
+            except Exception as persistence_error:  # noqa: BLE001
+                logger.debug(
+                    "runtime failure persistence failed: %s",
+                    type(persistence_error).__name__,
+                )
         self._consecutive_failures += 1
         logger.warning(
             "workbench v2 runtime runner failure",
             extra={"boundary": boundary, "exception_type": type(error).__name__},
         )
+
+    def store_now(self) -> str:
+        from datetime import UTC, datetime
+
+        return datetime.now(UTC).isoformat(
+            timespec="microseconds"
+        ).replace("+00:00", "Z")
 
     def _wait_after_failure(self) -> None:
         backoff = min(
@@ -211,3 +248,23 @@ class WorkbenchV2RuntimeQueueRunner:
     def health_snapshot(self) -> ExecutionComponentHealth:
         thread = self._thread
         return self._health.snapshot(alive=thread is not None and thread.is_alive())
+
+    def _persist_health(self, *, alive: bool) -> None:
+        snapshot = self._health.snapshot(alive=alive)
+        try:
+            self.store.record_component_health(
+                component=snapshot.name,
+                alive=snapshot.alive,
+                last_heartbeat_at=snapshot.last_heartbeat_at,
+                last_success_at=snapshot.last_success_at,
+                first_failure_at=snapshot.first_failure_at,
+                first_failure_type=snapshot.first_failure_type,
+                failure_count=snapshot.failure_count,
+                restart_count=snapshot.restart_count,
+                observed_at=self.store_now(),
+            )
+        except Exception:  # noqa: BLE001 - diagnostics cannot stop execution
+            logger.debug(
+                "runtime component health persistence failed",
+                exc_info=True,
+            )

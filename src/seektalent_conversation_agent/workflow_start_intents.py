@@ -16,7 +16,14 @@ from seektalent_conversation_agent.job_requests import SourceKind
 
 WorkflowConfirmRequestStatus = Literal["pending", "approved", "intent_created", "failed"]
 WorkflowStartIntentStatus = Literal["pending", "started", "failed", "cancelled"]
-WorkbenchOutboxStatus = Literal["held", "pending", "in_progress", "done"]
+WorkbenchOutboxStatus = Literal[
+    "held",
+    "pending",
+    "in_progress",
+    "done",
+    "quarantined",
+    "waiting_reconciliation",
+]
 
 
 @dataclass(frozen=True)
@@ -715,6 +722,20 @@ class WorkbenchOutboxStore:
             limit=limit,
         )
 
+    def oldest_unfinished_created_at(self) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT MIN(created_at) AS oldest
+                FROM wts_outbox
+                WHERE status IN (
+                  'held', 'pending', 'in_progress',
+                  'waiting_reconciliation'
+                )
+                """
+            ).fetchone()
+        return None if row is None else row["oldest"]
+
     def release_held_item(
         self,
         *,
@@ -754,6 +775,44 @@ class WorkbenchOutboxStore:
                 """
                 UPDATE wts_outbox
                 SET status = 'pending', updated_at = ?
+                WHERE outbox_id = ? AND status = 'in_progress'
+                """,
+                (updated_at, outbox_id),
+            )
+        return self.get(outbox_id)
+
+    def mark_quarantined(
+        self,
+        outbox_id: str,
+        *,
+        reason_code: str,
+        updated_at: str,
+    ) -> WorkbenchOutboxItem:
+        del reason_code
+        with self._connect() as conn, conn:
+            conn.execute(
+                """
+                UPDATE wts_outbox
+                SET status = 'quarantined', updated_at = ?
+                WHERE outbox_id = ? AND status = 'in_progress'
+                """,
+                (updated_at, outbox_id),
+            )
+        return self.get(outbox_id)
+
+    def mark_waiting_reconciliation(
+        self,
+        outbox_id: str,
+        *,
+        reason_code: str,
+        updated_at: str,
+    ) -> WorkbenchOutboxItem:
+        del reason_code
+        with self._connect() as conn, conn:
+            conn.execute(
+                """
+                UPDATE wts_outbox
+                SET status = 'waiting_reconciliation', updated_at = ?
                 WHERE outbox_id = ? AND status = 'in_progress'
                 """,
                 (updated_at, outbox_id),

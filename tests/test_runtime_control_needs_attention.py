@@ -758,7 +758,7 @@ def test_runtime_control_v16_fresh_schema_has_action_history_and_pointer(
         action_sql = conn.execute(
             "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'runtime_control_user_actions'"
         ).fetchone()
-    assert RUNTIME_CONTROL_SCHEMA_VERSION == version == 17
+    assert RUNTIME_CONTROL_SCHEMA_VERSION == version
     assert "current_action_id" in run_columns
     assert action_sql is not None
 
@@ -1759,7 +1759,10 @@ def test_v14_to_v15_statement_failure_rolls_back_and_retries(
     )
     RuntimeControlStore(path).initialize()
     with sqlite3.connect(path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 17
+            assert (
+                conn.execute("PRAGMA user_version").fetchone()[0]
+                == RUNTIME_CONTROL_SCHEMA_VERSION
+            )
 
 
 @pytest.mark.parametrize("hook_index", range(0, 11))

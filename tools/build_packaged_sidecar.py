@@ -26,6 +26,7 @@ from seektalent.release_manifest import (
     release_manifest_digest,
 )
 from seektalent.release_signing import ReleaseManifestTrustKeyV1, ReleaseManifestTrustPolicyV1
+from seektalent.version import __version__
 
 
 TEST_ONLY_SIGNING_SEED = bytes.fromhex("9d61b19deffd5a60ba844af492ec2cc44449c5697b326919703bac031cae7f60")
@@ -234,7 +235,7 @@ def _manifest_payload(
         "manifest_id": "test-only-packaged-sidecar-st1-00000000000000000000000000000000",
         "release_series_id": "test-only-packaged-sidecar-series-v1",
         "product_name": "SeekTalent",
-        "product_version": "0.7.49",
+        "product_version": __version__,
         "product_build_id": "st1-00000000000000000000000000000000",
         "source_revision": source_revision,
         "source_tree_digest": _sidecar_source_digest(),
@@ -398,7 +399,7 @@ def _product_build_id(
             for component in sorted(components, key=lambda item: str(item["component_id"]))
         ),
         dependency_input_digests=(_digest_file(Path(__file__).resolve().parents[1] / "uv.lock"),),
-        product_version="0.7.49",
+        product_version=__version__,
         source_revision=source_revision,
         target_os=str(target["os"]),
         target_arch=str(target["arch"]),

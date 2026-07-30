@@ -21,7 +21,7 @@ def test_build_delivery_bundle_contains_exact_pair_runtime_and_platform_installe
 ) -> None:
     bundle = tmp_path / "wtscli-browser-bridge"
     write_browser_bridge_bundle(bundle)
-    wheel = tmp_path / "seektalent-0.7.49-py3-none-any.whl"
+    wheel = tmp_path / "seektalent-0.8.0rc1-py3-none-any.whl"
     wheel.write_bytes(b"wheel")
 
     archive = build_delivery_bundle(
@@ -30,6 +30,7 @@ def test_build_delivery_bundle_contains_exact_pair_runtime_and_platform_installe
         seektalent_wheel=wheel,
         node=Path(sys.executable),
         platform_name="windows-x64",
+        source_revision="a" * 40,
     )
 
     with zipfile.ZipFile(archive) as delivery:
@@ -45,6 +46,11 @@ def test_build_delivery_bundle_contains_exact_pair_runtime_and_platform_installe
         assert manifest["bridge_build_id"] == WTSCLI_BUILD_ID
         assert manifest["platform"] == "windows-x64"
         assert manifest["extension_directory"] == "~/.seektalent/chrome-extension/wtscli"
+        assert manifest["product_version"] == "0.8.0rc1"
+        assert manifest["source_revision"] == "a" * 40
+        assert manifest["product_build_id"] == (
+            "seektalent-0.8.0rc1+" + "a" * 40
+        )
 
 
 def test_exact_head_native_delivery_archive_contains_the_bound_pair() -> None:

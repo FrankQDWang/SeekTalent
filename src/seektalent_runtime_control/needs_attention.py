@@ -764,9 +764,35 @@ def validate_needs_attention_row(
             "runtime_needs_attention_integrity_failed"
         )
     if row["status"] == "needs_attention":
+        if row["current_action_id"] is None:
+            recovery_attention = conn.execute(
+                """
+                SELECT * FROM runtime_control_recovery_attention
+                WHERE runtime_run_id = ? AND status = 'active'
+                """,
+                (row["runtime_run_id"],),
+            ).fetchone()
+            if (
+                recovery_attention is None
+                or row["product_outcome"] is not None
+                or any(
+                    row[name] is not None
+                    for name in (
+                        "current_failure_id",
+                        "current_failure_revision",
+                        "current_failure_owner_lease_id",
+                        "current_failure_authority_mode",
+                    )
+                )
+                or _active_lease_row(conn, row["runtime_run_id"])
+                is not None
+            ):
+                raise RuntimeControlError(
+                    "runtime_needs_attention_integrity_failed"
+                )
+            return
         if (
             row["product_outcome"] != "needs_attention"
-            or row["current_action_id"] is None
             or row["current_failure_id"] is None
             or row["current_failure_revision"] is None
             or row["current_failure_authority_mode"]

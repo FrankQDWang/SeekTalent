@@ -38,6 +38,9 @@ def build_runtime_composition(
         or build_provider_retrieval_service(
             settings,
             provider_adapter_registry=provider_adapter_registry,
+            liepin_source_operation_executor=(
+                liepin_cards_operation_executor
+            ),
         ),
         source_operation_executor=liepin_cards_operation_executor,
         judge_limiter=judge_limiter,
@@ -68,10 +71,16 @@ def build_provider_retrieval_service(
     settings: AppSettings,
     *,
     provider_adapter_registry: ProviderAdapterRegistry | None = None,
+    liepin_source_operation_executor: object | None = None,
 ) -> RetrievalService:
     registry = provider_adapter_registry or build_default_provider_adapter_registry()
     provider = registry.build_adapter(
         settings.provider_name,
-        ProviderAdapterBuildContext(settings=settings),
+        ProviderAdapterBuildContext(
+            settings=settings,
+            liepin_source_operation_executor=(
+                liepin_source_operation_executor
+            ),
+        ),
     )
     return RetrievalService(provider=provider)

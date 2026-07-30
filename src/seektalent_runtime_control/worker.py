@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from seektalent_runtime_control.models import (
 from seektalent_runtime_control.store import RuntimeControlStore
 
 
+logger = logging.getLogger(__name__)
 class ClaimedRunExecutor(Protocol):
     async def execute_claimed_run(
         self,
@@ -123,11 +125,32 @@ class RuntimeExecutionWorker:
             ):
                 raise
             reason_code = _worker_failure_reason(exc)
+            recorder = getattr(
+                self.store,
+                "record_execution_failure",
+                None,
+            )
+            if callable(recorder):
+                try:
+                    recorder(
+                        runtime_run_id=claim.runtime_run.runtime_run_id,
+                        component="runtime_worker",
+                        boundary="execute_claimed_run",
+                        safe_reason_code=reason_code,
+                        error=exc,
+                        failure_role="primary",
+                        occurred_at=self.now(),
+                    )
+                except Exception as persistence_error:  # noqa: BLE001
+                    logger.debug(
+                        "worker failure persistence failed: %s",
+                        type(persistence_error).__name__,
+                    )
             self._record_worker_failure(
                 runtime_run=claim.runtime_run,
                 lease=claim.lease,
                 reason_code=reason_code,
-                summary=str(exc) or type(exc).__name__,
+                summary=reason_code,
             )
             raise
         finally:

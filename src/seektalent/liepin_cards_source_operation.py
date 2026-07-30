@@ -11,9 +11,10 @@ import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from hashlib import sha256
 from pathlib import Path
+from types import SimpleNamespace
 
 from seektalent.config import AppSettings
 from seektalent.sidecar_handshake_protocol import (
@@ -108,6 +109,11 @@ class _SidecarProcess:
     diagnostic_path: Path
     _exit_diagnostic: _SidecarExitDiagnostic | None = None
     _exit_diagnostic_read: bool = False
+    _close_lock: threading.Lock = field(
+        default_factory=threading.Lock,
+        repr=False,
+    )
+    _closed: bool = False
 
     def exit_diagnostic(self) -> _SidecarExitDiagnostic | None:
         if self._exit_diagnostic_read:
@@ -125,15 +131,19 @@ class _SidecarProcess:
         return self._exit_diagnostic
 
     def close(self) -> None:
-        self.transport.close()
-        if self.process.poll() is None:
-            self.process.terminate()
-            try:
-                self.process.wait(timeout=5)
-            except subprocess.TimeoutExpired:
-                self.process.kill()
-                self.process.wait(timeout=5)
-        self.diagnostic_path.unlink(missing_ok=True)
+        with self._close_lock:
+            if self._closed:
+                return
+            self._closed = True
+            self.transport.close()
+            if self.process.poll() is None:
+                self.process.terminate()
+                try:
+                    self.process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    self.process.kill()
+                    self.process.wait(timeout=5)
+            self.diagnostic_path.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -287,11 +297,19 @@ class LiepinCardsSourceOperationExecutor:
             if process is not None:
                 process.close()
 
+    def _fence_active_sidecar(self) -> None:
+        process = self._process
+        if process is not None:
+            process.close()
+
     def _execute(
         self,
         request: LiepinCardsOperationRequestV1,
     ) -> tuple[dict[str, object], dict[str, object]]:
         operation_id = stable_liepin_cards_operation_id(request)
+        replayed = self._replay_committed_cards(request, operation_id)
+        if replayed is not None:
+            return replayed
         with BrowserLaneGuard(
             store=self._store,
             runtime_run_id=self._runtime_run_id,
@@ -303,6 +321,7 @@ class LiepinCardsSourceOperationExecutor:
                 0.001,
                 self._settings.liepin_opencli_timeout_seconds,
             ),
+            on_lease_lost=self._fence_active_sidecar,
         ):
             try:
                 return self._execute_with_lane(request)
@@ -543,6 +562,12 @@ class LiepinCardsSourceOperationExecutor:
         request: LiepinDetailsOperationRequestV1,
     ) -> tuple[dict[str, object], dict[str, object]]:
         operation_id = stable_liepin_details_operation_id(request)
+        replayed = self._replay_committed_details(
+            request,
+            operation_id,
+        )
+        if replayed is not None:
+            return replayed
         with BrowserLaneGuard(
             store=self._store,
             runtime_run_id=self._runtime_run_id,
@@ -554,11 +579,97 @@ class LiepinCardsSourceOperationExecutor:
                 0.001,
                 self._settings.liepin_opencli_timeout_seconds,
             ),
+            on_lease_lost=self._fence_active_sidecar,
         ):
             try:
                 return self._execute_details_with_lane(request)
             finally:
                 self.close()
+
+    def _replay_committed_cards(self, request, operation_id):
+        try:
+            operation = self._store.get_source_operation(
+                self._runtime_run_id,
+                operation_id,
+            )
+        except RuntimeControlLookupError:
+            return None
+        if (
+            operation.operation_phase != "main_committed"
+            or operation.main_commit_ref is None
+            or operation.conclusive_observation_ref is None
+            or operation.canonical_request_hash
+            != canonical_liepin_cards_request_hash(request)
+        ):
+            return None
+        digest = operation.conclusive_observation_ref.rsplit("/", 1)[-1]
+        try:
+            artifact = read_liepin_cards_artifact(
+                self._artifact_root,
+                operation.conclusive_observation_ref,
+                expected_hash=digest,
+            )
+        except (OSError, ValueError):
+            return None
+        if (
+            artifact.operation_id != operation_id
+            or artifact.canonical_request_hash
+            != operation.canonical_request_hash
+        ):
+            return None
+        observation = SimpleNamespace(
+            disposition=operation.source_operation_disposition,
+            safe_reason_code=artifact.safe_reason_code,
+        )
+        return _workflow_result(request, artifact, observation)
+
+    def _replay_committed_details(self, request, operation_id):
+        try:
+            operation = self._store.get_source_operation(
+                self._runtime_run_id,
+                operation_id,
+            )
+        except RuntimeControlLookupError:
+            return None
+        request_hash = canonical_liepin_details_request_hash(request)
+        if (
+            operation.operation_phase != "main_committed"
+            or operation.main_commit_ref is None
+            or operation.conclusive_observation_ref is None
+            or operation.canonical_request_hash != request_hash
+        ):
+            return None
+        digest = operation.conclusive_observation_ref.rsplit("/", 1)[-1]
+        try:
+            artifact = read_liepin_details_artifact(
+                self._details_artifact_root,
+                operation.conclusive_observation_ref,
+                expected_hash=digest,
+            )
+        except (OSError, ValueError):
+            return None
+        observation = SimpleNamespace(
+            operation_id=operation_id,
+            canonical_request_hash=request_hash,
+            disposition=operation.source_operation_disposition,
+            open_mode=artifact.open_mode,
+            provider_candidate_key_hash=(
+                artifact.provider_candidate_key_hash
+            ),
+            rank=artifact.rank,
+            action_attempted=artifact.action_attempted,
+            effect_posture=artifact.effect_posture,
+            safe_reason_code=artifact.safe_reason_code,
+        )
+        if not _details_artifact_binds_accepted_request(
+            request=request,
+            artifact=artifact,
+            observation=observation,
+            operation_id=operation_id,
+            request_hash=request_hash,
+        ):
+            return None
+        return _details_workflow_result(request, artifact, observation)
 
     def _execute_details_with_lane(
         self,
