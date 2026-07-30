@@ -220,9 +220,16 @@ def picker_confirm_ref(payload: dict[str, object]) -> str | None:
 
 
 def picker_control_ref(site: LiepinSiteAdapter, *, section: str) -> str | None:
-    payload = _picker_state_or_none(site, section=section)
-    control_ref = payload.get("controlRef") if payload is not None else None
-    return control_ref if isinstance(control_ref, str) else None
+    try:
+        payload = _read_picker_state(site, section=section)
+    except OpenCliBrowserError as exc:
+        if exc.safe_reason_code == "liepin_opencli_status_unavailable":
+            return None
+        raise
+    control_ref = payload.get("controlRef")
+    if not isinstance(control_ref, str):
+        raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
+    return control_ref
 
 
 def picker_open_state(

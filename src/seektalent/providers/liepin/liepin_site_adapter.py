@@ -2854,9 +2854,12 @@ class LiepinSiteAdapter:
                     force_city_picker
                     or not native_filter_option_visible_in_section(state_text, section=section, label=label)
                 ):
-                    control_ref = native_filter_control_ref_in_section(state_text, section=section)
-                    if control_ref is None and exact_city_filter:
+                    if exact_city_filter:
                         control_ref = self._liepin_city_choose_ref_from_dom(section=section)
+                        if control_ref is None:
+                            control_ref = native_filter_control_ref_in_section(state_text, section=section)
+                    else:
+                        control_ref = native_filter_control_ref_in_section(state_text, section=section)
                     if exact_city_filter:
                         mark_picker_effect_started()
                     if control_ref is not None:

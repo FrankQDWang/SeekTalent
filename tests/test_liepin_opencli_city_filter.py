@@ -39,6 +39,22 @@ class SequenceEvalCommands(FakeCommands):
         return super().run(argv, timeout=timeout, env=env)
 
 
+def _closed_picker_probe(*, control_ref: str = "23") -> str:
+    return json.dumps(
+        {
+            "schema_version": "seektalent.liepin_city_picker.v1",
+            "section": "expected",
+            "controlRef": control_ref,
+            "open": False,
+            "searchValue": "",
+            "candidates": [],
+            "selectedCities": [],
+            "confirmRefs": [],
+        },
+        ensure_ascii=False,
+    )
+
+
 def test_liepin_city_fill_rejects_an_explicitly_unverified_result() -> None:
     commands = FakeCommands(
         outputs={
@@ -186,6 +202,7 @@ def test_liepin_city_picker_uses_focused_probe_when_state_omits_ready_modal(
     )
     commands = SequenceEvalCommands(
         eval_outputs=[
+            _closed_picker_probe(),
             probe_ready,
             probe_ready,
             probe_ready,
@@ -226,6 +243,106 @@ def test_liepin_city_picker_uses_focused_probe_when_state_omits_ready_modal(
     assert ("opencli", "browser", "seektalent-liepin", "click", "64") in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "click", "66") in commands.calls
     assert "SENTINEL_DOM_BODY_CANDIDATE_DATA" not in json.dumps(events, ensure_ascii=False)
+
+
+def test_liepin_city_picker_prefers_focused_probe_control_over_ambiguous_state_ref(
+    tmp_path: Path,
+) -> None:
+    state_before = """
+    <span>期望城市：</span>
+    [23]<span>其他</span>
+    """
+    picker_state = """
+    [60]<input autocomplete=off placeholder=搜索城市 type=text value=上海 />
+    <div class=suggest-list>
+      [64]<div>中国 · <span>上海</span></div>
+    </div>
+    """
+    state_after_expected_city = """
+    <span>期望城市：</span>
+    <span class=ant-tag-checkable-checked>上海</span>
+    """
+    commands = SequenceEvalCommands(
+        eval_outputs=[
+            _closed_picker_probe(control_ref="24"),
+            OpenCliBrowserError("liepin_opencli_status_unavailable"),
+            OpenCliBrowserError("liepin_opencli_status_unavailable"),
+            OpenCliBrowserError("liepin_opencli_status_unavailable"),
+        ],
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): (
+                "https://h.liepin.com/search/getConditionItem#session"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                picker_state,
+                state_after_expected_city,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "click", "23"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "24"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "64"): '{"clicked":true}',
+        },
+    )
+
+    result = _runner(commands, lease_dir=tmp_path)._select_liepin_native_filter(
+        filter_name="city",
+        section="expected",
+        label="上海",
+        current_state=OpenCliBrowserResult(ok=True, action="state", private_output=state_before),
+        events=[],
+    )
+
+    assert result.ok is True
+    assert ("opencli", "browser", "seektalent-liepin", "click", "24") in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "click", "23") not in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "click", "64") in commands.calls
+
+
+@pytest.mark.parametrize(
+    ("probe_output", "reason"),
+    [
+        (
+            '{"schema_version":"seektalent.liepin_city_picker.v1",'
+            '"section":"current","controlRef":"24","open":false}',
+            "liepin_opencli_malformed_state",
+        ),
+        (
+            '{"schema_version":"seektalent.liepin_city_picker.v1",'
+            '"section":"expected","open":false,"searchValue":"",'
+            '"candidates":[],"selectedCities":[],"confirmRefs":[]}',
+            "liepin_opencli_filter_option_unavailable",
+        ),
+    ],
+)
+def test_liepin_city_picker_control_probe_fails_closed_without_exact_authority(
+    tmp_path: Path,
+    probe_output: str,
+    reason: str,
+) -> None:
+    commands = EvalCommands(
+        eval_output=probe_output,
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): (
+                "https://h.liepin.com/search/getConditionItem#session"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "23"): '{"clicked":true}',
+        },
+    )
+
+    with pytest.raises(OpenCliBrowserError) as raised:
+        _runner(commands, lease_dir=tmp_path)._select_liepin_native_filter(
+            filter_name="city",
+            section="expected",
+            label="上海",
+            current_state=OpenCliBrowserResult(
+                ok=True,
+                action="state",
+                private_output='<span>期望城市：</span>\n[23]<span>其他</span>',
+            ),
+            events=[],
+        )
+
+    assert raised.value.safe_reason_code == reason
+    assert ("opencli", "browser", "seektalent-liepin", "click", "23") not in commands.calls
 
 
 def test_liepin_city_picker_prefers_focused_probe_candidate_over_ambiguous_state_ref(
@@ -289,6 +406,7 @@ def test_liepin_city_picker_prefers_focused_probe_candidate_over_ambiguous_state
     )
     commands = SequenceEvalCommands(
         eval_outputs=[
+            _closed_picker_probe(),
             probe_ready,
             probe_ready,
             probe_current_suggestion,
@@ -498,7 +616,7 @@ def test_liepin_city_picker_probe_applies_domestic_whole_city_candidate(
         ensure_ascii=False,
     )
     commands = SequenceEvalCommands(
-        eval_outputs=[probe_candidate, probe_candidate, probe_selected],
+        eval_outputs=[_closed_picker_probe(), probe_candidate, probe_candidate, probe_selected],
         outputs={
             ("opencli", "browser", "seektalent-liepin", "get", "url"): (
                 "https://h.liepin.com/search/getConditionItem#session"
@@ -588,7 +706,13 @@ def test_liepin_city_picker_retry_reconciles_open_selected_picker_before_new_eff
         stderr="status unavailable",
     )
     commands = SequenceEvalCommands(
-        eval_outputs=[probe_candidate, probe_candidate, probe_selected, probe_selected],
+        eval_outputs=[
+            _closed_picker_probe(),
+            probe_candidate,
+            probe_candidate,
+            probe_selected,
+            probe_selected,
+        ],
         outputs={
             ("opencli", "browser", "seektalent-liepin", "get", "url"): (
                 "https://h.liepin.com/search/getConditionItem#session"
@@ -657,6 +781,7 @@ def test_liepin_city_picker_retry_probe_unavailable_does_not_assume_picker_close
     )
     commands = SequenceEvalCommands(
         eval_outputs=[
+            _closed_picker_probe(),
             probe_candidate,
             probe_candidate,
             status_unavailable,
@@ -732,7 +857,13 @@ def test_liepin_city_picker_candidate_click_timeout_reconciles_selected_state(
         ensure_ascii=False,
     )
     commands = SequenceEvalCommands(
-        eval_outputs=[probe_candidate, probe_candidate, probe_selected, probe_selected],
+        eval_outputs=[
+            _closed_picker_probe(),
+            probe_candidate,
+            probe_candidate,
+            probe_selected,
+            probe_selected,
+        ],
         outputs={
             ("opencli", "browser", "seektalent-liepin", "get", "url"): (
                 "https://h.liepin.com/search/getConditionItem#session"
@@ -804,7 +935,13 @@ def test_liepin_city_picker_control_click_timeout_reconciles_open_picker(
         ensure_ascii=False,
     )
     commands = SequenceEvalCommands(
-        eval_outputs=[probe_candidate, probe_candidate, probe_candidate, probe_selected],
+        eval_outputs=[
+            _closed_picker_probe(),
+            probe_candidate,
+            probe_candidate,
+            probe_candidate,
+            probe_selected,
+        ],
         outputs={
             ("opencli", "browser", "seektalent-liepin", "get", "url"): (
                 "https://h.liepin.com/search/getConditionItem#session"
