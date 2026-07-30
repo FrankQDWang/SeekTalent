@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserError, OpenCliBrowserResult
+from seektalent.providers.liepin import liepin_city_picker as city_picker
 from tests.test_liepin_opencli_browser import EvalCommands, FakeCommands, _runner
 
 
@@ -222,6 +223,177 @@ def test_liepin_city_picker_uses_focused_probe_when_state_omits_ready_modal(
     assert ("opencli", "browser", "seektalent-liepin", "click", "64") in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "click", "66") in commands.calls
     assert "SENTINEL_DOM_BODY_CANDIDATE_DATA" not in json.dumps(events, ensure_ascii=False)
+
+
+def test_liepin_city_picker_prefers_focused_probe_candidate_over_ambiguous_state_ref(
+    tmp_path: Path,
+) -> None:
+    state_before = """
+    <span>期望城市：</span>
+    [23]<span>其他</span>
+    """
+    state_without_picker_semantics = "<div aria-busy=false />"
+    ambiguous_state_suggestion = """
+    [60]<input autocomplete=off placeholder=搜索城市 type=text value=上海 />
+    [99]<div>上海</div>
+    """
+    state_after_expected_city = """
+    <span>期望城市：</span>
+    [23]<span>其他</span>
+    [50]<label class=tag-item selected>上海</label>
+    """
+    probe_ready = json.dumps(
+        {
+            "schema_version": "seektalent.liepin_city_picker.v1",
+            "section": "expected",
+            "controlRef": "23",
+            "open": True,
+            "searchInputRef": "60",
+            "searchValue": "",
+            "candidates": [],
+            "selectedCities": [],
+            "confirmRefs": ["66"],
+        },
+        ensure_ascii=False,
+    )
+    probe_current_suggestion = json.dumps(
+        {
+            "schema_version": "seektalent.liepin_city_picker.v1",
+            "section": "expected",
+            "controlRef": "23",
+            "open": True,
+            "searchInputRef": "60",
+            "searchValue": "上海",
+            "candidates": [{"ref": "64", "kind": "suggestion", "label": "中国 · 上海"}],
+            "selectedCities": [],
+            "confirmRefs": ["66"],
+        },
+        ensure_ascii=False,
+    )
+    probe_selected = json.dumps(
+        {
+            "schema_version": "seektalent.liepin_city_picker.v1",
+            "section": "expected",
+            "controlRef": "23",
+            "open": True,
+            "searchInputRef": "60",
+            "searchValue": "上海",
+            "candidates": [{"ref": "64", "kind": "suggestion", "label": "中国 · 上海"}],
+            "selectedCities": ["上海"],
+            "confirmRefs": ["66"],
+        },
+        ensure_ascii=False,
+    )
+    commands = SequenceEvalCommands(
+        eval_outputs=[
+            probe_ready,
+            probe_ready,
+            probe_current_suggestion,
+            probe_selected,
+        ],
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): (
+                "https://h.liepin.com/search/getConditionItem#session"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                state_without_picker_semantics,
+                ambiguous_state_suggestion,
+                state_without_picker_semantics,
+                state_after_expected_city,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "click", "23"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "fill", "60", "上海"): (
+                '{"filled":true,"verified":true}'
+            ),
+            ("opencli", "browser", "seektalent-liepin", "click", "64"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "99"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "66"): '{"clicked":true}',
+        },
+    )
+
+    result = _runner(commands, lease_dir=tmp_path)._select_liepin_native_filter(
+        filter_name="city",
+        section="expected",
+        label="上海",
+        current_state=OpenCliBrowserResult(ok=True, action="state", private_output=state_before),
+        events=[],
+    )
+
+    assert result.ok is True
+    assert ("opencli", "browser", "seektalent-liepin", "click", "64") in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "click", "99") not in commands.calls
+
+
+def test_liepin_city_picker_probe_rejects_confirm_when_only_other_city_is_selected(
+    tmp_path: Path,
+) -> None:
+    misleading_state = """
+    [60]<input autocomplete=off placeholder=搜索城市 type=text value=上海 />
+    <i>已选（1/9）</i>
+    <span class=ant-tag-checkable-checked>北京</span>
+    <ul class=ant-city-menu-list role=menu>
+      [99]<li role=menuitem>上海</li>
+    </ul>
+    [91]<button><span>确认</span></button>
+    """
+    probe_other_city_selected = json.dumps(
+        {
+            "schema_version": "seektalent.liepin_city_picker.v1",
+            "section": "expected",
+            "controlRef": "23",
+            "open": True,
+            "searchInputRef": "60",
+            "searchValue": "上海",
+            "candidates": [{"ref": "64", "kind": "suggestion", "label": "中国 · 上海"}],
+            "selectedCities": ["北京"],
+            "confirmRefs": ["91"],
+        },
+        ensure_ascii=False,
+    )
+    commands = EvalCommands(eval_output=probe_other_city_selected)
+
+    pending, confirm_ref = city_picker.pending_confirm_ref(
+        _runner(commands, lease_dir=tmp_path),
+        section="expected",
+        label="上海",
+        state_text=misleading_state,
+    )
+
+    assert pending is False
+    assert confirm_ref is None
+    assert ("opencli", "browser", "seektalent-liepin", "click", "91") not in commands.calls
+
+
+@pytest.mark.parametrize(
+    "probe_output",
+    [
+        '{"schema_version":"seektalent.liepin_city_picker.v1","section":"current"}',
+        '{"schema_version":"seektalent.liepin_city_picker.v1","section":"expected","open":"yes"}',
+    ],
+)
+def test_liepin_city_picker_malformed_probe_fails_closed_before_state_confirm_fallback(
+    tmp_path: Path,
+    probe_output: str,
+) -> None:
+    misleading_state = """
+    [60]<input autocomplete=off placeholder=搜索城市 type=text value=上海 />
+    <i>已选（1/9）</i>
+    <span class=ant-tag-checkable-checked>北京</span>
+    [99]<span>上海</span>
+    [91]<button><span>确认</span></button>
+    """
+    commands = EvalCommands(eval_output=probe_output)
+
+    with pytest.raises(OpenCliBrowserError) as raised:
+        city_picker.pending_confirm_ref(
+            _runner(commands, lease_dir=tmp_path),
+            section="expected",
+            label="上海",
+            state_text=misleading_state,
+        )
+
+    assert raised.value.safe_reason_code == "liepin_opencli_malformed_state"
+    assert ("opencli", "browser", "seektalent-liepin", "click", "91") not in commands.calls
 
 
 def test_liepin_city_picker_fails_closed_when_user_closes_picker(
