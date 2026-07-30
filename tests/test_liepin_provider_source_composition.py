@@ -149,7 +149,7 @@ def test_liepin_site_payloads_module_owns_current_blocked_cards_envelope() -> No
     assert writes[0][1] == "pi-trace/run-1/action-trace.json"
 
 
-def test_liepin_cards_action_traces_do_not_overwrite_between_queries_in_one_lane() -> None:
+def test_liepin_cards_artifacts_do_not_overwrite_between_queries_in_one_lane() -> None:
     from seektalent.providers.liepin import liepin_site_payloads
 
     writes: dict[tuple[str, str], object] = {}
@@ -170,6 +170,12 @@ def test_liepin_cards_action_traces_do_not_overwrite_between_queries_in_one_lane
         max_pages=1,
         max_cards=10,
     )
+    blocked_identity = liepin_site_payloads.cards_trace_identity(
+        query="SENTINEL_SHARED_QUERY",
+        native_filters={"city": {"section": "expected", "label": "广州"}},
+        max_pages=1,
+        max_cards=10,
+    )
     assert first_identity != second_identity
     assert len(first_identity) == len(second_identity) == 64
     assert "SENTINEL_SHARED_QUERY" not in first_identity
@@ -180,29 +186,105 @@ def test_liepin_cards_action_traces_do_not_overwrite_between_queries_in_one_lane
         safe_run_id="lane-1",
         trace_identity=first_identity,
         pages_visited=1,
-        events=({"action_kind": "observe"},),
-        state_text="safe state",
-        cards=(),
+        events=({"action_kind": "first_observe"},),
+        state_text="first safe state",
+        cards=({"display_title": "first candidate"},),
         write_pi_artifact=write_pi_artifact,
     )
-    second = liepin_site_payloads.blocked_cards_envelope(
+    second = liepin_site_payloads.cards_envelope(
+        source_run_id="lane-1",
+        query="SENTINEL_SHARED_QUERY",
+        safe_run_id="lane-1",
+        trace_identity=second_identity,
+        pages_visited=1,
+        events=({"action_kind": "second_observe"},),
+        state_text="second safe state is longer",
+        cards=({"display_title": "second candidate"},),
+        write_pi_artifact=write_pi_artifact,
+    )
+
+    blocked = liepin_site_payloads.blocked_cards_envelope(
         source_run_id="lane-1",
         query="SENTINEL_SHARED_QUERY",
         safe_reason_code="liepin_opencli_malformed_state",
         safe_run_id="lane-1",
-        trace_identity=second_identity,
+        trace_identity=blocked_identity,
         pages_visited=1,
         events=({"action_kind": "observe"},),
         write_pi_artifact=write_pi_artifact,
     )
 
-    assert first["action_trace_ref"] != second["action_trace_ref"]
+    first_card = first["cards"][0]
+    second_card = second["cards"][0]
+    first_refs = {
+        first["action_trace_ref"],
+        first["protected_snapshot_refs"][0],
+        first_card["provider_candidate_key_material_ref"],
+        first_card["safe_card_summary_ref"],
+        first_card["protected_snapshot_ref"],
+    }
+    second_refs = {
+        second["action_trace_ref"],
+        second["protected_snapshot_refs"][0],
+        second_card["provider_candidate_key_material_ref"],
+        second_card["safe_card_summary_ref"],
+        second_card["protected_snapshot_ref"],
+    }
+    assert first_refs.isdisjoint(second_refs)
+    assert blocked["action_trace_ref"] not in first_refs | second_refs
+
+    first_summary_path = str(first_card["safe_card_summary_ref"]).removeprefix(
+        "artifact://"
+    )
+    first_trace_path = str(first["action_trace_ref"]).removeprefix("artifact://")
+    first_page_path = str(first["protected_snapshot_refs"][0]).removeprefix(
+        "artifact://"
+    )
+    first_provider_path = str(
+        first_card["provider_candidate_key_material_ref"]
+    ).removeprefix("artifact://")
+    first_card_path = str(first_card["protected_snapshot_ref"]).removeprefix(
+        "artifact://"
+    )
+    second_provider_path = str(
+        second_card["provider_candidate_key_material_ref"]
+    ).removeprefix("artifact://")
+    assert writes[("protected", first_trace_path)] == {
+        "schema_version": "seektalent.opencli_action_trace.v1",
+        "mode": "card",
+        "source": "liepin",
+        "status": "succeeded",
+        "stop_reason": "completed",
+        "events": ({"action_kind": "first_observe"},),
+        "cards_seen": 1,
+    }
+    assert writes[("public-summary", first_summary_path)] == {
+        "display_title": "first candidate"
+    }
+    assert writes[("protected", first_page_path)] == {
+        "schema_version": "seektalent.opencli_state_snapshot.v1",
+        "chars": len("first safe state"),
+    }
+    assert writes[("protected", first_card_path)] == {
+        "schema_version": "seektalent.opencli_card_snapshot.v1",
+        "rank": 1,
+        "summary": {"display_title": "first candidate"},
+    }
+    assert writes[("protected", first_provider_path)] != writes[
+        ("protected", second_provider_path)
+    ]
+
     trace_paths = {
         path
         for visibility, path in writes
         if visibility == "protected" and path.endswith("/action-trace.json")
     }
-    assert len(trace_paths) == 2
+    assert len(trace_paths) == 3
+    all_paths = "\n".join(path for _visibility, path in writes)
+    assert "SENTINEL_SHARED_QUERY" not in all_paths
+    assert "苏州" not in all_paths
+    assert "杭州" not in all_paths
+    assert "广州" not in all_paths
     encoded_traces = json.dumps(
         [writes[("protected", path)] for path in sorted(trace_paths)],
         ensure_ascii=False,

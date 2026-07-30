@@ -166,13 +166,13 @@ def blocked_cards_envelope(
     events: Sequence[Mapping[str, object]],
     write_pi_artifact: ArtifactWriter,
 ) -> dict[str, object]:
-    trace_segment = _cards_trace_segment(
+    artifact_segment = _cards_artifact_segment(
         safe_run_id=safe_run_id,
         trace_identity=trace_identity,
     )
     action_trace_ref = write_pi_artifact(
         "protected",
-        f"pi-trace/{trace_segment}/action-trace.json",
+        f"pi-trace/{artifact_segment}/action-trace.json",
         {
             "schema_version": "seektalent.opencli_action_trace.v1",
             "mode": "card",
@@ -212,13 +212,13 @@ def cards_envelope(
     cards: Sequence[Mapping[str, object]],
     write_pi_artifact: ArtifactWriter,
 ) -> dict[str, object]:
-    trace_segment = _cards_trace_segment(
+    artifact_segment = _cards_artifact_segment(
         safe_run_id=safe_run_id,
         trace_identity=trace_identity,
     )
     action_trace_ref = write_pi_artifact(
         "protected",
-        f"pi-trace/{trace_segment}/action-trace.json",
+        f"pi-trace/{artifact_segment}/action-trace.json",
         {
             "schema_version": "seektalent.opencli_action_trace.v1",
             "mode": "card",
@@ -231,7 +231,7 @@ def cards_envelope(
     )
     page_snapshot_ref = write_pi_artifact(
         "protected",
-        f"pi-page/{safe_run_id}/search-state.json",
+        f"pi-page/{artifact_segment}/search-state.json",
         {"schema_version": "seektalent.opencli_state_snapshot.v1", "chars": len(state_text)},
     )
     envelope_cards: list[dict[str, object]] = []
@@ -242,17 +242,17 @@ def cards_envelope(
         digest = hashlib.sha256(json.dumps(safe_summary, ensure_ascii=False, sort_keys=True).encode()).hexdigest()[:12]
         provider_material_ref = write_pi_artifact(
             "protected",
-            f"pi-provider-key/{safe_run_id}/{rank}.txt",
+            f"pi-provider-key/{artifact_segment}/{rank}.txt",
             f"liepin-opencli:{safe_run_id}:{rank}:{digest}",
         )
         safe_summary_ref = write_pi_artifact(
             "public-summary",
-            f"pi-card/{safe_run_id}/{rank}.json",
+            f"pi-card/{artifact_segment}/{rank}.json",
             safe_summary,
         )
         protected_snapshot_ref = write_pi_artifact(
             "protected",
-            f"pi-card/{safe_run_id}/{rank}.json",
+            f"pi-card/{artifact_segment}/{rank}.json",
             {"schema_version": "seektalent.opencli_card_snapshot.v1", "rank": rank, "summary": safe_summary},
         )
         safe_summary_refs.append(safe_summary_ref)
@@ -284,7 +284,7 @@ def cards_envelope(
     }
 
 
-def _cards_trace_segment(*, safe_run_id: str, trace_identity: str | None) -> str:
+def _cards_artifact_segment(*, safe_run_id: str, trace_identity: str | None) -> str:
     if trace_identity is None:
         return safe_run_id
     digest = hashlib.sha256(trace_identity.encode("utf-8")).hexdigest()[:20]

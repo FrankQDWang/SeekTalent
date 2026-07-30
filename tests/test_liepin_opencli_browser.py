@@ -2863,7 +2863,13 @@ def test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifact
         assert forbidden not in serialized_envelope
     assert envelope["cards"][0]["safe_card_summary_ref"].startswith("artifact://public-summary/pi-card/run-1/")
     assert _read_action_trace(tmp_path, "run-1")["source"] == "liepin"
-    public_summary_path = tmp_path / "public-summary" / "pi-card" / "run-1" / "1.json"
+    public_summary_path = (
+        tmp_path
+        / "public-summary"
+        / envelope["cards"][0]["safe_card_summary_ref"].removeprefix(
+            "artifact://public-summary/"
+        )
+    )
     assert public_summary_path.is_file()
     public_summary = json.loads(public_summary_path.read_text(encoding="utf-8"))
     assert public_summary["current_or_recent_company"] == "海光集成电路"
