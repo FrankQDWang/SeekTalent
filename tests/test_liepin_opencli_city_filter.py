@@ -324,6 +324,128 @@ def test_liepin_city_picker_prefers_focused_probe_candidate_over_ambiguous_state
     assert ("opencli", "browser", "seektalent-liepin", "click", "99") not in commands.calls
 
 
+def test_liepin_city_picker_adapter_cannot_bypass_focused_probe_with_ambiguous_state_ref(
+    tmp_path: Path,
+) -> None:
+    state_before = """
+    <span>期望城市：</span>
+    [23]<span>其他</span>
+    """
+    ambiguous_picker_state = """
+    [60]<input autocomplete=off placeholder=搜索城市 type=text value=上海 />
+    [99]<div>上海</div>
+    """
+    state_after_expected_city = """
+    <span>期望城市：</span>
+    <span class=ant-tag-checkable-checked>上海</span>
+    """
+    probe_candidate = json.dumps(
+        {
+            "schema_version": "seektalent.liepin_city_picker.v1",
+            "section": "expected",
+            "controlRef": "23",
+            "open": True,
+            "searchInputRef": "60",
+            "searchValue": "上海",
+            "candidates": [{"ref": "64", "kind": "suggestion", "label": "中国 · 上海"}],
+            "selectedCities": [],
+            "confirmRefs": [],
+        },
+        ensure_ascii=False,
+    )
+    commands = EvalCommands(
+        eval_output=probe_candidate,
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): (
+                "https://h.liepin.com/search/getConditionItem#session"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                ambiguous_picker_state,
+                state_after_expected_city,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "click", "23"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "64"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "99"): '{"clicked":true}',
+        },
+    )
+
+    result = _runner(commands, lease_dir=tmp_path)._select_liepin_native_filter(
+        filter_name="city",
+        section="expected",
+        label="上海",
+        current_state=OpenCliBrowserResult(ok=True, action="state", private_output=state_before),
+        events=[],
+    )
+
+    assert result.ok is True
+    assert any(len(call) >= 4 and call[3] == "eval" for call in commands.calls)
+    assert ("opencli", "browser", "seektalent-liepin", "click", "64") in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "click", "99") not in commands.calls
+
+
+def test_liepin_city_picker_confirms_probe_selected_city_without_clicking_candidate_again(
+    tmp_path: Path,
+) -> None:
+    state_before = """
+    <span>期望城市：</span>
+    [23]<span>其他</span>
+    """
+    selected_picker_state = """
+    [60]<input autocomplete=off placeholder=搜索城市 type=text value=上海 />
+    [99]<div>上海</div>
+    <i>已选（1/9）</i>
+    [91]<button><span>确认</span></button>
+    """
+    state_after_expected_city = """
+    <span>期望城市：</span>
+    <span class=ant-tag-checkable-checked>上海</span>
+    """
+    probe_selected = json.dumps(
+        {
+            "schema_version": "seektalent.liepin_city_picker.v1",
+            "section": "expected",
+            "controlRef": "23",
+            "open": True,
+            "searchInputRef": "60",
+            "searchValue": "上海",
+            "candidates": [{"ref": "64", "kind": "suggestion", "label": "中国 · 上海"}],
+            "selectedCities": ["上海"],
+            "confirmRefs": ["66"],
+        },
+        ensure_ascii=False,
+    )
+    commands = EvalCommands(
+        eval_output=probe_selected,
+        outputs={
+            ("opencli", "browser", "seektalent-liepin", "get", "url"): (
+                "https://h.liepin.com/search/getConditionItem#session"
+            ),
+            ("opencli", "browser", "seektalent-liepin", "state"): [
+                selected_picker_state,
+                state_after_expected_city,
+            ],
+            ("opencli", "browser", "seektalent-liepin", "click", "23"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "64"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "66"): '{"clicked":true}',
+            ("opencli", "browser", "seektalent-liepin", "click", "99"): '{"clicked":true}',
+        },
+    )
+
+    result = _runner(commands, lease_dir=tmp_path)._select_liepin_native_filter(
+        filter_name="city",
+        section="expected",
+        label="上海",
+        current_state=OpenCliBrowserResult(ok=True, action="state", private_output=state_before),
+        events=[],
+    )
+
+    assert result.ok is True
+    assert ("opencli", "browser", "seektalent-liepin", "click", "66") in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "fill", "60", "上海") not in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "click", "64") not in commands.calls
+    assert ("opencli", "browser", "seektalent-liepin", "click", "99") not in commands.calls
+
+
 def test_liepin_city_picker_probe_rejects_confirm_when_only_other_city_is_selected(
     tmp_path: Path,
 ) -> None:
