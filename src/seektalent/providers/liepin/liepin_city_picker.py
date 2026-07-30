@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Literal
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserError, OpenCliBrowserResult
@@ -90,6 +90,7 @@ def find_liepin_city_filter_option(
     label: str,
     current_state: OpenCliBrowserResult,
     events: list[dict[str, object]],
+    before_effect: Callable[[], None],
 ) -> tuple[OpenCliBrowserResult, str | None]:
     state = current_state
     state_text = _opencli_result_text(state)
@@ -111,6 +112,7 @@ def find_liepin_city_filter_option(
     else:
         input_ref = native_filter_city_search_input_ref(state_text)
     if input_ref is not None:
+        before_effect()
         site.fill(target=input_ref, text=label)
         events.append(
             {"action_kind": "fill_native_city_filter_search", "filter": "city", "value": label, "ok": True}
@@ -136,6 +138,7 @@ def find_liepin_city_filter_option(
         ):
             return state, None
     if (overseas_ref := native_filter_city_overseas_tab_ref(state_text)) is not None:
+        before_effect()
         site._click_native_filter_ref(overseas_ref)
         events.append(
             {"action_kind": "open_native_city_overseas_tab", "filter": "city", "value": label, "ok": True}
@@ -261,6 +264,7 @@ def resolve_picker_action(
     state: OpenCliBrowserResult,
     state_text: str,
     events: list[dict[str, object]],
+    before_effect: Callable[[], None],
 ) -> tuple[OpenCliBrowserResult, str | None, bool, str | None]:
     pending_confirm, confirm_ref = pending_confirm_ref(
         site,
@@ -278,6 +282,7 @@ def resolve_picker_action(
         label=label,
         current_state=state,
         events=events,
+        before_effect=before_effect,
     )
     return state, option_ref, False, None
 

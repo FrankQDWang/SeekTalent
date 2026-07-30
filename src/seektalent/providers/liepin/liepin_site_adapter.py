@@ -2815,8 +2815,15 @@ class LiepinSiteAdapter:
     ) -> OpenCliBrowserResult:
         state = current_state
         reconcile_city_picker_before_retry = False
+        picker_effect_started = False
+
+        def mark_picker_effect_started() -> None:
+            nonlocal picker_effect_started
+            picker_effect_started = True
+
         for attempt_index in range(3):
             clicked_option = False
+            picker_effect_started = False
             city_option_ref: str | None = None
             exact_city_filter = filter_name == "city" and section in {"current", "expected"}
             city_picker_active = False
@@ -2850,18 +2857,14 @@ class LiepinSiteAdapter:
                     control_ref = native_filter_control_ref_in_section(state_text, section=section)
                     if control_ref is None and exact_city_filter:
                         control_ref = self._liepin_city_choose_ref_from_dom(section=section)
+                    if exact_city_filter:
+                        mark_picker_effect_started()
                     if control_ref is not None:
                         self._click_native_filter_ref(control_ref)
                     else:
                         self._click_native_filter_menu(filter_name, section=section)
                     events.append(
-                        {
-                            "action_kind": "open_native_filter_menu",
-                            "filter": filter_name,
-                            "section": section,
-                            "value": label,
-                            "ok": True,
-                        }
+                        dict(action_kind="open_native_filter_menu", filter=filter_name, section=section, value=label, ok=True)
                     )
                     if exact_city_filter:
                         city_picker_active = True
@@ -2882,10 +2885,13 @@ class LiepinSiteAdapter:
                         return state
                 if city_picker_active:
                     state, city_option_ref, pending_confirm, confirm_ref = city_picker.resolve_picker_action(
-                        self, section=section, label=label, state=state, state_text=state_text, events=events
+                        self, section=section, label=label, state=state, state_text=state_text,
+                        events=events, before_effect=mark_picker_effect_started,
                     )
                     state_text = _opencli_result_text(state)
                 if not pending_confirm:
+                    if exact_city_filter:
+                        mark_picker_effect_started()
                     if city_option_ref is not None:
                         self._click_native_filter_ref(city_option_ref)
                     else:
@@ -2893,12 +2899,7 @@ class LiepinSiteAdapter:
                     clicked_option = True
                     state = self.state()
                     events.append(
-                        {
-                            "action_kind": "observe_after_native_filter",
-                            "filter": filter_name,
-                            "section": section,
-                            "ok": state.ok,
-                        }
+                        dict(action_kind="observe_after_native_filter", filter=filter_name, section=section, ok=state.ok)
                     )
                     if not state.ok:
                         raise OpenCliBrowserError(state.safe_reason_code)
@@ -2913,24 +2914,17 @@ class LiepinSiteAdapter:
                         if pending_confirm and confirm_ref is None:
                             raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
                 if pending_confirm and confirm_ref is not None:
+                    mark_picker_effect_started()
                     self._click_native_filter_ref(confirm_ref)
                     events.append(
-                        {
-                            "action_kind": "confirm_native_city_filter",
-                            "filter": "city",
-                            "section": section,
-                            "value": label,
-                            "ok": True,
-                        }
+                        dict(action_kind="confirm_native_city_filter", filter="city", section=section, value=label, ok=True)
                     )
                     state = self.state()
                     events.append(
-                        {
-                            "action_kind": "observe_after_native_city_filter_confirm",
-                            "filter": "city",
-                            "section": section,
-                            "ok": state.ok,
-                        }
+                        dict(
+                            action_kind="observe_after_native_city_filter_confirm",
+                            filter="city", section=section, ok=state.ok,
+                        )
                     )
                     if not state.ok:
                         raise OpenCliBrowserError(state.safe_reason_code)
@@ -2992,8 +2986,10 @@ class LiepinSiteAdapter:
                 if exc.safe_reason_code not in RETRYABLE_NATIVE_FILTER_REASONS or attempt_index == 2:
                     raise
                 reconcile_city_picker_before_retry = reconcile_city_picker_before_retry or (
-                    exact_city_filter and clicked_option
-                    and exc.safe_reason_code == "liepin_opencli_status_unavailable"
+                    exact_city_filter
+                    and picker_effect_started
+                    and exc.safe_reason_code
+                    in {"liepin_opencli_status_unavailable", "liepin_opencli_timeout"}
                 )
                 events.append(
                     {
