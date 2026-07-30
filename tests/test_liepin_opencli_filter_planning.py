@@ -266,6 +266,24 @@ def test_liepin_filter_planning_does_not_treat_navigation_as_picker_selection() 
     assert native_filter_city_picker_selection_contains(state_text, label="上海") is False
 
 
+def test_liepin_filter_planning_does_not_mix_selected_city_with_navigation_result() -> None:
+    state_text = """
+    [294]<input autocomplete=off placeholder=搜索城市 type=text value=上海 />
+    <i>已选（1/9）</i>
+    <span class=ant-tag-checkable-checked>北京</span>
+    <ul class=ant-city-menu-list role=menu>
+      [302]<li role=menuitem><span>上海</span></li>
+    </ul>
+    <div class=data-list>
+      [337]<span>上海</span>
+    </div>
+    [341]<button><span>确认</span></button>
+    """
+
+    assert native_filter_city_picker_selection_contains(state_text, label="上海") is False
+    assert native_filter_city_picker_selection_contains(state_text, label="北京") is True
+
+
 def test_liepin_filter_planning_requires_one_city_picker_confirm_button() -> None:
     state_text = """
     [294]<input autocomplete=off placeholder=搜索城市 type=text value=上海 />

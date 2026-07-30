@@ -357,12 +357,7 @@ def _is_probe_call(call: tuple[str, ...]) -> bool:
 
 
 class FakeCommands:
-    def __init__(
-        self,
-        *,
-        outputs: dict[tuple[str, ...], str | list[str]] | None = None,
-        fail: bool = False,
-    ) -> None:
+    def __init__(self, *, outputs: dict[tuple[str, ...], str | list[str]] | None = None, fail: bool = False) -> None:
         self.outputs = outputs or {}
         self.fail = fail
         self.calls: list[tuple[str, ...]] = []
@@ -381,6 +376,8 @@ class FakeCommands:
         if len(call) >= 5 and call[3] == "eval" and "seektalent.liepin_structured_cards_probe.v1" in call[4]:
             output = self.outputs.get((ANY_STRUCTURED_CARD_PROBE,), _structured_cards_probe_json("70"))
             return self._resolve_output(output)
+        if len(call) >= 5 and call[3] == "eval" and "seektalent.liepin_city_picker.v1" in call[4]:
+            raise subprocess.CalledProcessError(1, list(argv), stderr="status unavailable")
         output = self.outputs.get(call, "{}")
         if output == "{}" and len(call) == 6 and call[3:5] == ("tab", "new"):
             return json.dumps({"page": "page-1", "url": call[5]})

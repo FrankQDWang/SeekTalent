@@ -710,6 +710,7 @@ def test_search_liepin_cards_selects_overseas_expected_city_from_city_picker(tmp
 [21]<label>美国</label>
 [22]<label>北京</label>
 [23]<label>上海</label>
+[24]<label>其他</label>
 王** 男 34岁 工作5年 硕士 上海
 """
     state_after_quick_city_unapplied = state_after_search
@@ -758,20 +759,7 @@ def test_search_liepin_cards_selects_overseas_expected_city_from_city_picker(tmp
 求职期望：美国 CFO/财务VP
 某美国公司 · CFO首席财务官 2021.01-至今
     """
-    commands = EvalCommands(
-        eval_output=json.dumps(
-            {
-                "schema_version": "seektalent.liepin_city_picker.v1",
-                "section": "expected",
-                "controlRef": "24",
-                "open": False,
-                "searchInputRef": None,
-                "searchValue": "",
-                "candidates": [],
-                "selectedCities": [],
-                "confirmRefs": [],
-            }
-        ),
+    commands = FakeCommands(
         outputs={
             ("opencli", "browser", "seektalent-liepin", "unbind"): "{}",
             ("opencli", "browser", "seektalent-liepin", "tab", "new", "https://h.liepin.com/search/getConditionItem#session"): (

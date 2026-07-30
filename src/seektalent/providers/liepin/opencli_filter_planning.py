@@ -307,7 +307,20 @@ def native_filter_city_picker_selection_contains(state_text: str, *, label: str)
         selected_count = re.search(r"已选[（(](\d+)", line)
         if selected_count is None or int(selected_count.group(1)) < 1:
             continue
-        selected_text = _normalize_liepin_filter_text("".join(candidate_lines[index : index + 10]))
+        selected_lines: list[str] = []
+        for selected_line in candidate_lines[index + 1 :]:
+            lowered = selected_line.lower()
+            if (
+                "<button" in lowered
+                or "suggest-list" in lowered
+                or "data-list" in lowered
+                or "ant-city-menu-list" in lowered
+                or "role=menu" in lowered
+                or 'role="menu' in lowered
+            ):
+                break
+            selected_lines.append(selected_line)
+        selected_text = _normalize_liepin_filter_text("".join(selected_lines))
         return normalized_label in selected_text
     return False
 
