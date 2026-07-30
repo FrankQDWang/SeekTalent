@@ -70,6 +70,37 @@ def test_liepin_filter_selection_detects_section_summary_value() -> None:
     assert native_filter_selection_applied(state_text, section="expected", label="上海") is True
 
 
+def test_liepin_filter_selection_detects_title_chip_child_in_exact_section() -> None:
+    state_text = """
+    [50]<label title=期望城市 />
+      <span>上海</span>
+    <span>目前城市：</span>
+    """
+
+    assert native_filter_selection_applied(state_text, section="expected", label="上海") is True
+
+
+def test_liepin_filter_selection_title_chip_stops_at_next_city_section() -> None:
+    state_text = """
+    [50]<label title=期望城市 />
+    <span>期望城市：</span>
+    <span>目前城市：</span>
+    [74]<label class=selected>苏州</label>
+    """
+
+    assert native_filter_selection_applied(state_text, section="expected", label="苏州") is False
+
+
+def test_liepin_filter_selection_title_chip_stops_at_next_title_boundary() -> None:
+    state_text = """
+    [50]<label title=期望城市 />
+    [51]<label title=目前城市 />
+    <span>苏州</span>
+    """
+
+    assert native_filter_selection_applied(state_text, section="expected", label="苏州") is False
+
+
 def test_liepin_filter_planning_uses_other_city_picker_for_secondary_city() -> None:
     state_text = """
     [20]<label>期望城市：</label>
