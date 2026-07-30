@@ -242,7 +242,7 @@ def test_worker_claims_real_store_run_and_executes_real_executor(tmp_path) -> No
     runtime = _CallbackRuntime()
     executor = WorkflowRuntimeExecutor(
         store=store,
-        runtime_factory=lambda: runtime,
+        runtime_factory=lambda *, source_operation_executor=None: runtime,
         runtime_run_id_factory=lambda: "runtime-run-real",
         now=lambda: _NOW,
     )
@@ -290,7 +290,7 @@ def test_worker_preserves_executor_finalized_runtime_failure(tmp_path) -> None:
     store.save_approved_requirement(approved, idempotency_key="approved-runtime-failure")
     executor = WorkflowRuntimeExecutor(
         store=store,
-        runtime_factory=lambda: _FailingAfterStartRuntime(RuntimeError("liepin search failed")),
+        runtime_factory=lambda *, source_operation_executor=None: _FailingAfterStartRuntime(RuntimeError("liepin search failed")),
         runtime_run_id_factory=lambda: "runtime-run-runtime-failure",
         now=lambda: _NOW,
     )
@@ -336,7 +336,7 @@ def test_worker_claim_is_single_winner_across_processes(tmp_path) -> None:
     store.save_approved_requirement(approved, idempotency_key="approved-multiprocess")
     executor = WorkflowRuntimeExecutor(
         store=store,
-        runtime_factory=lambda: _CallbackRuntime(),
+        runtime_factory=lambda *, source_operation_executor=None: _CallbackRuntime(),
         runtime_run_id_factory=lambda: "runtime-run-multiprocess",
         now=lambda: _NOW,
     )

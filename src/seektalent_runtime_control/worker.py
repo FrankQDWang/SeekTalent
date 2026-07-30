@@ -141,7 +141,7 @@ class RuntimeExecutionWorker:
                         failure_role="primary",
                         occurred_at=self.now(),
                     )
-                except Exception as persistence_error:  # noqa: BLE001
+                except Exception as persistence_error:
                     logger.debug(
                         "worker failure persistence failed: %s",
                         type(persistence_error).__name__,

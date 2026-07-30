@@ -6,7 +6,10 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 from seektalent_conversation_agent.service import ConversationAgentService
-from seektalent_ui.execution_health import ExecutionComponentHealth, ExecutionHealthTracker
+from seektalent_runtime_control.execution_health import (
+    ExecutionComponentHealth,
+    ExecutionHealthTracker,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -97,7 +100,7 @@ class _BaseOutboxRunner:
                 continue
             try:
                 self._process_item(item.outbox_id)
-            except Exception as exc:  # noqa: BLE001 - durable outbox retry remains bounded
+            except Exception as exc:
                 self._health.failure(exc)
                 runtime_store = getattr(
                     getattr(
@@ -126,7 +129,7 @@ class _BaseOutboxRunner:
                             failure_role="primary",
                             occurred_at=self.service.now(),
                         )
-                    except Exception as persistence_error:  # noqa: BLE001
+                    except Exception as persistence_error:
                         logger.debug(
                             "outbox failure persistence failed: %s",
                             type(persistence_error).__name__,
@@ -150,7 +153,7 @@ class _BaseOutboxRunner:
             self._persist_health(alive=True)
             try:
                 processed = self.run_once()
-            except Exception as exc:  # noqa: BLE001 - keep polling after an unknown failure
+            except Exception as exc:
                 self._health.failure(exc)
                 logger.warning(
                     "WTS outbox runner poll failed: %s",
@@ -267,7 +270,7 @@ class _BaseOutboxRunner:
                 restart_count=snapshot.restart_count,
                 observed_at=self.service.now(),
             )
-        except Exception:  # noqa: BLE001 - diagnostics cannot stop execution
+        except Exception:
             logger.debug(
                 "outbox component health persistence failed",
                 exc_info=True,
@@ -313,7 +316,7 @@ class WorkflowStartOutboxRunner(_BaseOutboxRunner):
                 updated_at=self.service.now(),
             )
             return "committed"
-        except Exception:  # noqa: BLE001 - inability to prove is unknown
+        except Exception:
             return "unknown"
 
     def _mark_final_failure(self, aggregate_id: str, *, updated_at: str) -> None:
@@ -375,7 +378,7 @@ class RequirementExtractionOutboxRunner(_BaseOutboxRunner):
             ):
                 return "unknown"
             return "no_effect"
-        except Exception:  # noqa: BLE001 - inability to prove is unknown
+        except Exception:
             return "unknown"
 
     def _mark_final_failure(self, aggregate_id: str, *, updated_at: str) -> None:

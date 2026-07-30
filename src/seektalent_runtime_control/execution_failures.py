@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import sqlite3
 from dataclasses import dataclass
 from hashlib import sha256
 from typing import Literal
@@ -62,6 +63,9 @@ class ExecutionFailureRecord:
 
 
 class ExecutionFailureStoreMixin:
+    def _connect(self) -> sqlite3.Connection:
+        raise NotImplementedError
+
     def record_component_health(
         self,
         *,
@@ -82,7 +86,7 @@ class ExecutionFailureStoreMixin:
             and _SAFE.fullmatch(first_failure_type) is None
         ):
             raise ValueError("component_health_failure_type_invalid")
-        with self._connect() as connection, connection:  # type: ignore[attr-defined]
+        with self._connect() as connection, connection:
             connection.execute(
                 """
                 INSERT INTO runtime_control_component_health (
@@ -145,7 +149,7 @@ class ExecutionFailureStoreMixin:
             failure_role=failure_role,
             occurred_at=occurred_at,
         )
-        with self._connect() as connection, connection:  # type: ignore[attr-defined]
+        with self._connect() as connection, connection:
             connection.execute(
                 """
                 INSERT INTO runtime_control_execution_failures (
@@ -174,7 +178,7 @@ class ExecutionFailureStoreMixin:
         *,
         limit: int = 100,
     ) -> list[ExecutionFailureRecord]:
-        with self._connect() as connection:  # type: ignore[attr-defined]
+        with self._connect() as connection:
             rows = connection.execute(
                 """
                 SELECT * FROM runtime_control_execution_failures

@@ -9,11 +9,14 @@ from typing import cast
 from uuid import uuid4
 
 from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
+from seektalent_runtime_control.execution_health import (
+    ExecutionComponentHealth,
+    ExecutionHealthTracker,
+)
 from seektalent_runtime_control.models import RuntimeWorkerClaim
 from seektalent_runtime_control.recovery import RuntimeRecoveryService
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_runtime_control.worker import RuntimeExecutionWorker
-from seektalent_ui.execution_health import ExecutionComponentHealth, ExecutionHealthTracker
 
 
 logger = logging.getLogger(__name__)
@@ -139,7 +142,7 @@ class WorkbenchV2RuntimeQueueRunner:
             try:
                 asyncio.run(self._run_loop())
                 return
-            except Exception as exc:  # noqa: BLE001 - keep the execution plane available
+            except Exception as exc:
                 self._record_failure(exc, boundary="thread")
                 self._wait_after_failure()
 
@@ -167,7 +170,7 @@ class WorkbenchV2RuntimeQueueRunner:
                 recovery_failed = False
                 try:
                     recovery.recover_start_timeouts(resume_recoverable=True)
-                except Exception as exc:  # noqa: BLE001 - recovery failure must not kill the runner
+                except Exception as exc:
                     recovery_failed = True
                     self._record_failure(exc, boundary="recovery")
                 next_recovery_at = now + self.recovery_interval_seconds
@@ -181,7 +184,7 @@ class WorkbenchV2RuntimeQueueRunner:
                 break
             try:
                 runtime_run = await worker.run_once()
-            except Exception as exc:  # noqa: BLE001 - a claimed run remains lease-governed
+            except Exception as exc:
                 self._record_failure(exc, boundary="poll")
                 self._wait_after_failure()
                 continue
@@ -219,7 +222,7 @@ class WorkbenchV2RuntimeQueueRunner:
                     failure_role="primary",
                     occurred_at=self.store_now(),
                 )
-            except Exception as persistence_error:  # noqa: BLE001
+            except Exception as persistence_error:
                 logger.debug(
                     "runtime failure persistence failed: %s",
                     type(persistence_error).__name__,
@@ -263,7 +266,7 @@ class WorkbenchV2RuntimeQueueRunner:
                 restart_count=snapshot.restart_count,
                 observed_at=self.store_now(),
             )
-        except Exception:  # noqa: BLE001 - diagnostics cannot stop execution
+        except Exception:
             logger.debug(
                 "runtime component health persistence failed",
                 exc_info=True,

@@ -50,7 +50,7 @@ def test_db_first_control_plane_product_flow_without_artifact_reconciliation(tmp
     runtime = _ProductFlowRuntime()
     executor = WorkflowRuntimeExecutor(
         store=runtime_store,
-        runtime_factory=lambda: runtime,
+        runtime_factory=lambda *, source_operation_executor=None: runtime,
         runtime_run_id_factory=lambda: "runtime_run_product_flow",
         executor_id_factory=lambda: "executor_product_flow",
         checkpoint_id_factory=lambda: "rtcheckpoint_product_flow",

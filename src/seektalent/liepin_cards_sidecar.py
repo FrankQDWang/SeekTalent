@@ -141,7 +141,7 @@ def _serve(
                 )
             else:
                 raise RuntimeError("liepin_source_sidecar_unexpected_message")
-    except Exception as exc:  # noqa: BLE001 - sidecar must fail with a privacy-safe first cause
+    except Exception as exc:
         _write_safe_exit_diagnostic(
             boundary="sidecar_loop",
             operation_kind="unknown",

@@ -323,7 +323,7 @@ def test_browser_lane_contention_yields_same_durable_run_then_completes(
     approved = _approved_requirement()
     executor = WorkflowRuntimeExecutor(
         store=store,
-        runtime_factory=lambda: next(runtimes),
+        runtime_factory=lambda *, source_operation_executor=None: next(runtimes),
         runtime_run_id_factory=lambda: "runtime_run_lane_wait",
         executor_id_factory=lambda: "executor_unused",
         checkpoint_id_factory=lambda: "checkpoint_lane_wait",

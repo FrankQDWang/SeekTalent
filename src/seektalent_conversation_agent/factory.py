@@ -1,14 +1,11 @@
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from typing import Protocol
 
 from seektalent.config import AppSettings
 from seektalent.models import RequirementSheet
 from seektalent.prompting import PromptRegistry
-from seektalent.providers.liepin.runtime_context import (
-    local_opencli_liepin_source_context,
-)
 from seektalent_conversation_agent.budget import AgentBudgetPolicy
 from seektalent_conversation_agent.errors import ConversationAgentError
 from seektalent_conversation_agent.service import ConversationAgentService
@@ -18,14 +15,29 @@ from seektalent_conversation_agent.service_actions import AgentServiceActionAdap
 from seektalent_runtime_control.commands import RuntimeCommandService
 from seektalent_runtime_control.detail import RuntimeDetailService
 from seektalent_runtime_control.executor import (
+    SourceContextProvider,
     WorkflowRuntimeExecutor,
 )
 from seektalent_runtime_control.service import RuntimeControlService
 from seektalent_runtime_control.store import RuntimeControlStore
 
 
+class ApplicationRuntimeFactory(Protocol):
+    def __call__(
+        self,
+        settings: AppSettings,
+        *,
+        source_operation_executor: object | None = None,
+    ) -> object: ...
+
+
 class RuntimeRequirementExecutor:
-    def __init__(self, *, settings: AppSettings, runtime_factory: Callable[[AppSettings], object]) -> None:
+    def __init__(
+        self,
+        *,
+        settings: AppSettings,
+        runtime_factory: ApplicationRuntimeFactory,
+    ) -> None:
         self.settings = settings
         self.runtime_factory = runtime_factory
 
@@ -55,7 +67,8 @@ class RuntimeRequirementExecutor:
 def build_agent_service(
     *,
     settings: AppSettings,
-    runtime_factory: Callable[[AppSettings], object],
+    runtime_factory: ApplicationRuntimeFactory,
+    source_context_provider: SourceContextProvider | None = None,
 ) -> ConversationAgentService:
     conversation_store = ConversationStore(settings.conversation_agent_path)
     conversation_store.initialize()
@@ -83,7 +96,7 @@ def build_agent_service(
         settings=settings,
         runtime_factory=workflow_runtime_factory,
         command_service=command_service,
-        source_context_provider=local_opencli_liepin_source_context,
+        source_context_provider=source_context_provider,
     )
     detail_service = RuntimeDetailService(store=runtime_store)
     agent_prompt = PromptRegistry(settings.prompt_dir).load("conversation_agent")

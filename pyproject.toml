@@ -78,6 +78,14 @@ extend-select = ["BLE001", "S110", "S112", "TRY203"]
 [tool.ruff.lint.flake8-bandit]
 check-typed-exception = true
 
+[tool.ruff.lint.per-file-ignores]
+"src/seektalent/liepin_cards_sidecar.py" = ["BLE001"]
+"src/seektalent_runtime_control/browser_lane.py" = ["BLE001"]
+"src/seektalent_runtime_control/executor.py" = ["BLE001"]
+"src/seektalent_runtime_control/worker.py" = ["BLE001"]
+"src/seektalent_ui/workflow_start_outbox_runner.py" = ["BLE001"]
+"src/seektalent_workbench_v2/runtime_runner.py" = ["BLE001"]
+
 [[tool.ty.overrides]]
 include = ["tests/**"]
 

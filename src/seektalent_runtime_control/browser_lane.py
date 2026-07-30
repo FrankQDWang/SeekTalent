@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import logging
 import re
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass
@@ -330,12 +331,12 @@ class BrowserLaneGuard:
                         self._lease_seconds,
                     ),
                 )
-            except Exception as error:  # noqa: BLE001 - the guard must surface a dead heartbeat
+            except Exception as error:
                 self._heartbeat_error = error
                 if self._on_lease_lost is not None:
                     try:
                         self._on_lease_lost()
-                    except Exception as callback_error:  # noqa: BLE001
+                    except Exception as callback_error:
                         logger.debug(
                             "browser lane fence callback failed: %s",
                             type(callback_error).__name__,
@@ -345,6 +346,9 @@ class BrowserLaneGuard:
 
 
 class BrowserLaneStoreMixin:
+    def _connect(self) -> sqlite3.Connection:
+        raise NotImplementedError
+
     def try_acquire_browser_lane(
         self,
         *,
@@ -369,7 +373,7 @@ class BrowserLaneStoreMixin:
             now=acquired_at,
             lease_expires_at=lease_expires_at,
         )
-        with self._connect() as connection:  # type: ignore[attr-defined]
+        with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
@@ -446,7 +450,7 @@ class BrowserLaneStoreMixin:
         heartbeat_at: str,
         lease_expires_at: str,
     ) -> BrowserLaneLease:
-        with self._connect() as connection:  # type: ignore[attr-defined]
+        with self._connect() as connection:
             updated = connection.execute(
                 """
                 UPDATE runtime_control_browser_lanes
@@ -491,7 +495,7 @@ class BrowserLaneStoreMixin:
             raise ValueError("completed browser lane cannot retain a failure")
         if failure_code is not None and _SAFE_REASON.fullmatch(failure_code) is None:
             failure_code = "liepin_browser_lane_failed"
-        with self._connect() as connection:  # type: ignore[attr-defined]
+        with self._connect() as connection:
             updated = connection.execute(
                 """
                 UPDATE runtime_control_browser_lanes
@@ -549,7 +553,7 @@ class BrowserLaneStoreMixin:
             "accepted_no_dispatch",
         }:
             raise ValueError("browser_lane_no_effect_evidence_invalid")
-        with self._connect() as connection:  # type: ignore[attr-defined]
+        with self._connect() as connection:
             connection.execute("BEGIN IMMEDIATE")
             lane = connection.execute(
                 """
@@ -691,7 +695,7 @@ class BrowserLaneStoreMixin:
         self,
         lane_key: str = LIEPIN_BROWSER_LANE,
     ) -> BrowserLaneSnapshot | None:
-        with self._connect() as connection:  # type: ignore[attr-defined]
+        with self._connect() as connection:
             row = connection.execute(
                 """
                 SELECT *

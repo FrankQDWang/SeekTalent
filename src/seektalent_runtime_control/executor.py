@@ -4,7 +4,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from inspect import Parameter, signature
 import logging
-from typing import Protocol, runtime_checkable
+from typing import Literal, Protocol, runtime_checkable
 from uuid import uuid4
 
 from seektalent.config import AppSettings
@@ -556,9 +556,12 @@ class WorkflowRuntimeExecutor:
         primary_error: BaseException,
     ) -> None:
         del primary_error
+        close = getattr(source_executor, "close", None)
+        if not callable(close):
+            return
         try:
-            source_executor.close()  # type: ignore[attr-defined]
-        except Exception as cleanup_error:  # noqa: BLE001
+            close()
+        except Exception as cleanup_error:
             self._record_execution_failure_safely(
                 runtime_run_id=runtime_run_id,
                 component="runtime_executor",
@@ -571,11 +574,26 @@ class WorkflowRuntimeExecutor:
 
     def _record_execution_failure_safely(
         self,
-        **values: object,
+        *,
+        runtime_run_id: str | None,
+        component: str,
+        boundary: str,
+        safe_reason_code: str,
+        error: BaseException,
+        failure_role: Literal["primary", "secondary"],
+        occurred_at: str,
     ) -> None:
         try:
-            self.store.record_execution_failure(**values)
-        except Exception as persistence_error:  # noqa: BLE001
+            self.store.record_execution_failure(
+                runtime_run_id=runtime_run_id,
+                component=component,
+                boundary=boundary,
+                safe_reason_code=safe_reason_code,
+                error=error,
+                failure_role=failure_role,
+                occurred_at=occurred_at,
+            )
+        except Exception as persistence_error:
             logger.debug(
                 "execution failure persistence failed: %s",
                 type(persistence_error).__name__,
@@ -663,9 +681,6 @@ class WorkflowRuntimeExecutor:
         *,
         source_operation_executor: object | None,
     ) -> object:
-        if self.settings is None:
-            legacy_factory = self.runtime_factory
-            return legacy_factory()  # type: ignore[call-arg]
         return self.runtime_factory(
             source_operation_executor=source_operation_executor,
         )

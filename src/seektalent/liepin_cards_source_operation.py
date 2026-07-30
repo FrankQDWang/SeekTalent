@@ -648,18 +648,35 @@ class LiepinCardsSourceOperationExecutor:
             )
         except (OSError, ValueError):
             return None
-        observation = SimpleNamespace(
-            operation_id=operation_id,
-            canonical_request_hash=request_hash,
-            disposition=operation.source_operation_disposition,
-            open_mode=artifact.open_mode,
-            provider_candidate_key_hash=(
-                artifact.provider_candidate_key_hash
-            ),
-            rank=artifact.rank,
-            action_attempted=artifact.action_attempted,
-            effect_posture=artifact.effect_posture,
-            safe_reason_code=artifact.safe_reason_code,
+        disposition = operation.source_operation_disposition
+        if disposition not in {
+            "completed",
+            "partial",
+            "failed",
+            "reconciliation_unknown",
+        }:
+            return None
+        observation = LiepinDetailsObservationV1.model_validate(
+            {
+                "contract_version": (
+                    "seektalent.source.liepin-details.observation/v1"
+                ),
+                "operation_id": operation_id,
+                "canonical_request_hash": request_hash,
+                "disposition": disposition,
+                "artifact_ref": operation.conclusive_observation_ref,
+                "artifact_hash": digest,
+                "open_mode": artifact.open_mode,
+                "provider_candidate_key_hash": (
+                    artifact.provider_candidate_key_hash
+                ),
+                "rank": artifact.rank,
+                "action_attempted": artifact.action_attempted,
+                "effect_posture": artifact.effect_posture,
+                "safe_reason_code": artifact.safe_reason_code,
+                "producer_generation": 1,
+            },
+            strict=True,
         )
         if not _details_artifact_binds_accepted_request(
             request=request,

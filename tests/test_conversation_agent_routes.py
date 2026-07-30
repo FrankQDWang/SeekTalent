@@ -293,6 +293,9 @@ def test_workflow_start_route_uses_app_factory_runtime(tmp_path: Path) -> None:
 
 def test_agent_factory_persists_production_liepin_source_context(tmp_path: Path) -> None:
     from seektalent_conversation_agent.factory import build_agent_service
+    from seektalent.providers.liepin.runtime_context import (
+        local_opencli_liepin_source_context,
+    )
 
     settings = make_settings(
         workspace_root=str(tmp_path),
@@ -303,6 +306,7 @@ def test_agent_factory_persists_production_liepin_source_context(tmp_path: Path)
     service = build_agent_service(
         settings=settings,
         runtime_factory=DeterministicRouteRuntime,
+        source_context_provider=local_opencli_liepin_source_context,
     )
     runtime_store = service.service_action_adapter.runtime_store
     executor = service.service_action_adapter.workflow_executor
@@ -334,6 +338,9 @@ def test_agent_factory_installs_liepin_cards_operation_executor(tmp_path: Path) 
         LiepinCardsSourceOperationExecutor,
     )
     from seektalent_conversation_agent.factory import build_agent_service
+    from seektalent.providers.liepin.runtime_context import (
+        local_opencli_liepin_source_context,
+    )
 
     CapturingLiepinWorkflowRuntime.instances = []
     settings = make_settings(
@@ -345,6 +352,7 @@ def test_agent_factory_installs_liepin_cards_operation_executor(tmp_path: Path) 
     service = build_agent_service(
         settings=settings,
         runtime_factory=CapturingLiepinWorkflowRuntime,
+        source_context_provider=local_opencli_liepin_source_context,
     )
     runtime_store = service.service_action_adapter.runtime_store
     executor = service.service_action_adapter.workflow_executor

@@ -46,7 +46,10 @@ def _registered_cts_source(settings: AppSettings) -> RegisteredSource:
     async def run_card_lane(request: SourceLaneRequest) -> SourceLaneResult:
         from .runtime_factory import _build_provider_retrieval_service
 
-        retrieval_service = _build_provider_retrieval_service(settings)
+        retrieval_service = _build_provider_retrieval_service(
+            settings,
+            source_operation_executor=None,
+        )
         return await run_provider_card_lane(
             request=request,
             search=retrieval_service.search,

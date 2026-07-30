@@ -17,7 +17,7 @@ def test_enqueue_uses_atomic_acceptance_and_replays_without_duplicate_event(tmp_
     run_ids = iter(("runtime_run_acceptance", "runtime_run_replay"))
     executor = WorkflowRuntimeExecutor(
         store=store,
-        runtime_factory=object,
+        runtime_factory=lambda *, source_operation_executor=None: object(),
         runtime_run_id_factory=lambda: next(run_ids),
         now=_clock(
             "2026-06-17T00:00:00.000000Z",
@@ -73,7 +73,7 @@ def test_executor_progress_callback_persists_public_events_and_stage_outputs_wit
     runtime = PublicProgressRuntime()
     executor = WorkflowRuntimeExecutor(
         store=store,
-        runtime_factory=lambda: runtime,
+        runtime_factory=lambda *, source_operation_executor=None: runtime,
         runtime_run_id_factory=lambda: "runtime_run_1",
         executor_id_factory=lambda: "executor_1",
         now=_clock(
@@ -195,7 +195,7 @@ def test_executor_applies_next_round_requirement_at_runtime_round_boundary(tmp_p
     store.save_approved_requirement(approved_requirement, idempotency_key="approved-boundary")
     executor = WorkflowRuntimeExecutor(
         store=store,
-        runtime_factory=lambda: runtime,
+        runtime_factory=lambda *, source_operation_executor=None: runtime,
         runtime_run_id_factory=lambda: "runtime_run_1",
         executor_id_factory=lambda: "executor_1",
         now=_clock(
