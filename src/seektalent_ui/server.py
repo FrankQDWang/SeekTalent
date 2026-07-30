@@ -30,7 +30,6 @@ from seektalent_workbench_v2.runtime_runner import WorkbenchV2RuntimeQueueRunner
 from seektalent_workbench_v2.runtime_service import WorkbenchV2RuntimeService
 from seektalent_workbench_v2.service import WorkbenchV2Service
 from seektalent_workbench_v2.store import WorkbenchV2Store
-from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
 from seektalent_ui import (
     agent_routes,
     agent_workbench_routes,
@@ -40,7 +39,6 @@ from seektalent_ui import (
     workbench_routes,
 )
 from seektalent_ui.agent_workbench_stream_store import AgentWorkbenchStreamStore
-from seektalent_ui.job_runner import WorkbenchJobRunner
 from seektalent_ui.liepin_routes import create_liepin_router
 from seektalent_ui.network_guard import (
     NetworkGuard,
@@ -96,6 +94,24 @@ def create_app(
     if runtime_control_store is None:
         raise RuntimeError("runtime_control_store_unavailable")
     app.state.runtime_control_store = runtime_control_store
+    runtime_executor = (
+        app.state.agent_conversation_service
+        .service_action_adapter
+        .workflow_executor
+    )
+    command_service = (
+        app.state.agent_conversation_service
+        .service_action_adapter
+        .command_service
+    )
+    if runtime_executor is None:
+        raise RuntimeError("runtime_workflow_executor_unavailable")
+    if command_service is None:
+        raise RuntimeError("runtime_command_service_unavailable")
+    if runtime_executor.store is not runtime_control_store:
+        raise RuntimeError("runtime_execution_store_identity_mismatch")
+    if command_service.store is not runtime_control_store:
+        raise RuntimeError("runtime_command_store_identity_mismatch")
     app.state.workbench_v2_store = WorkbenchV2Store(
         app_settings.resolve_workspace_path(".seektalent/workbench_v2.sqlite3")
     )
@@ -103,12 +119,8 @@ def create_app(
     def workbench_v2_runtime_factory() -> object:
         return runtime_factory(app_settings)
 
-    app.state.workbench_v2_runtime_executor = WorkflowRuntimeExecutor(
-        store=runtime_control_store,
-        settings=app_settings,
-        runtime_factory=workbench_v2_runtime_factory,
-        source_context_provider=local_opencli_liepin_source_context,
-    )
+    app.state.runtime_command_service = command_service
+    app.state.workbench_v2_runtime_executor = runtime_executor
     app.state.workbench_v2_runtime_runner = WorkbenchV2RuntimeQueueRunner(
         store=runtime_control_store,
         executor=app.state.workbench_v2_runtime_executor,
@@ -120,7 +132,8 @@ def create_app(
             store=runtime_control_store,
             settings=app_settings,
             runtime_factory=workbench_v2_runtime_factory,
-            executor=app.state.workbench_v2_runtime_executor,
+            executor=runtime_executor,
+            command_service=command_service,
             on_run_queued=app.state.workbench_v2_runtime_runner.wake,
         ),
     )
@@ -131,13 +144,17 @@ def create_app(
     app.state.requirement_extraction_outbox_runner = RequirementExtractionOutboxRunner(
         service=app.state.agent_conversation_service,
     )
-    app.state.workbench_job_runner = WorkbenchJobRunner(
-        store=app.state.workbench_store,
-        settings=app_settings,
-        runtime_factory=runtime_factory,
-        runtime_control_store=runtime_control_store,
-        workbench_note_writer_agent_factory=workbench_note_writer_agent_factory,
-    )
+    app.state.workbench_job_runner = None
+    if app_settings.runtime_mode != "prod":
+        from seektalent_ui.job_runner import WorkbenchJobRunner
+
+        app.state.workbench_job_runner = WorkbenchJobRunner(
+            store=app.state.workbench_store,
+            settings=app_settings,
+            runtime_factory=runtime_factory,
+            runtime_control_store=runtime_control_store,
+            workbench_note_writer_agent_factory=workbench_note_writer_agent_factory,
+        )
     app.state.agent_rate_limiter = agent_routes.LocalAgentRateLimiter()
     app.state.network_guard = network_guard
 
@@ -164,6 +181,18 @@ def create_app(
             return JSONResponse(status_code=403, content={"detail": "Origin is not allowed."})
         if request.method == "OPTIONS":
             response = Response(status_code=204)
+        elif (
+            app_settings.runtime_mode == "prod"
+            and request.url.path.startswith("/api/workbench")
+            and request.method not in {"GET", "HEAD"}
+        ):
+            response = JSONResponse(
+                status_code=410,
+                content={
+                    "reasonCode": "legacy_workbench_execution_removed",
+                    "detail": "Legacy Workbench execution has been removed.",
+                },
+            )
         elif not app_settings.workbench_enabled and request.url.path.startswith(("/api/workbench", "/api/agent")):
             if request.url.path.startswith("/api/agent/workbench"):
                 problem = problem_from_reason(

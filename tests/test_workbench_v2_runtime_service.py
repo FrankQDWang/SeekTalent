@@ -20,6 +20,8 @@ from seektalent_runtime_control.models import (
     RuntimeControlCandidateIdentity,
     RuntimeControlEventInput,
 )
+from seektalent_runtime_control.commands import RuntimeCommandService
+from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
 from seektalent_runtime_control.requirements import draft_from_requirement_sheet
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_workbench_v2.agent_loop import WorkbenchV2RuntimeInput
@@ -733,7 +735,7 @@ def test_runtime_service_refuses_start_without_required_fields(
 def test_runtime_service_enqueues_run_with_job_title_jd_and_notes(tmp_path: Path) -> None:
     store = _store(tmp_path)
     queued_run_ids: list[str] = []
-    service = WorkbenchV2RuntimeService(
+    service = _service_with_store(
         store=store,
         runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
         draft_revision_id_factory=lambda: "reqdraft_start_1",
@@ -780,7 +782,7 @@ def test_runtime_service_enqueues_run_with_job_title_jd_and_notes(tmp_path: Path
 def test_runtime_service_start_run_replays_default_idempotency_key(tmp_path: Path) -> None:
     store = _store(tmp_path)
     runtime_run_ids = iter(["rtrun_1", "rtrun_2"])
-    service = WorkbenchV2RuntimeService(
+    service = _service_with_store(
         store=store,
         runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
         runtime_run_id_factory=lambda: next(runtime_run_ids),
@@ -803,7 +805,7 @@ def test_runtime_service_start_run_replays_default_idempotency_key(tmp_path: Pat
 def test_runtime_service_submits_next_round_requirement_to_runtime_control(tmp_path: Path) -> None:
     store = _store(tmp_path)
     extractor = RecordingRequirementExtractor(_requirement_sheet())
-    service = WorkbenchV2RuntimeService(
+    service = _service_with_store(
         store=store,
         requirement_extractor=extractor,
         runtime_factory=lambda: extractor,
@@ -842,7 +844,7 @@ def test_runtime_service_submits_next_round_requirement_to_runtime_control(tmp_p
 def test_runtime_service_start_run_replays_explicit_idempotency_key(tmp_path: Path) -> None:
     store = _store(tmp_path)
     runtime_run_ids = iter(["rtrun_1", "rtrun_2"])
-    service = WorkbenchV2RuntimeService(
+    service = _service_with_store(
         store=store,
         runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
         runtime_run_id_factory=lambda: next(runtime_run_ids),
@@ -882,7 +884,7 @@ def test_runtime_service_rechecks_then_reruns_same_conversation_and_requirements
     async def readiness_probe() -> None:
         readiness_calls.append("checked")
 
-    service = WorkbenchV2RuntimeService(
+    service = _service_with_store(
         store=store,
         runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
         runtime_run_id_factory=lambda: next(runtime_run_ids),
@@ -958,7 +960,7 @@ def test_runtime_service_does_not_probe_or_rerun_while_original_run_is_active(
     async def readiness_probe() -> None:
         readiness_calls.append("checked")
 
-    service = WorkbenchV2RuntimeService(
+    service = _service_with_store(
         store=store,
         runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
         runtime_run_id_factory=lambda: next(runtime_run_ids),
@@ -1039,7 +1041,7 @@ def test_runtime_service_recheck_failure_does_not_start_browser_business_run(
             code="liepin_opencli_extension_disconnected",
         )
 
-    service = WorkbenchV2RuntimeService(
+    service = _service_with_store(
         store=store,
         runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
         runtime_run_id_factory=lambda: "rtrun_1",
@@ -1106,7 +1108,7 @@ def test_runtime_service_concurrent_recheck_accepts_one_persisted_attempt(
     async def readiness_probe() -> None:
         probe_barrier.wait(timeout=5)
 
-    service = WorkbenchV2RuntimeService(
+    service = _service_with_store(
         store=store,
         runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
         runtime_run_id_factory=next_runtime_run_id,
@@ -1160,7 +1162,7 @@ def test_runtime_service_concurrent_recheck_accepts_one_persisted_attempt(
 
 def test_runtime_service_start_run_preserves_explicit_draft_lineage_and_selected_ids(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    service = WorkbenchV2RuntimeService(
+    service = _service_with_store(
         store=store,
         runtime_factory=lambda: RecordingRequirementExtractor(_requirement_sheet()),
         approved_requirement_revision_id_factory=lambda: "reqapproved_1",
@@ -1186,7 +1188,7 @@ def test_runtime_service_start_run_preserves_explicit_draft_lineage_and_selected
 def test_runtime_service_start_run_from_runtime_input_extracts_sheet_and_enqueues(tmp_path: Path) -> None:
     store = _store(tmp_path)
     extractor = RecordingRequirementExtractor(_requirement_sheet())
-    service = WorkbenchV2RuntimeService(
+    service = _service_with_store(
         store=store,
         requirement_extractor=extractor,
         runtime_factory=lambda: extractor,
@@ -1893,7 +1895,7 @@ def _service(
     runtime_factory: object | None = None,
     runtime_run_id_factory: object | None = None,
 ) -> WorkbenchV2RuntimeService:
-    return WorkbenchV2RuntimeService(
+    return _service_with_store(
         store=_store(tmp_path),
         requirement_extractor=requirement_extractor,
         runtime_factory=runtime_factory,
@@ -1901,6 +1903,40 @@ def _service(
         approved_requirement_revision_id_factory=lambda: "reqapproved_1",
         runtime_run_id_factory=runtime_run_id_factory,
         now=lambda: NOW,
+    )
+
+
+def _service_with_store(
+    *,
+    store: RuntimeControlStore,
+    requirement_extractor: object | None = None,
+    runtime_factory: object | None = None,
+    runtime_run_id_factory: object | None = None,
+    now: object | None = None,
+    **kwargs: object,
+) -> WorkbenchV2RuntimeService:
+    resolved_runtime_factory = runtime_factory or (lambda: object())
+    resolved_now = now or (lambda: NOW)
+    executor = WorkflowRuntimeExecutor(
+        store=store,
+        runtime_factory=resolved_runtime_factory,  # type: ignore[arg-type]
+        runtime_run_id_factory=runtime_run_id_factory,  # type: ignore[arg-type]
+        now=resolved_now,  # type: ignore[arg-type]
+    )
+    command_service = RuntimeCommandService(
+        store=store,
+        requirement_extractor=requirement_extractor,  # type: ignore[arg-type]
+        now=resolved_now,  # type: ignore[arg-type]
+    )
+    return WorkbenchV2RuntimeService(
+        store=store,
+        requirement_extractor=requirement_extractor,
+        runtime_factory=resolved_runtime_factory,  # type: ignore[arg-type]
+        executor=executor,
+        command_service=command_service,
+        runtime_run_id_factory=runtime_run_id_factory,  # type: ignore[arg-type]
+        now=resolved_now,  # type: ignore[arg-type]
+        **kwargs,
     )
 
 

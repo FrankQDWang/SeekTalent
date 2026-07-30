@@ -685,7 +685,7 @@ def test_next_round_requirement_uses_extraction_backed_requirement_sheet_merge(t
             "job_title": "Senior Python Engineer",
             "jd_text": "下一轮必须补充 Kafka 生产经验",
             "notes": None,
-            "requirement_cache_scope": None,
+            "requirement_cache_scope": "runtime_run_1",
         }
     ]
     assert approved.requirement_sheet.must_have_capabilities == ["Python", "Kafka 生产经验"]

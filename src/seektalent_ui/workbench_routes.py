@@ -208,7 +208,13 @@ async def get_session(
     session = store.get_workbench_session(user=user, session_id=session_id)
     if session is None:
         raise HTTPException(status_code=404, detail="Not found.")
-    session = await liepin_recovery.recover_liepin_session(request=request, store=store, user=user, session=session)
+    if workbench_app_settings(request).runtime_mode != "prod":
+        session = await liepin_recovery.recover_liepin_session(
+            request=request,
+            store=store,
+            user=user,
+            session=session,
+        )
     connections: dict[str, WorkbenchSourceConnection] = {
         connection.source_kind: connection for connection in store.list_source_connections(user=user)
     }

@@ -120,6 +120,7 @@ class WorkbenchV2RuntimeService:
         runtime_factory: Callable[[], object] | None = None,
         requirement_extractor: object | None = None,
         executor: WorkflowRuntimeExecutor | None = None,
+        command_service: RuntimeCommandService | None = None,
         draft_revision_id_factory: Callable[[], str] | None = None,
         approved_requirement_revision_id_factory: Callable[[], str] | None = None,
         runtime_run_id_factory: Callable[[], str] | None = None,
@@ -132,6 +133,11 @@ class WorkbenchV2RuntimeService:
         self.runtime_factory = runtime_factory
         self.requirement_extractor = requirement_extractor
         self._runtime_executor = executor
+        self.command_service = (
+            command_service
+            if command_service is not None
+            else getattr(executor, "command_service", None)
+        )
         self._custom_draft_revision_id_factory = draft_revision_id_factory is not None
         self._custom_approved_requirement_revision_id_factory = approved_requirement_revision_id_factory is not None
         self.draft_revision_id_factory = draft_revision_id_factory or (lambda: _new_id("reqdraft"))
@@ -538,15 +544,11 @@ class WorkbenchV2RuntimeService:
         *,
         idempotency_key: str,
     ) -> dict[str, object]:
-        command_service = RuntimeCommandService(
-            store=self.store,
-            requirement_extractor=_NextRoundRequirementExtractorAdapter(
-                extractor=self._requirement_extractor(),
-                requirement_cache_scope=runtime_run_id,
-            ),
-            now=self.now,
-        )
-        result = command_service.submit_next_round_requirement(
+        if self.command_service is None:
+            raise RuntimeControlError(
+                "workbench_v2_runtime_command_service_required"
+            )
+        result = self.command_service.submit_next_round_requirement(
             runtime_run_id=runtime_run_id,
             text=text,
             target_section_hint=None,
@@ -599,12 +601,8 @@ class WorkbenchV2RuntimeService:
 
     def _executor(self) -> WorkflowRuntimeExecutor:
         if self._runtime_executor is None:
-            self._runtime_executor = WorkflowRuntimeExecutor(
-                store=self.store,
-                settings=self.settings,
-                runtime_factory=self.runtime_factory,
-                runtime_run_id_factory=self.runtime_run_id_factory,
-                now=self.now,
+            raise RuntimeControlError(
+                "workbench_v2_runtime_executor_required"
             )
         return self._runtime_executor
 

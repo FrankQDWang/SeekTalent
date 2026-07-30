@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
+from inspect import Parameter, signature
 
 from seektalent.config import AppSettings
 from seektalent.models import RequirementSheet
@@ -65,10 +66,29 @@ def build_agent_service(
         executor=requirement_executor,
     )
     command_service = RuntimeCommandService(store=runtime_store, requirement_extractor=requirement_executor)
+    def workflow_runtime_factory(
+        *,
+        source_operation_executor: object | None = None,
+    ) -> object:
+        if source_operation_executor is None:
+            return runtime_factory(settings)
+        parameters = signature(runtime_factory).parameters.values()
+        accepts_kwargs = any(
+            parameter.kind == Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+        names = {parameter.name for parameter in parameters}
+        if "source_operation_executor" in names or accepts_kwargs:
+            return runtime_factory(
+                settings,
+                source_operation_executor=source_operation_executor,
+            )
+        raise RuntimeError("runtime_source_operation_injection_required")
+
     workflow_executor = WorkflowRuntimeExecutor(
         store=runtime_store,
         settings=settings,
-        runtime_factory=lambda: runtime_factory(settings),
+        runtime_factory=workflow_runtime_factory,
         command_service=command_service,
         source_context_provider=local_opencli_liepin_source_context,
     )

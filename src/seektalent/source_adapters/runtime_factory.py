@@ -16,6 +16,7 @@ def build_source_enabled_runtime(
     retrieval_service: RetrievalService | None = None,
     judge_limiter: AsyncJudgeLimiter | None = None,
     eval_remote_logging: bool = True,
+    source_operation_executor: object | None = None,
 ) -> WorkflowRuntime:
     from seektalent.source_adapters.runtime_composition import (
         build_source_enabled_runtime as _build_source_enabled_runtime,
@@ -26,6 +27,7 @@ def build_source_enabled_runtime(
         retrieval_service=retrieval_service or _build_provider_retrieval_service(settings),
         judge_limiter=judge_limiter,
         eval_remote_logging=eval_remote_logging,
+        liepin_cards_operation_executor=source_operation_executor,
     )
 
 

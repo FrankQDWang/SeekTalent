@@ -50,7 +50,14 @@ class NextRoundRequirementNormalizer(Protocol):
 
 
 class NextRoundRequirementExtractor(Protocol):
-    def extract_requirements(self, *, job_title: str | None, jd_text: str, notes: str | None) -> RequirementSheet: ...
+    def extract_requirements(
+        self,
+        *,
+        job_title: str | None,
+        jd_text: str,
+        notes: str | None,
+        requirement_cache_scope: str | None = None,
+    ) -> RequirementSheet: ...
 
 
 @dataclass(frozen=True)
@@ -292,6 +299,7 @@ class RuntimeCommandService:
             saved_extracting = True
         try:
             normalized = self._extract_next_round_requirement_patch(
+                runtime_run_id=runtime_run_id,
                 text=text,
                 target_section_hint=target_section_hint,
                 current_requirement=current,
@@ -442,6 +450,7 @@ class RuntimeCommandService:
     def _extract_next_round_requirement_patch(
         self,
         *,
+        runtime_run_id: str,
         text: str,
         target_section_hint: str | None,
         current_requirement: ApprovedRequirementRevision,
@@ -459,6 +468,7 @@ class RuntimeCommandService:
             job_title=current_requirement.requirement_sheet.job_title,
             jd_text=text,
             notes=None,
+            requirement_cache_scope=runtime_run_id,
         )
         merged = merge_requirement_sheet_supplement(current_requirement.requirement_sheet, supplement)
         return {

@@ -8,7 +8,6 @@ from uuid import uuid4
 
 from seektalent.config import AppSettings
 from seektalent.progress import ProgressEvent
-from seektalent.runtime.orchestrator import WorkflowRuntime
 from seektalent_runtime_control.checkpoint_v2 import (
     RUNTIME_CHECKPOINT_SCHEMA_V1,
     checkpoint_projection,
@@ -227,13 +226,9 @@ class WorkflowRuntimeExecutor:
             run_status="starting",
         )
         runtime_started = False
-        runtime = self.runtime_factory()
-        if not isinstance(runtime, RuntimeLike):
-            raise RuntimeControlError("runtime_adapter_invalid")
         cards_operation_executor = None
         if (
-            isinstance(runtime, WorkflowRuntime)
-            and self.settings is not None
+            self.settings is not None
             and "liepin" in resolved_source_ids
             and self.settings.liepin_worker_mode == "opencli"
         ):
@@ -254,7 +249,13 @@ class WorkflowRuntimeExecutor:
                     f"executor-lease://{run.runtime_run_id}/{attempt_no}"
                 ),
             )
-            runtime.source_operation_executor = cards_operation_executor
+        runtime = self._build_runtime(
+            source_operation_executor=cards_operation_executor,
+        )
+        if not isinstance(runtime, RuntimeLike):
+            if cards_operation_executor is not None:
+                cards_operation_executor.close()
+            raise RuntimeControlError("runtime_adapter_invalid")
         resume_checkpoint = self._load_resume_checkpoint(
             runtime_run_id=run.runtime_run_id,
             executor_id=executor_id,
@@ -447,8 +448,6 @@ class WorkflowRuntimeExecutor:
                     RecoveryStateAssembler(self.store)
                     .assemble(resume_checkpoint)
                     .model_dump(mode="json")
-                    if isinstance(runtime, WorkflowRuntime)
-                    else dict(resume_checkpoint.run_state)
                 )
             await runtime.run_async(**runtime_kwargs)
         except (RuntimeError, ValueError, OSError) as exc:
@@ -543,6 +542,27 @@ class WorkflowRuntimeExecutor:
                 return provided
         return _default_source_context(source_ids=source_ids, settings=self.settings)
 
+    def _build_runtime(
+        self,
+        *,
+        source_operation_executor: object | None,
+    ) -> object:
+        if source_operation_executor is None:
+            return self.runtime_factory()
+        parameters = signature(self.runtime_factory).parameters.values()
+        accepts_kwargs = any(
+            parameter.kind == Parameter.VAR_KEYWORD
+            for parameter in parameters
+        )
+        names = {parameter.name for parameter in parameters}
+        if "source_operation_executor" in names or accepts_kwargs:
+            return self.runtime_factory(
+                source_operation_executor=source_operation_executor
+            )
+        raise RuntimeControlError(
+            "runtime_source_operation_injection_required"
+        )
+
     def _load_resume_checkpoint(
         self,
         *,
@@ -608,12 +628,19 @@ class WorkflowRuntimeExecutor:
         raise RuntimeControlError(reason_code)
 
 
-def _build_default_runtime(settings: AppSettings | None) -> WorkflowRuntime:
+def _build_default_runtime(
+    settings: AppSettings | None,
+    *,
+    source_operation_executor: object | None = None,
+) -> object:
     if settings is None:
         raise ValueError("settings is required")
     from seektalent.source_adapters import build_source_enabled_runtime
 
-    return build_source_enabled_runtime(settings)
+    return build_source_enabled_runtime(
+        settings,
+        source_operation_executor=source_operation_executor,
+    )
 
 
 def _event(

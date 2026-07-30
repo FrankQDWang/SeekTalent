@@ -70,9 +70,14 @@ class DeterministicRouteRuntime:
 class CapturingLiepinWorkflowRuntime(WorkflowRuntime):
     instances: list[CapturingLiepinWorkflowRuntime] = []
 
-    def __init__(self, settings: AppSettings) -> None:
+    def __init__(
+        self,
+        settings: AppSettings,
+        *,
+        source_operation_executor: object | None = None,
+    ) -> None:
         self.settings = settings
-        self.source_operation_executor = None
+        self.source_operation_executor = source_operation_executor
         self.received: dict[str, object] = {}
         type(self).instances.append(self)
 
