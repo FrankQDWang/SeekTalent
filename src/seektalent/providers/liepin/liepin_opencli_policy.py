@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import replace
-
 from seektalent.opencli_browser.contracts import (
     OpenCliBrowserError,
     OpenCliBrowserResult,
 )
+from seektalent.opencli_browser.lifecycle import browser_control_key
 from seektalent.opencli_browser.reason_codes import (
     OPENCLI_BOOTSTRAP_FAILED,
     OPENCLI_BRIDGE_BUILD_MISMATCH,
@@ -31,6 +31,9 @@ from seektalent.opencli_browser.reason_codes import (
     OPENCLI_TIMEOUT,
     OPENCLI_WINDOW_POLICY_BLOCKED,
 )
+from seektalent.providers.liepin.worker_contracts import (
+    OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
+)
 
 
 LIEPIN_OPENCLI_ALLOWED_HOSTS = ("www.liepin.com", "h.liepin.com", "c.liepin.com", "lpt.liepin.com")
@@ -40,6 +43,16 @@ LIEPIN_RECRUITER_SEARCH_URLS = (
     "https://h.liepin.com/resume/search",
 )
 LIEPIN_RECRUITER_SEARCH_URL = LIEPIN_RECRUITER_SEARCH_URLS[0]
+LIEPIN_BROWSER_SOURCE_KIND = "liepin"
+LIEPIN_BROWSER_PROFILE_ID = "local-chrome-profile"
+LIEPIN_BROWSER_PROVIDER_ACCOUNT_HASH = OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT
+LIEPIN_BROWSER_CONTROL_KEY = browser_control_key(
+    source_kind=LIEPIN_BROWSER_SOURCE_KIND,
+    browser_profile_id=LIEPIN_BROWSER_PROFILE_ID,
+    provider_account_hash=LIEPIN_BROWSER_PROVIDER_ACCOUNT_HASH,
+)
+LIEPIN_SEARCH_TAB_SESSION = "st_liepin_search"
+LIEPIN_DETAIL_TAB_SESSION = "st_liepin_detail"
 
 OPENCLI_TO_LIEPIN_REASON = {
     OPENCLI_COMMAND_MISSING: "liepin_opencli_command_missing",
@@ -66,6 +79,16 @@ OPENCLI_TO_LIEPIN_REASON = {
     OPENCLI_OWNED_TAB_MISSING: "liepin_owned_tab_missing",
     OPENCLI_STALE_CONTROL_FENCE: "liepin_opencli_stale_control_fence",
 }
+
+
+def liepin_broker_tab_session(
+    tab_kind: str,
+) -> str:
+    if tab_kind == "search":
+        return LIEPIN_SEARCH_TAB_SESSION
+    if tab_kind == "detail":
+        return LIEPIN_DETAIL_TAB_SESSION
+    raise ValueError("liepin broker tab kind must be search or detail")
 
 
 def liepin_reason_from_opencli_reason(reason: str) -> str:

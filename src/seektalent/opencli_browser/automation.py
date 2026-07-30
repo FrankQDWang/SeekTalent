@@ -59,6 +59,7 @@ from seektalent.opencli_browser.runtime import (
 
 _SAFE_PAGE_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,128}$")
 _CONTROLLED_TAB_UNLOCK_OPERATIONS = frozenset({"click", "fill", "scroll"})
+_MAX_OWNED_TAB_ALLOCATIONS_PER_KIND = 2
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -84,6 +85,7 @@ class OpenCliBrowserAutomation:
         self._control_scope: BrowserControlScope | None = None
         self._owned_tabs: dict[str, OpenCliOwnedTab] = {}
         self._retiring_tabs: dict[OpenCliTabKind, _RetiringOwnedTab] = {}
+        self._owned_tab_allocation_counts: dict[OpenCliTabKind, int] = {}
         self._timing_recorder = timing_recorder
 
     @property
@@ -124,24 +126,52 @@ class OpenCliBrowserAutomation:
         session: str | None = None,
     ) -> OpenCliOwnedTab | None:
         self._require_control_scope()
-        if tab_kind in self._retiring_tabs:
-            return None
+        self._reconcile_retiring_tab(tab_kind)
+        resolved_session = _owned_tab_session(tab_kind, session)
+        same_kind = tuple(
+            tab
+            for tab in self._owned_tabs.values()
+            if tab.tab_kind == tab_kind
+        )
+        if any(tab.session != resolved_session for tab in same_kind):
+            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
         matches = tuple(
-            tab for tab in self._owned_tabs.values() if tab.tab_kind == tab_kind
+            tab
+            for tab in same_kind
+            if tab.session == resolved_session
         )
         if not matches:
             recovered = self._recover_owned_tab(
                 tab_kind,
-                session=_owned_tab_session(tab_kind, session),
+                session=resolved_session,
             )
-            matches = (recovered,) if recovered is not None else ()
-        if len(matches) != 1:
+            if recovered is None:
+                return None
+            selected = recovered
+        elif len(matches) == 1:
+            selected = matches[0]
+        else:
             return None
-        selected = matches[0]
         self._daemon_page = selected.page_id
         return selected
 
     def _recover_owned_tab(
+        self,
+        tab_kind: OpenCliTabKind,
+        *,
+        session: str,
+    ) -> OpenCliOwnedTab | None:
+        owned_tab = self._observe_owned_session_tab(tab_kind, session=session)
+        if owned_tab is None:
+            return None
+        self._owned_tabs[owned_tab.page_id] = owned_tab
+        self._owned_tab_allocation_counts[tab_kind] = max(
+            1,
+            self._owned_tab_allocation_counts.get(tab_kind, 0),
+        )
+        return owned_tab
+
+    def _observe_owned_session_tab(
         self,
         tab_kind: OpenCliTabKind,
         *,
@@ -175,8 +205,22 @@ class OpenCliBrowserAutomation:
             tab_kind=tab_kind,
             idle_deadline_at=result.idle_deadline_at,
         )
-        self._owned_tabs[page_id] = owned_tab
         return owned_tab
+
+    def _reconcile_retiring_tab(self, tab_kind: OpenCliTabKind) -> None:
+        retiring = self._retiring_tabs.get(tab_kind)
+        if retiring is None:
+            return
+        observed = self._observe_owned_session_tab(
+            tab_kind,
+            session=retiring.tab.session,
+        )
+        if observed is not None:
+            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+        self._owned_tabs.pop(retiring.tab.page_id, None)
+        if self._daemon_page == retiring.tab.page_id:
+            self._daemon_page = None
+        self._retiring_tabs.pop(tab_kind, None)
 
     def acquire_owned_tab(
         self,
@@ -201,6 +245,7 @@ class OpenCliBrowserAutomation:
                     tab_kind,
                     safe_reason_code=OPENCLI_OWNED_TAB_MISSING,
                 )
+                self._reconcile_retiring_tab(tab_kind)
             else:
                 return self._owned_tabs[existing.page_id], True
         return (
@@ -220,6 +265,9 @@ class OpenCliBrowserAutomation:
         safe_reason_code: str,
     ) -> None:
         self._require_control_scope()
+        retiring = self._retiring_tabs.get(tab_kind)
+        if retiring is not None:
+            return
         matches = tuple(
             tab for tab in self._owned_tabs.values() if tab.tab_kind == tab_kind
         )
@@ -230,10 +278,8 @@ class OpenCliBrowserAutomation:
             tab=tab,
             safe_reason_code=safe_reason_code,
         )
-        self.run_browser_command("tab", ("close", tab.page_id))
-        if tab.page_id in self._owned_tabs:
-            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
-        self._retiring_tabs.pop(tab_kind, None)
+        if self._daemon_page == tab.page_id:
+            self._daemon_page = None
 
     def find_host_tabs(self, url_prefix: str) -> tuple[BrowserHostTab, ...]:
         parsed = urlparse(url_prefix)
@@ -295,6 +341,10 @@ class OpenCliBrowserAutomation:
             tab.tab_kind == tab_kind for tab in self._owned_tabs.values()
         ):
             raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+        allocation_count = self._owned_tab_allocation_counts.get(tab_kind, 0)
+        if allocation_count >= _MAX_OWNED_TAB_ALLOCATIONS_PER_KIND:
+            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+        self._owned_tab_allocation_counts[tab_kind] = allocation_count + 1
         tab_token = uuid.uuid4().hex
         resolved_session = _owned_tab_session(tab_kind, session)
         params = self._daemon_session_params(resolved_session)
@@ -515,6 +565,14 @@ class OpenCliBrowserAutomation:
             page = args[1] if len(args) == 3 else self._daemon_page
             if self._control_scope is not None and page not in self._owned_tabs:
                 raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+            owned_tab = self._owned_tabs.get(page or "")
+            retiring = (
+                self._retiring_tabs.get(owned_tab.tab_kind)
+                if owned_tab is not None
+                else None
+            )
+            if retiring is not None and retiring.tab.page_id == page:
+                raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
             url = args[-1]
             params = self._daemon_page_params(page)
             params["url"] = url
@@ -540,6 +598,9 @@ class OpenCliBrowserAutomation:
             page = args[1]
             owned_tab = self._owned_tabs.get(page)
             if owned_tab is None:
+                raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+            retiring = self._retiring_tabs.get(owned_tab.tab_kind)
+            if retiring is not None and retiring.tab.page_id == page:
                 raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
             if operation == "select":
                 self._daemon_page = page

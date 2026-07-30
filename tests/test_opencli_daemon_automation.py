@@ -21,7 +21,11 @@ from seektalent.opencli_browser.reason_codes import (
     OPENCLI_OWNED_TAB_MISSING,
     OPENCLI_PAGE_NOT_READY,
     OPENCLI_SELECTOR_NOT_FOUND,
+    OPENCLI_STATUS_UNAVAILABLE,
     OPENCLI_TIMEOUT,
+)
+from seektalent.providers.liepin.liepin_opencli_policy import (
+    liepin_broker_tab_session,
 )
 
 
@@ -245,8 +249,56 @@ def test_daemon_automation_reuses_one_detail_tab_in_the_existing_host_window(
     assert daemon.calls[-1][1]["fenceToken"] == 7
 
 
+def test_liepin_broker_tab_session_rejects_unknown_kind() -> None:
+    with pytest.raises(
+        ValueError,
+        match="liepin broker tab kind must be search or detail",
+    ):
+        liepin_broker_tab_session("other")
+
+
+def test_owned_tab_selection_fails_closed_on_same_kind_different_session() -> None:
+    daemon = RecordingDaemon()
+    browser = automation(daemon)
+    browser.activate_control_scope("lane-key")
+    first = browser.open_owned_tab(
+        host_page="host-1",
+        url="https://example.com/detail-1",
+        tab_kind="detail",
+        session="st_liepin_detail",
+    )
+    new_calls_before = sum(
+        action == "tabs" and params.get("op") == "new"
+        for action, params, _timeout in daemon.calls
+    )
+
+    with pytest.raises(OpenCliBrowserError) as selected:
+        browser.select_owned_tab(
+            "detail",
+            session="st_other_detail",
+        )
+    with pytest.raises(OpenCliBrowserError) as acquired:
+        browser.acquire_owned_tab(
+            host_page="host-1",
+            url="https://example.com/detail-2",
+            tab_kind="detail",
+            session="st_other_detail",
+        )
+
+    assert selected.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
+    assert acquired.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
+    assert browser._owned_tabs == {first.page_id: first}  # noqa: SLF001
+    assert (
+        sum(
+            action == "tabs" and params.get("op") == "new"
+            for action, params, _timeout in daemon.calls
+        )
+        == new_calls_before
+    )
+
+
 @pytest.mark.parametrize("tab_kind", ("search", "detail"))
-def test_daemon_automation_replaces_a_user_closed_tab_once(
+def test_daemon_automation_user_closed_signal_requires_extension_confirmation(
     tab_kind: OpenCliTabKind,
 ) -> None:
     class UserClosedTabDaemon(RecordingDaemon):
@@ -273,16 +325,21 @@ def test_daemon_automation_replaces_a_user_closed_tab_once(
         tab_kind=tab_kind,
     )
 
-    replacement, reused = browser.acquire_owned_tab(
-        host_page="host-1",
-        url=f"https://h.liepin.com/resume/{tab_kind}?index=2",
-        tab_kind=tab_kind,
-    )
+    with pytest.raises(OpenCliBrowserError) as raised:
+        browser.acquire_owned_tab(
+            host_page="host-1",
+            url=f"https://h.liepin.com/resume/{tab_kind}?index=2",
+            tab_kind=tab_kind,
+        )
 
-    assert reused is False
-    assert replacement.page_id != first.page_id
-    assert daemon.tab_count == 2
-    assert tuple(browser._owned_tabs) == (replacement.page_id,)  # noqa: SLF001
+    assert raised.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
+    assert daemon.tab_count == 1
+    assert browser._owned_tabs == {first.page_id: first}  # noqa: SLF001
+    assert tab_kind in browser._retiring_tabs  # noqa: SLF001
+    assert not any(
+        action == "tabs" and params.get("op") == "close"
+        for action, params, _timeout in daemon.calls
+    )
 
 
 @pytest.mark.parametrize("reason", (OPENCLI_TIMEOUT, OPENCLI_EXTENSION_DISCONNECTED))
@@ -325,8 +382,10 @@ def test_daemon_automation_does_not_replace_detail_when_navigation_is_unknown(
     assert browser._owned_tabs == {first.page_id: first}  # noqa: SLF001
 
 
-def test_daemon_automation_keeps_failed_retirement_bounded() -> None:
-    class DisconnectOnCloseDaemon(RecordingDaemon):
+def test_daemon_automation_retiring_transport_unknown_stays_sticky() -> None:
+    class DisconnectOnObservationDaemon(RecordingDaemon):
+        disconnect_observation = False
+
         def command(
             self,
             action: str,
@@ -334,11 +393,11 @@ def test_daemon_automation_keeps_failed_retirement_bounded() -> None:
             *,
             timeout_seconds: float,
         ) -> OpenCliDaemonResult:
-            if action == "tabs" and params.get("op") == "close":
+            if action == "tabs" and params.get("op") == "list" and self.disconnect_observation:
                 raise OpenCliBrowserError(OPENCLI_EXTENSION_DISCONNECTED)
             return super().command(action, params, timeout_seconds=timeout_seconds)
 
-    daemon = DisconnectOnCloseDaemon()
+    daemon = DisconnectOnObservationDaemon()
     browser = automation(daemon)
     browser.activate_control_scope("lane-key")
     first, _reused = browser.acquire_owned_tab(
@@ -347,41 +406,28 @@ def test_daemon_automation_keeps_failed_retirement_bounded() -> None:
         tab_kind="detail",
     )
 
-    with pytest.raises(OpenCliBrowserError):
-        browser.retire_owned_tab(
-            "detail",
-            safe_reason_code=OPENCLI_PAGE_NOT_READY,
-        )
-    with pytest.raises(OpenCliBrowserError):
+    browser.retire_owned_tab("detail", safe_reason_code=OPENCLI_PAGE_NOT_READY)
+    daemon.disconnect_observation = True
+
+    with pytest.raises(OpenCliBrowserError) as raised:
         browser.acquire_owned_tab(
             host_page="host-1",
             url="https://h.liepin.com/resume/detail?index=2",
             tab_kind="detail",
         )
 
+    assert raised.value.safe_reason_code == OPENCLI_EXTENSION_DISCONNECTED
     assert daemon.tab_count == 1
     assert browser._owned_tabs == {first.page_id: first}  # noqa: SLF001
     assert browser._retiring_tabs["detail"].safe_reason_code == OPENCLI_PAGE_NOT_READY  # noqa: SLF001
+    assert not any(
+        action == "tabs" and params.get("op") == "close"
+        for action, params, _timeout in daemon.calls
+    )
 
 
-def test_daemon_automation_requires_confirmed_close_before_replacement() -> None:
-    class UnconfirmedCloseDaemon(RecordingDaemon):
-        def command(
-            self,
-            action: str,
-            params: Mapping[str, object],
-            *,
-            timeout_seconds: float,
-        ) -> OpenCliDaemonResult:
-            if action == "tabs" and params.get("op") == "close":
-                return OpenCliDaemonResult(
-                    "tabs-close-unknown",
-                    data={"outcome": "unknown"},
-                    page=str(params["page"]),
-                )
-            return super().command(action, params, timeout_seconds=timeout_seconds)
-
-    daemon = UnconfirmedCloseDaemon()
+def test_daemon_automation_reconciles_extension_idle_then_allows_one_replacement() -> None:
+    daemon = RecordingDaemon()
     browser = automation(daemon)
     browser.activate_control_scope("lane-key")
     first, _reused = browser.acquire_owned_tab(
@@ -390,27 +436,80 @@ def test_daemon_automation_requires_confirmed_close_before_replacement() -> None
         tab_kind="detail",
     )
 
-    with pytest.raises(OpenCliBrowserError):
-        browser.retire_owned_tab(
-            "detail",
-            safe_reason_code=OPENCLI_PAGE_NOT_READY,
-        )
-    with pytest.raises(OpenCliBrowserError):
+    browser.retire_owned_tab("detail", safe_reason_code=OPENCLI_PAGE_NOT_READY)
+    with pytest.raises(OpenCliBrowserError) as still_live:
         browser.acquire_owned_tab(
             host_page="host-1",
             url="https://h.liepin.com/resume/detail?index=2",
             tab_kind="detail",
         )
-
+    assert still_live.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
     assert daemon.tab_count == 1
-    assert browser._owned_tabs == {first.page_id: first}  # noqa: SLF001
-    assert "detail" in browser._retiring_tabs  # noqa: SLF001
+
+    daemon.session_pages.pop(first.session)
+    replacement, reused = browser.acquire_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/resume/detail?index=2",
+        tab_kind="detail",
+    )
+    assert reused is False
+    assert replacement.page_id != first.page_id
+    assert daemon.tab_count == 2
+
+    browser.retire_owned_tab("detail", safe_reason_code=OPENCLI_PAGE_NOT_READY)
+    daemon.session_pages.pop(replacement.session)
+    with pytest.raises(OpenCliBrowserError) as exhausted:
+        browser.acquire_owned_tab(
+            host_page="host-1",
+            url="https://h.liepin.com/resume/detail?index=3",
+            tab_kind="detail",
+        )
+    assert exhausted.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
+    assert daemon.tab_count == 2
+    assert not any(
+        action == "tabs" and params.get("op") == "close"
+        for action, params, _timeout in daemon.calls
+    )
 
 
-def test_daemon_automation_hundred_mixed_detail_cycles_stay_bounded() -> None:
-    class MixedResultDaemon(RecordingDaemon):
-        navigation_count = 0
+def test_daemon_automation_hundred_poison_idle_cycles_have_bounded_allocations() -> None:
+    daemon = RecordingDaemon()
+    browser = automation(daemon)
+    browser.activate_control_scope("lane-key")
+    current, _reused = browser.acquire_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/resume/detail?index=0",
+        tab_kind="detail",
+    )
+    outcomes: list[str] = ["ok"]
 
+    for index in range(1, 101):
+        if "detail" not in browser._retiring_tabs and browser._owned_tabs:  # noqa: SLF001
+            browser.retire_owned_tab("detail", safe_reason_code=OPENCLI_PAGE_NOT_READY)
+            daemon.session_pages.pop(current.session, None)
+        try:
+            current, _reused = browser.acquire_owned_tab(
+                host_page="host-1",
+                url=f"https://h.liepin.com/resume/detail?index={index}",
+                tab_kind="detail",
+            )
+        except OpenCliBrowserError as exc:
+            outcomes.append(exc.safe_reason_code)
+        else:
+            outcomes.append("ok")
+
+    assert outcomes.count("ok") == 2
+    assert outcomes.count(OPENCLI_STATUS_UNAVAILABLE) == 99
+    assert daemon.tab_count == 2
+    assert len(browser._owned_tabs) <= 1  # noqa: SLF001
+    assert not any(
+        action == "tabs" and params.get("op") == "close"
+        for action, params, _timeout in daemon.calls
+    )
+
+
+def test_daemon_automation_hundred_user_closed_cycles_have_bounded_allocations() -> None:
+    class RepeatedUserClosedDaemon(RecordingDaemon):
         def command(
             self,
             action: str,
@@ -419,17 +518,21 @@ def test_daemon_automation_hundred_mixed_detail_cycles_stay_bounded() -> None:
             timeout_seconds: float,
         ) -> OpenCliDaemonResult:
             if action == "navigate":
-                self.navigation_count += 1
-                if self.navigation_count % 10 == 0:
-                    raise OpenCliBrowserError(OPENCLI_TIMEOUT)
+                self.session_pages.pop(str(params["session"]), None)
+                raise OpenCliBrowserError(OPENCLI_OWNED_TAB_MISSING)
             return super().command(action, params, timeout_seconds=timeout_seconds)
 
-    daemon = MixedResultDaemon()
+    daemon = RepeatedUserClosedDaemon()
     browser = automation(daemon)
     browser.activate_control_scope("lane-key")
-    outcomes: list[str] = []
+    browser.acquire_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/resume/detail?index=0",
+        tab_kind="detail",
+    )
+    outcomes: list[str] = ["ok"]
 
-    for index in range(100):
+    for index in range(1, 101):
         try:
             browser.acquire_owned_tab(
                 host_page="host-1",
@@ -441,9 +544,14 @@ def test_daemon_automation_hundred_mixed_detail_cycles_stay_bounded() -> None:
         else:
             outcomes.append("ok")
 
-    assert outcomes.count(OPENCLI_TIMEOUT) == 9
-    assert daemon.tab_count == 1
-    assert len(browser._owned_tabs) == 1  # noqa: SLF001
+    assert outcomes.count("ok") == 2
+    assert outcomes.count(OPENCLI_STATUS_UNAVAILABLE) == 99
+    assert daemon.tab_count == 2
+    assert len(browser._owned_tabs) <= 1  # noqa: SLF001
+    assert not any(
+        action == "tabs" and params.get("op") == "close"
+        for action, params, _timeout in daemon.calls
+    )
 
 
 def test_daemon_automation_waits_for_owned_page_navigation_url() -> None:
@@ -590,6 +698,142 @@ def test_new_sidecar_instance_recovers_only_the_live_extension_owned_tab() -> No
         if action == "tabs" and params.get("op") == "list"
     ]
     assert recover_calls[-1]["session"] == "st_owned_detail"
+
+
+def test_runtime_generation_turnover_reuses_live_search_and_detail_sessions_without_new_tabs() -> None:
+    daemon = RecordingDaemon()
+    first_generation = automation(daemon)
+    first_generation.activate_control_scope("lane-key")
+    search, search_reused = first_generation.acquire_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/resume/search",
+        tab_kind="search",
+        session="st_liepin_search",
+    )
+    detail, detail_reused = first_generation.acquire_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/resume/detail/1",
+        tab_kind="detail",
+        session="st_liepin_detail",
+    )
+    first_generation.finish_control_scope()
+
+    second_generation = automation(daemon)
+    second_generation.activate_control_scope("lane-key")
+    recovered_search, recovered_search_reused = second_generation.acquire_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/resume/search?query=2",
+        tab_kind="search",
+        session="st_liepin_search",
+    )
+    recovered_detail, recovered_detail_reused = second_generation.acquire_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/resume/detail/2",
+        tab_kind="detail",
+        session="st_liepin_detail",
+    )
+
+    assert search_reused is False
+    assert detail_reused is False
+    assert recovered_search_reused is True
+    assert recovered_detail_reused is True
+    assert recovered_search.page_id == search.page_id
+    assert recovered_detail.page_id == detail.page_id
+    assert daemon.tab_count == 2
+    assert set(daemon.session_pages) == {
+        "st_liepin_search",
+        "st_liepin_detail",
+    }
+
+
+@pytest.mark.parametrize(
+    "observed_tabs",
+    (
+        [
+            {
+                "page": "owned-1",
+                "url": "https://example.com/detail-1",
+                "active": False,
+            },
+            {
+                "page": "owned-2",
+                "url": "https://example.com/detail-2",
+                "active": False,
+            },
+        ],
+        [
+            {
+                "page": "owned-1",
+                "url": "javascript:alert(1)",
+                "active": False,
+            }
+        ],
+    ),
+)
+def test_new_sidecar_instance_fails_closed_on_ambiguous_or_invalid_recovery(
+    observed_tabs: list[dict[str, object]],
+) -> None:
+    class UnsafeRecoveryDaemon(RecordingDaemon):
+        def command(
+            self,
+            action: str,
+            params: Mapping[str, object],
+            *,
+            timeout_seconds: float,
+        ) -> OpenCliDaemonResult:
+            if action == "tabs" and params.get("op") == "list":
+                payload = dict(params)
+                self.calls.append((action, payload, timeout_seconds))
+                return OpenCliDaemonResult("tabs-unsafe", data=observed_tabs)
+            return super().command(action, params, timeout_seconds=timeout_seconds)
+
+    daemon = UnsafeRecoveryDaemon()
+    restarted_instance = automation(daemon)
+    restarted_instance.activate_control_scope("lane-key")
+
+    with pytest.raises(OpenCliBrowserError) as raised:
+        restarted_instance.acquire_owned_tab(
+            host_page="host-1",
+            url="https://example.com/detail-3",
+            tab_kind="detail",
+        )
+
+    assert raised.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
+    assert daemon.tab_count == 0
+    assert restarted_instance._owned_tabs == {}  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("command", "args"),
+    (
+        ("open", ("--tab", "owned-1", "https://example.com/detail-2")),
+        ("tab", ("select", "owned-1")),
+        ("state", ()),
+    ),
+)
+def test_retiring_owned_page_rejects_explicit_navigation_selection_and_browser_operation(
+    command: str,
+    args: tuple[str, ...],
+) -> None:
+    daemon = RecordingDaemon()
+    browser = automation(daemon)
+    browser.activate_control_scope("lane-key")
+    browser.open_owned_tab(
+        host_page="host-1",
+        url="https://example.com/detail-1",
+        tab_kind="detail",
+    )
+    browser.retire_owned_tab(
+        "detail",
+        safe_reason_code=OPENCLI_PAGE_NOT_READY,
+    )
+    daemon.calls.clear()
+
+    with pytest.raises(OpenCliBrowserError) as raised:
+        browser.run_browser_command(command, args)
+
+    assert raised.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
+    assert daemon.calls == []
 
 
 def test_controlled_tab_lock_uses_dokobot_style_veil_and_double_line_countdown() -> None:

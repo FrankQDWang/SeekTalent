@@ -28,7 +28,6 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserResult,
     OpenCliBrowserTiming,
 )
-from seektalent.opencli_browser.lifecycle import browser_control_key
 from seektalent.opencli_browser.fault_isolation import isolated_call
 from seektalent.opencli_browser.reason_codes import OPENCLI_PAGE_NOT_READY
 from seektalent.opencli_browser.runtime import ALLOWED_BROWSER_COMMANDS, FORBIDDEN_BROWSER_COMMANDS
@@ -51,14 +50,20 @@ from seektalent.providers.liepin.opencli_filter_planning import (
     skipped_liepin_filter_names,
 )
 from seektalent.providers.liepin.liepin_opencli_policy import (
+    LIEPIN_BROWSER_CONTROL_KEY,
     LIEPIN_OPENCLI_ALLOWED_HOSTS,
     LIEPIN_RECRUITER_SEARCH_URL,
+    liepin_broker_tab_session,
     liepin_error_from_opencli_error,
     liepin_result_from_opencli_result,
 )
 from seektalent.providers.liepin.liepin_workflow_site import _LiepinSearchWorkflowSite
 from seektalent.providers.liepin.opencli_local_state import locked_json_update, opencli_state_lock
-from seektalent.providers.liepin.worker_contracts import OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT, SessionStatus
+from seektalent.providers.liepin.worker_contracts import (
+    LiepinBrowserEffectBoundaryError,
+    OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
+    SessionStatus,
+)
 from seektalent.providers.liepin.liepin_state_machine import (
     LiepinStateSnapshot,
     LiepinTransition,
@@ -112,10 +117,6 @@ from seektalent.providers.liepin.liepin_site_parsing import (
 )
 
 _LOGGER = logging.getLogger(__name__)
-_BROKER_TAB_SESSIONS = {
-    "search": "st_liepin_search",
-    "detail": "st_liepin_detail",
-}
 
 def _is_provider_candidate_key_hash(value: object) -> TypeGuard[str]:
     return isinstance(value, str) and re.fullmatch(r"[0-9a-f]{64}", value) is not None
@@ -160,11 +161,7 @@ class LiepinOpenCliSiteConfig:
     artifact_root: Path | None = None
     detail_open_timeout_seconds: int = 90
     search_navigation_timeout_seconds: float = 10.0
-    control_key: str = browser_control_key(
-        source_kind="liepin",
-        browser_profile_id="local-chrome-profile",
-        provider_account_hash=OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
-    )
+    control_key: str = LIEPIN_BROWSER_CONTROL_KEY
 
 
 @dataclass(frozen=True)
@@ -765,7 +762,7 @@ class LiepinSiteAdapter:
         if self._automation.daemon_enabled:
             reused = self._automation.select_owned_tab(
                 "search",
-                session=_BROKER_TAB_SESSIONS["search"],
+                session=liepin_broker_tab_session("search"),
             )
             if reused is not None:
                 try:
@@ -1743,6 +1740,10 @@ class LiepinSiteAdapter:
                 else None
             )
             return envelope, structured
+        except OpenCliBrowserError as exc:
+            raise LiepinBrowserEffectBoundaryError(
+                liepin_error_from_opencli_error(exc).safe_reason_code
+            ) from exc
         finally:
             isolated_call(
                 self._finish_browser_control_scope,
@@ -1778,7 +1779,7 @@ class LiepinSiteAdapter:
                     self._automation.daemon_enabled
                     and self._automation.select_owned_tab(
                         "search",
-                        session=_BROKER_TAB_SESSIONS["search"],
+                        session=liepin_broker_tab_session("search"),
                     )
                     is None
                 ):
@@ -1950,6 +1951,10 @@ class LiepinSiteAdapter:
                 effect_posture="attempted",
                 safe_reason_code=None,
             )
+        except OpenCliBrowserError as exc:
+            raise LiepinBrowserEffectBoundaryError(
+                liepin_error_from_opencli_error(exc).safe_reason_code
+            ) from exc
         finally:
             isolated_call(
                 self._finish_browser_control_scope,
@@ -3696,7 +3701,7 @@ class LiepinSiteAdapter:
                     host_page=host_page,
                     url=url,
                     tab_kind=tab_kind,
-                    session=_BROKER_TAB_SESSIONS[tab_kind],
+                    session=liepin_broker_tab_session(tab_kind),
                 )
             except OpenCliBrowserError as exc:
                 raise liepin_error_from_opencli_error(exc) from exc
