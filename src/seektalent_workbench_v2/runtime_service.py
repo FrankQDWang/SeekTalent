@@ -5,6 +5,7 @@ from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from hashlib import sha256
+import asyncio
 from inspect import signature
 from typing import Literal, Protocol, runtime_checkable
 from uuid import uuid4
@@ -323,7 +324,10 @@ class WorkbenchV2RuntimeService:
         if current.status not in {"completed", "failed"}:
             raise RuntimeControlError("workbench_v2_runtime_not_recoverable")
         try:
-            await self._recheck_liepin_readiness()
+            await self._recheck_liepin_readiness(
+                runtime_run_id=runtime_run_id,
+                idempotency_key=idempotency_key,
+            )
         except SourceWorkerError as exc:
             return WorkbenchV2RuntimeRecoveryResult(
                 outcome="readiness_blocked",
@@ -366,17 +370,31 @@ class WorkbenchV2RuntimeService:
             runtime_run=run,
         )
 
-    async def _recheck_liepin_readiness(self) -> None:
+    async def _recheck_liepin_readiness(
+        self,
+        *,
+        runtime_run_id: str,
+        idempotency_key: str,
+    ) -> None:
         if self.liepin_readiness_probe is not None:
             await self.liepin_readiness_probe()
             return
         if self.settings is None:
             raise RuntimeControlError("workbench_v2_liepin_recheck_unavailable")
-        from seektalent.liepin_verify_session_gate import (
-            create_production_liepin_verify_session_gate,
+        from seektalent.liepin_readiness_operation import (
+            prepare_production_liepin_readiness,
         )
 
-        await create_production_liepin_verify_session_gate(self.settings).verify()
+        operation_id = "prepare-" + sha256(
+            f"{runtime_run_id}:{idempotency_key}".encode("utf-8")
+        ).hexdigest()
+        await asyncio.to_thread(
+            prepare_production_liepin_readiness,
+            settings=self.settings,
+            store=self.store,
+            runtime_run_id=runtime_run_id,
+            operation_id=operation_id,
+        )
 
     def _draft_revision_id(self, operation_key: str) -> str:
         if self._custom_draft_revision_id_factory:

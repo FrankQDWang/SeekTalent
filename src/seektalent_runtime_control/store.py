@@ -26,6 +26,10 @@ from seektalent.sqlite_migrations import (
     run_sqlite_integrity_checks,
 )
 from seektalent_runtime_control.candidates import candidate_truth_from_run_state
+from seektalent_runtime_control.browser_lane import (
+    BrowserLaneStoreMixin,
+    create_browser_lane_schema,
+)
 from seektalent_runtime_control.checkpoint_recovery import (
     RUNTIME_CHECKPOINT_CORRUPT,
     RUNTIME_CHECKPOINT_MISSING,
@@ -146,7 +150,7 @@ from seektalent_runtime_control.source_reconciliation import (
 from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
 
 
-RUNTIME_CONTROL_SCHEMA_VERSION = 16
+RUNTIME_CONTROL_SCHEMA_VERSION = 17
 RUNTIME_CHECKPOINT_SCHEMA_VERSION = RUNTIME_CHECKPOINT_SCHEMA_V2
 RUNTIME_CONTROL_EVENT_SCHEMA_VERSION = "runtime-control-event/v1"
 MAX_RUNTIME_CONTROL_JSON_BYTES = 16 * 1024
@@ -172,7 +176,7 @@ _REQUIRED_STAGE_OUTPUT_KINDS = {
     "shortlist",
 }
 
-class RuntimeControlStore(NeedsAttentionStoreMixin):
+class RuntimeControlStore(BrowserLaneStoreMixin, NeedsAttentionStoreMixin):
     def __init__(self, path: str | Path, *, busy_timeout_ms: int = 5000) -> None:
         self.path = Path(path)
         self.busy_timeout_ms = busy_timeout_ms
@@ -195,6 +199,7 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
             if version == RUNTIME_CONTROL_SCHEMA_VERSION:
                 validate_failed_outcome_schema(conn)
                 _needs_attention.validate_needs_attention_schema(conn)
+                create_browser_lane_schema(conn)
                 self.compact_pending_terminal_checkpoints()
                 return
             if version > 0:
@@ -222,7 +227,7 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
                 run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                 conn.commit()
                 version = 7
-            if version in {7, 8, 9, 10, 11, 12, 13, 14, 15}:
+            if version in {7, 8, 9, 10, 11, 12, 13, 14, 15, 16}:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
                     if version == 7:
@@ -262,6 +267,10 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
                     if version == 15:
                         _migrate_v15_to_v16(conn)
                         conn.execute("PRAGMA user_version = 16")
+                        version = 16
+                    if version == 16:
+                        create_browser_lane_schema(conn)
+                        conn.execute("PRAGMA user_version = 17")
                     run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                     conn.commit()
                 except Exception:
@@ -272,6 +281,7 @@ class RuntimeControlStore(NeedsAttentionStoreMixin):
                 _create_source_operation_schema(conn)
                 _create_source_reconciliation_schema(conn)
                 _create_source_operation_admission_expectation_schema(conn)
+                create_browser_lane_schema(conn)
                 conn.execute("BEGIN IMMEDIATE")
                 with conn:
                     create_failure_envelope_schema(conn)

@@ -15,7 +15,6 @@ from seektalent.providers.liepin.client import LiepinWorkerModeError
 from seektalent.providers.liepin.browser_environment import (
     BrowserBridgeEnvironmentStatus,
 )
-from seektalent.providers.liepin.liepin_site_adapter import LiepinOpenCliSiteConfig
 from seektalent.sources.liepin.reason_codes import public_source_problem_message
 from tests.browser_bridge_bundle_fixtures import exact_browser_bridge_requirement
 from tests.settings_factory import make_settings
@@ -24,6 +23,50 @@ from tests.settings_factory import make_settings
 class _Daemon:
     def __init__(self) -> None:
         self.closed = False
+        self.verify_calls: list[bool] = []
+
+    def verify_bridge(
+        self,
+        *,
+        timeout_seconds: float,
+        validate: bool = True,
+    ) -> dict[str, object]:
+        assert timeout_seconds > 0
+        self.verify_calls.append(validate)
+        requirement = exact_browser_bridge_requirement()
+        return {
+            "ok": True,
+            "pid": 41001,
+            "daemonVersion": "0.1.0",
+            "implementation": requirement.implementation,
+            "bridgeBuildId": requirement.bridge_build_id,
+            "protocolVersion": {
+                "major": requirement.protocol_major,
+                "minor": requirement.protocol_minor,
+            },
+            "transportProtocol": {
+                "name": requirement.runtime_identity.transport.protocol.name,
+                "version": {
+                    "major": requirement.protocol_major,
+                    "minor": requirement.protocol_minor,
+                },
+            },
+            "ownerTokenHash": "0" * 64,
+            "capabilities": sorted(requirement.capabilities),
+            "port": requirement.runtime_identity.endpoint.port,
+            "extensionConnected": True,
+            "extensionVersion": requirement.extension.version,
+            "extensionImplementation": requirement.implementation,
+            "extensionBridgeBuildId": requirement.bridge_build_id,
+            "extensionProtocolVersion": {
+                "major": requirement.protocol_major,
+                "minor": requirement.protocol_minor,
+            },
+            "extensionCapabilities": sorted(requirement.capabilities),
+        }
+
+    def command(self, *_args: object, **_kwargs: object) -> object:
+        raise AssertionError("observe readiness must not issue browser commands")
 
     def close(self) -> None:
         self.closed = True
@@ -82,7 +125,7 @@ def _install_bounded_runtime(
     return runtime, daemon, probe_calls, connect_calls
 
 
-def test_production_gate_executes_direct_wtscli_success_path(
+def test_production_gate_observes_bridge_without_browser_writes(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     runtime, daemon, probe_calls, connect_calls = _install_bounded_runtime(
@@ -98,18 +141,12 @@ def test_production_gate_executes_direct_wtscli_success_path(
     assert len(connect_calls) == 1
     assert connect_calls[0][0] is runtime
     assert 10 < connect_calls[0][1] <= 11
-    assert len(probe_calls) == 1
-    assert probe_calls[0]["daemon"] is daemon
-    assert probe_calls[0]["bridge_requirement"] == exact_browser_bridge_requirement()
-    assert probe_calls[0]["deadline_at"] > 0
-    assert probe_calls[0]["control_key"] == LiepinOpenCliSiteConfig(
-        allowed_hosts=(),
-        allowed_start_urls=(),
-    ).control_key
+    assert probe_calls == []
+    assert daemon.verify_calls == [False, True]
     assert daemon.closed is True
 
 
-def test_production_gate_maps_direct_wtscli_failure_and_closes_transport(
+def test_production_gate_prepare_maps_direct_wtscli_failure_and_closes_transport(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     _runtime, daemon, probe_calls, connect_calls = _install_bounded_runtime(
@@ -119,7 +156,7 @@ def test_production_gate_maps_direct_wtscli_failure_and_closes_transport(
     gate = ProductionLiepinVerifySessionGate(make_settings())
 
     with pytest.raises(LiepinWorkerModeError, match="需要登录") as raised:
-        asyncio.run(gate.verify())
+        asyncio.run(gate.prepare())
 
     assert raised.value.code == "liepin_opencli_login_required"
     assert len(connect_calls) == 1

@@ -21,6 +21,11 @@ from seektalent.failure_interpretation import public_source_problem_message
 from seektalent.wtscli_verify_session_adapter import (
     probe_wtscli_liepin_session,
 )
+from seektalent.wtscli_verify_session_classification import (
+    WtsCliReadinessProbe,
+    apply_bridge_status,
+    safe_liepin_reason,
+)
 
 
 class ProductionLiepinVerifySessionGate:
@@ -30,7 +35,20 @@ class ProductionLiepinVerifySessionGate:
     async def verify(self) -> None:
         try:
             await asyncio.to_thread(
-                _verify_session,
+                _observe_session,
+                self._settings,
+            )
+        except LiepinWorkerModeError:
+            raise
+        except OpenCliBrowserError as exc:
+            _raise_reason(_normalized_boundary_reason(exc.safe_reason_code))
+        except BootstrapError as exc:
+            _raise_reason(_bootstrap_reason(exc))
+
+    async def prepare(self) -> None:
+        try:
+            await asyncio.to_thread(
+                _prepare_session,
                 self._settings,
             )
         except LiepinWorkerModeError:
@@ -47,7 +65,43 @@ def create_production_liepin_verify_session_gate(
     return ProductionLiepinVerifySessionGate(settings)
 
 
-def _verify_session(settings: AppSettings) -> None:
+def _observe_session(settings: AppSettings) -> None:
+    started_at = time.monotonic()
+    runtime = ensure_opencli_runtime()
+    environment_status = _check_environment(runtime)
+    if not environment_status.ok:
+        _raise_reason(_environment_reason(environment_status))
+    requirement = runtime_requirement(runtime)
+    timeout_seconds = min(
+        900.0,
+        max(0.001, settings.liepin_opencli_timeout_seconds),
+    )
+    deadline_at = started_at + timeout_seconds
+    remaining = deadline_at - time.monotonic()
+    if remaining <= 0:
+        _raise_reason("liepin_opencli_timeout")
+    daemon = connect_installed_opencli_daemon(
+        runtime,
+        verify_timeout_seconds=remaining,
+    )
+    try:
+        probe = WtsCliReadinessProbe(binding=None)
+        status = daemon.verify_bridge(
+            timeout_seconds=max(0.001, deadline_at - time.monotonic()),
+            validate=False,
+        )
+        if not apply_bridge_status(probe, status, requirement):
+            _raise_reason(safe_liepin_reason(probe.safe_reason))
+        status = daemon.verify_bridge(
+            timeout_seconds=max(0.001, deadline_at - time.monotonic()),
+        )
+        if not apply_bridge_status(probe, status, requirement):
+            _raise_reason(safe_liepin_reason(probe.safe_reason))
+    finally:
+        daemon.close()
+
+
+def _prepare_session(settings: AppSettings) -> None:
     started_at = time.monotonic()
     runtime = ensure_opencli_runtime()
     environment_status = _check_environment(runtime)

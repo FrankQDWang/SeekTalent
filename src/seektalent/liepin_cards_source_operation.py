@@ -85,6 +85,7 @@ from seektalent.source_port.operation_dispatch import (
 )
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_runtime_control.errors import RuntimeControlLookupError
+from seektalent_runtime_control.browser_lane import BrowserLaneGuard
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -287,6 +288,28 @@ class LiepinCardsSourceOperationExecutor:
                 process.close()
 
     def _execute(
+        self,
+        request: LiepinCardsOperationRequestV1,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        operation_id = stable_liepin_cards_operation_id(request)
+        with BrowserLaneGuard(
+            store=self._store,
+            runtime_run_id=self._runtime_run_id,
+            operation_id=operation_id,
+            operation_kind="cards",
+            now=_now,
+            plus_seconds=_plus_seconds,
+            wait_timeout_seconds=max(
+                0.001,
+                self._settings.liepin_opencli_timeout_seconds,
+            ),
+        ):
+            try:
+                return self._execute_with_lane(request)
+            finally:
+                self.close()
+
+    def _execute_with_lane(
         self,
         request: LiepinCardsOperationRequestV1,
     ) -> tuple[dict[str, object], dict[str, object]]:
@@ -516,6 +539,28 @@ class LiepinCardsSourceOperationExecutor:
         return _workflow_result(request, artifact, observation)
 
     def _execute_details(
+        self,
+        request: LiepinDetailsOperationRequestV1,
+    ) -> tuple[dict[str, object], dict[str, object]]:
+        operation_id = stable_liepin_details_operation_id(request)
+        with BrowserLaneGuard(
+            store=self._store,
+            runtime_run_id=self._runtime_run_id,
+            operation_id=operation_id,
+            operation_kind="details",
+            now=_now,
+            plus_seconds=_plus_seconds,
+            wait_timeout_seconds=max(
+                0.001,
+                self._settings.liepin_opencli_timeout_seconds,
+            ),
+        ):
+            try:
+                return self._execute_details_with_lane(request)
+            finally:
+                self.close()
+
+    def _execute_details_with_lane(
         self,
         request: LiepinDetailsOperationRequestV1,
     ) -> tuple[dict[str, object], dict[str, object]]:
@@ -1671,6 +1716,15 @@ def _now() -> str:
         "+00:00",
         "Z",
     )
+
+
+def _plus_seconds(value: str, seconds: float) -> str:
+    from datetime import datetime, timedelta
+
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return (
+        parsed + timedelta(seconds=seconds)
+    ).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 __all__ = ["LiepinCardsSourceOperationExecutor"]

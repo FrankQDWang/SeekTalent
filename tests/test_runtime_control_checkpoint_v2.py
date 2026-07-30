@@ -1594,7 +1594,7 @@ def test_v15_migration_interruption_rolls_back_and_retries(
     monkeypatch.setattr(store_module, "_migrate_v15_to_v16", original)
     store.initialize()
     with sqlite3.connect(store.path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 16
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == 17
 
 
 def _seed_running_store(tmp_path):
