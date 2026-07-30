@@ -51,6 +51,13 @@ class DeterministicRequirementExecutor:
 
 
 class DeterministicWorkflowRuntime:
+    def __init__(
+        self,
+        *,
+        source_operation_executor: object | None = None,
+    ) -> None:
+        self.source_operation_executor = source_operation_executor
+
     async def run_async(self, **kwargs: object) -> object:
         runtime_start_callback = kwargs.get("runtime_start_callback")
         if callable(runtime_start_callback):
