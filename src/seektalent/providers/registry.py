@@ -23,6 +23,7 @@ def get_provider_adapter_for_source(
     liepin_worker_client: LiepinWorkerClient | None = None,
     liepin_store: LiepinStore | None = None,
     liepin_connection_safety_resolver: ProviderConnectionSafetyResolver | None = None,
+    liepin_source_operation_executor: object | None = None,
 ) -> ProviderAdapter:
     registry = build_default_provider_adapter_registry()
     return registry.build_adapter(
@@ -32,5 +33,8 @@ def get_provider_adapter_for_source(
             liepin_worker_client=liepin_worker_client,
             liepin_store=liepin_store,
             liepin_connection_safety_resolver=liepin_connection_safety_resolver,
+            liepin_source_operation_executor=(
+                liepin_source_operation_executor
+            ),
         ),
     )

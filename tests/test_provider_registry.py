@@ -66,7 +66,11 @@ def test_provider_registry_returns_source_specific_liepin_with_injected_worker()
         liepin_allow_fake_fixture_worker=True,
     )
 
-    provider = get_provider_adapter_for_source(settings, "liepin", liepin_worker_client=worker)
+    provider = get_provider_adapter_for_source(
+        settings,
+        "liepin",
+        liepin_worker_client=worker,
+    )
 
     assert provider.name == "liepin"
     assert provider.__class__.__name__ == "LiepinProviderAdapter"
@@ -109,7 +113,12 @@ def test_provider_registry_creates_live_store_for_opencli(tmp_path: Path) -> Non
         liepin_connector_db_path=str(tmp_path / "liepin.sqlite3"),
     )
 
-    provider = get_provider_adapter_for_source(settings, "liepin", liepin_worker_client=worker)
+    provider = get_provider_adapter_for_source(
+        settings,
+        "liepin",
+        liepin_worker_client=worker,
+        liepin_source_operation_executor=object(),
+    )
 
     assert provider.name == "liepin"
     assert provider.worker_client is worker

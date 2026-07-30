@@ -67,13 +67,18 @@ def test_source_neutral_expander_provider_forwards_action_and_maps_result(monkey
         calls.append(kwargs)
         return expected
     monkeypatch.setattr(round_adapters, "run_liepin_first_page_expansion", fake_run)
-    runtime = SimpleNamespace(settings=object())
+    source_operation_executor = object()
+    runtime = SimpleNamespace(
+        settings=object(),
+        source_operation_executor=source_operation_executor,
+    )
     ledger = DetailOpenClaimLedger({})
     expanders = default_source_first_page_expander_provider(runtime, ledger)
     result = asyncio.run(expanders["liepin"](request))
     assert result is expected
     assert calls == [{"settings": runtime.settings, "request": request,
-        "detail_open_claim_ledger": ledger}]
+        "detail_open_claim_ledger": ledger,
+        "cards_operation_executor": source_operation_executor}]
     assert set(expanders) == {"liepin"}
 
 

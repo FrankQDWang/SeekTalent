@@ -38,9 +38,9 @@ RFC8032_EMPTY_SIGNATURE = bytes.fromhex(
     "d25bf5f0595bbe24655141438e7a100b"
 )
 SIGNATURE_GOLDENS = {
-    ("windows", "x86_64"): "knhg4RtXvhOgN45ENbFL8m6q47oo2kulLBPa8s4Jl1BR9/7HwRk7EVBtl+1jorv4aSyrsaR8fxXfp5LSSSj+AA==",
-    ("macos", "x86_64"): "CSwovWHaLPMxKHfAvEdkky1gO3Ryv24O2H6xjHa3gbo94CKCgUM0mtH8wQTEsZkZ1EY8fnPLaOTq6+WuSlciAA==",
-    ("macos", "arm64"): "fGrHcaXKoFpyymVqIkyspBJ2Sgsd2FvWPpFxVx1IpfgKbtsQh7GrNAnGCKKDtrxkKYYF/viGqVK9xQLJZMM+Bg==",
+    ("windows", "x86_64"): "ORgeRt3cz5tQXQW4cIw6j4i/4vbVZUJzynxDtAknRN4ZQ7yXucAASzBUH917sW7/WTe813kMN7mO639DDWeCBw==",
+    ("macos", "x86_64"): "64DH3GwwSja9kHxVzQxn1HfbL2n8mhnab9s2KvzEQUVSolqv+iTk9Yjep8iLF1FnbqDq/CUdxF70GypOZJcKDg==",
+    ("macos", "arm64"): "ssuo205rjvw9TfuPFpd8RsXX72q4aMD1zoufHvtbSGt3GoR5KSI539XmVNnd/mpKV1uBM1CA7zc60TqgzUziDQ==",
 }
 VALID_FROM = datetime(2026, 7, 18, 0, 0, tzinfo=UTC)
 VALID_UNTIL = datetime(2027, 7, 18, 0, 0, tzinfo=UTC)

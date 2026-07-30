@@ -3224,7 +3224,14 @@ def test_liepin_runtime_lane_builds_live_store_for_opencli(monkeypatch, tmp_path
         liepin_connector_db_path=str(tmp_path / "liepin.sqlite3"),
     )
 
-    asyncio.run(run_liepin_source_lane(settings=settings, request=request, worker_client=FakeWorker()))
+    asyncio.run(
+        run_liepin_source_lane(
+            settings=settings,
+            request=request,
+            worker_client=FakeWorker(),
+            cards_operation_executor=object(),
+        )
+    )
 
     assert captured_stores
     assert captured_stores[0].__class__.__name__ == "LiepinStore"

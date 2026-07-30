@@ -325,6 +325,7 @@ def _liepin_runtime_replay_snapshot(root: Path) -> dict[str, Any]:
             settings=settings,
             request=_card_request(context),
             worker_client=worker,
+            cards_operation_executor=object(),
         )
     )
     detail_result = asyncio.run(
@@ -332,6 +333,7 @@ def _liepin_runtime_replay_snapshot(root: Path) -> dict[str, Any]:
             settings=settings,
             request=_detail_request(context),
             worker_client=worker,
+            cards_operation_executor=object(),
         )
     )
     blocked_detail_result = asyncio.run(
@@ -339,6 +341,7 @@ def _liepin_runtime_replay_snapshot(root: Path) -> dict[str, Any]:
             settings=settings,
             request=_detail_request_without_lease(context),
             worker_client=worker,
+            cards_operation_executor=object(),
         )
     )
 

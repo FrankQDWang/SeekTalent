@@ -1296,12 +1296,15 @@ def test_adapter_module_has_one_direct_production_gate_without_old_readiness_sea
     provider_adapter = (
         project_root / "src" / "seektalent" / "providers" / "liepin" / "adapter.py"
     ).read_text(encoding="utf-8")
+    readiness_gate = (
+        project_root / "src" / "seektalent" / "liepin_verify_session_gate.py"
+    ).read_text(encoding="utf-8")
     live_search_branch = provider_adapter.split(
         "if is_live_liepin_worker_mode(self.settings.liepin_worker_mode):",
         1,
     )[1].split("        else:", 1)[0]
 
-    assert callers == ["src/seektalent/liepin_verify_session_gate.py"]
+    assert callers == []
     assert factory_callers == []
     composition_callers = [
         path.relative_to(project_root).as_posix()
@@ -1316,7 +1319,12 @@ def test_adapter_module_has_one_direct_production_gate_without_old_readiness_sea
         and "probe_wtscli_liepin_session(" in path.read_text(encoding="utf-8")
     ]
     assert composition_callers == []
-    assert direct_probe_callers == ["src/seektalent/liepin_verify_session_gate.py"]
+    assert direct_probe_callers == []
+    assert "inspect_opencli_runtime" in readiness_gate
+    assert "connect_existing_opencli_daemon_read_only" in readiness_gate
+    assert "ensure_opencli_runtime" not in readiness_gate
+    assert "connect_installed_opencli_daemon" not in readiness_gate
+    assert "restart" not in readiness_gate
     assert "ensure_ready" not in live_search_branch
     assert "session_status" not in provider_adapter
     assert "_require_ready_session" not in provider_adapter

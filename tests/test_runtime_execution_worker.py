@@ -159,7 +159,8 @@ def test_run_once_stops_heartbeat_and_records_visible_failure_when_executor_rais
 
         assert len(store.heartbeats) == heartbeat_count_after_failure
         assert store.failure_events[-1]["event_type"] == "runtime_worker_failed"
-        assert store.failure_events[-1]["summary"] == "runtime exploded"
+        assert store.failure_events[-1]["summary"] == "runtime_worker_failed"
+        assert "runtime exploded" not in str(store.failure_events[-1])
         assert store.releases == [
             {
                 "runtime_run_id": "runtime-run-1",
