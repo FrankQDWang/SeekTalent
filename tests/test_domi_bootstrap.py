@@ -72,6 +72,7 @@ def test_bootstrap_writes_windows_shims_with_domi_python_node_and_pythonpath(tmp
     assert str(site_packages) in runner_text
     assert "SEEKTALENT_DOMI_NODE" in runner_text
     assert "-m seektalent.domi_workbench" in runner_text
+    assert "-m seektalent_ui.maintenance" in runner_text
     assert "-m seektalent @args" in runner_text
 
     cmd_text = cmd.read_text(encoding="utf-8")
@@ -108,7 +109,51 @@ def test_bootstrap_writes_posix_shim_with_domi_python_node_and_pythonpath(tmp_pa
     assert str(site_packages) in text
     assert "SEEKTALENT_DOMI_NODE" in text
     assert "-m seektalent.domi_workbench" in text
+    assert "-m seektalent_ui.maintenance" in text
     assert "-m seektalent \"$@\"" in text
+
+
+def test_posix_shim_routes_maintenance_to_installed_support_cli(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    invocation = tmp_path / "python-invocation.txt"
+    domi_python = tmp_path / "Domi.app" / "python" / "runtime" / "bin" / "python"
+    domi_python.parent.mkdir(parents=True)
+    domi_python.write_text(
+        f"""#!/bin/sh
+printf '%s\\n' "$@" > {_bash_quote(invocation)}
+""",
+        encoding="utf-8",
+    )
+    domi_python.chmod(0o755)
+    domi_node = _touch_executable(tmp_path / "Domi.app" / "node" / "runtime" / "bin" / "node")
+
+    result = domi_bootstrap.bootstrap_domi_workbench(
+        home=home,
+        platform="darwin",
+        domi_python=domi_python,
+        domi_node=domi_node,
+        package_version="0.8.0rc1",
+    )
+
+    completed = subprocess.run(
+        [
+            str(result.bin_dir / "seektalent"),
+            "maintenance",
+            "support-bundle",
+            "--runtime-mode",
+            "prod",
+        ],
+        check=False,
+    )
+
+    assert completed.returncode == 0
+    assert invocation.read_text(encoding="utf-8").splitlines() == [
+        "-m",
+        "seektalent_ui.maintenance",
+        "support-bundle",
+        "--runtime-mode",
+        "prod",
+    ]
 
 
 def test_bootstrap_installs_prepared_runtime_only_with_its_exact_bundle(

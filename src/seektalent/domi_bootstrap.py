@@ -422,6 +422,12 @@ if ($args.Count -ge 1 -and $args[0] -eq "workbench") {{
   & $DomiPython -m seektalent.domi_workbench @remaining
   exit $LASTEXITCODE
 }}
+if ($args.Count -ge 1 -and $args[0] -eq "maintenance") {{
+  $remaining = @()
+  if ($args.Count -gt 1) {{ $remaining = $args[1..($args.Count - 1)] }}
+  & $DomiPython -m seektalent_ui.maintenance @remaining
+  exit $LASTEXITCODE
+}}
 & $DomiPython -m seektalent @args
 exit $LASTEXITCODE
 """,
@@ -474,6 +480,10 @@ export PATH SEEKTALENT_DOMI_NODE DOMI_NODE
 if [ "${{1:-}}" = "workbench" ]; then
   shift
   exec "$DOMI_PYTHON" -m seektalent.domi_workbench "$@"
+fi
+if [ "${{1:-}}" = "maintenance" ]; then
+  shift
+  exec "$DOMI_PYTHON" -m seektalent_ui.maintenance "$@"
 fi
 exec "$DOMI_PYTHON" -m seektalent "$@"
 """,
