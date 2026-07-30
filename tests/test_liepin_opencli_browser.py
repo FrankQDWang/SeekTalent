@@ -81,6 +81,9 @@ def _assert_no_card_text_keys(value: object) -> None:
             _assert_no_card_text_keys(item)
 
 
+def _read_action_trace(tmp_path: Path, source_run_id: str) -> dict[str, object]:
+    return json.loads(next((tmp_path / "protected" / "pi-trace" / source_run_id).glob("**/action-trace.json")).read_text())
+
 def test_cards_envelope_sanitizes_card_summary_before_artifacts() -> None:
     writes: dict[tuple[str, str], object] = {}
 
@@ -2859,7 +2862,7 @@ def test_search_liepin_cards_runs_bounded_opencli_flow_and_writes_valid_artifact
     for forbidden in FORBIDDEN_CARD_TEXT_KEYS:
         assert forbidden not in serialized_envelope
     assert envelope["cards"][0]["safe_card_summary_ref"].startswith("artifact://public-summary/pi-card/run-1/")
-    assert (tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").is_file()
+    assert _read_action_trace(tmp_path, "run-1")["source"] == "liepin"
     public_summary_path = tmp_path / "public-summary" / "pi-card" / "run-1" / "1.json"
     assert public_summary_path.is_file()
     public_summary = json.loads(public_summary_path.read_text(encoding="utf-8"))
@@ -3148,7 +3151,7 @@ def test_search_liepin_cards_trace_uses_verified_search_filter_phase_actions(tmp
     )
 
     assert envelope["status"] == "succeeded"
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
     action_kinds = [event["action_kind"] for event in trace["events"] if "action_kind" in event]
     for expected in (
         "open_search",
@@ -3497,7 +3500,7 @@ def test_search_liepin_filter_failure_exposes_only_safe_reason_codes(tmp_path: P
 
     assert envelope["status"] == "blocked"
     assert envelope["safe_reason_code"] == "liepin_opencli_filter_unapplied"
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
     serialized = json.dumps({"trace": trace, "envelope": envelope}, ensure_ascii=False)
     assert "precondition_failed" not in serialized
     assert "postcondition_failed" not in serialized
@@ -3556,7 +3559,7 @@ def test_search_liepin_cards_reobserves_search_ref_after_stale_submit(tmp_path: 
     assert envelope["status"] == "succeeded"
     assert ("opencli", "browser", "seektalent-liepin", "click", "29") in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "click", "31") in commands.calls
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
     assert {
         "action_kind": "click_search_retry",
         "route_kind": "search",
@@ -3791,7 +3794,7 @@ def test_search_liepin_cards_retries_transient_status_after_search_click(tmp_pat
 
     assert envelope["status"] == "succeeded"
     assert envelope["cards_returned"] == 1
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
     assert {
         "action_kind": "observe_results_retry",
         "route_kind": "search",
@@ -3843,7 +3846,7 @@ def test_search_liepin_cards_retries_stale_observe_results_once(tmp_path: Path) 
 
     assert envelope["status"] == "succeeded"
     assert envelope["cards_returned"] == 1
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
     assert {
         "action_kind": "observe_results_retry",
         "route_kind": "search",
@@ -4639,7 +4642,7 @@ def test_search_liepin_cards_applies_native_filters_before_reading_cards(tmp_pat
     )
 
     assert envelope["status"] == "succeeded"
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
     assert {
         "action_kind": "apply_native_filter",
         "filter": "city",
@@ -4720,7 +4723,7 @@ def test_search_liepin_cards_clears_existing_filters_before_keyword_search(tmp_p
     clear_index = commands.calls.index(("opencli", "browser", "seektalent-liepin", "click", "54"))
     fill_index = commands.calls.index(("opencli", "browser", "seektalent-liepin", "fill", "26", "AI 技术负责人"))
     assert clear_index < fill_index
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
     assert {"action_kind": "clear_native_filters", "route_kind": "search", "ok": True} in trace["events"]
 
 
@@ -4896,7 +4899,7 @@ id=resultList
     )
 
     assert result["status"] == "succeeded"
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "source-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "source-1")
     filter_events = [
         (event.get("filter"), event.get("section"), event.get("value"))
         for event in trace["events"]
@@ -4981,7 +4984,7 @@ def test_search_liepin_cards_does_not_retry_school_type_toggle_after_unverified_
 
     assert result["status"] == "succeeded"
     assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "52")) == 1
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "source-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "source-1")
     assert {
         "action_kind": "observe_after_unverified_toggle_filter",
         "filter": "schoolTypes",
@@ -5063,7 +5066,7 @@ def test_search_liepin_cards_retries_school_type_when_click_command_fails(tmp_pa
     assert result["status"] == "succeeded"
     assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "52")) == 1
     assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "53")) == 1
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "source-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "source-1")
     assert any(
         event.get("action_kind") == "apply_native_filter_retry"
         and event.get("filter") == "schoolTypes"
@@ -5115,7 +5118,7 @@ def test_search_liepin_cards_blocks_when_required_native_filter_click_fails(tmp_
     assert envelope["status"] == "blocked"
     assert envelope["safe_reason_code"] == "liepin_opencli_filter_unapplied"
     assert envelope["cards"] == []
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
     assert {
         "action_kind": "apply_native_filter",
         "filter": "city",
@@ -5174,7 +5177,7 @@ def test_search_liepin_cards_accepts_selected_filter_chip_state(tmp_path: Path) 
     )
 
     assert envelope["status"] == "succeeded"
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
     assert {
         "action_kind": "apply_native_filter",
         "filter": "city",
@@ -5227,7 +5230,7 @@ def test_search_liepin_cards_blocks_when_filter_click_does_not_apply_selection(t
     assert envelope["safe_reason_code"] == "liepin_opencli_filter_unapplied"
 
 
-def test_search_liepin_cards_retries_unconfirmed_filter_before_blocking(tmp_path: Path) -> None:
+def test_search_liepin_cards_reconciles_delayed_city_chip_without_retry(tmp_path: Path) -> None:
     state_before = (
         "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
         "[29]<button><span>搜 索</span></button>"
@@ -5284,16 +5287,11 @@ def test_search_liepin_cards_retries_unconfirmed_filter_before_blocking(tmp_path
     )
 
     assert envelope["status"] == "succeeded"
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
+    assert not any(event.get("action_kind") == "apply_native_filter_retry" for event in trace["events"])
     assert any(
-        event.get("action_kind") == "apply_native_filter_retry"
-        and event.get("safe_reason_code") == "liepin_opencli_filter_unapplied"
-        for event in trace["events"]
-    )
-    assert any(
-        event.get("action_kind") == "verify_native_filter"
-        and event.get("already_applied") is True
-        and event.get("ok") is True
+        event.get("phase") == "city_picker_effect_reconciliation"
+        and event.get("reason") == "requested_city_applied"
         for event in trace["events"]
     )
 
@@ -5355,7 +5353,7 @@ def test_search_liepin_cards_skips_optional_filter_after_retries(tmp_path: Path)
     )
 
     assert envelope["status"] == "succeeded"
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
     assert {
         "action_kind": "apply_native_filter",
         "filter": "degree",
@@ -5417,7 +5415,7 @@ def test_search_liepin_cards_retries_transient_native_filter_status(tmp_path: Pa
     )
 
     assert envelope["status"] == "succeeded"
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
     assert {
         "action_kind": "apply_native_filter_retry",
         "filter": "city",
@@ -5505,7 +5503,7 @@ def test_search_liepin_cards_waits_for_results_after_native_filter_refresh_befor
         if len(call) >= 5 and call[3] == "eval" and "seektalent.liepin_structured_cards_probe.v1" in call[4]
     )
     assert wait_selector_index < structured_probe_index
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
     assert any(
         event.get("action_kind") == "observe_results_after_native_filters"
         and event.get("ready") is False
@@ -5555,7 +5553,7 @@ def test_search_liepin_cards_returns_blocked_envelope_when_state_is_terminal(tmp
     assert envelope["status"] == "blocked"
     assert envelope["safe_reason_code"] == "liepin_opencli_risk_page"
     assert envelope["cards"] == []
-    assert (tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").is_file()
+    assert _read_action_trace(tmp_path, "run-1")["source"] == "liepin"
 
 
 def test_search_liepin_cards_retries_stale_search_input_ref(tmp_path: Path) -> None:
@@ -5595,7 +5593,7 @@ def test_search_liepin_cards_retries_stale_search_input_ref(tmp_path: Path) -> N
     assert envelope["status"] == "succeeded"
     assert ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家") in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "fill", "41", "数据开发专家") in commands.calls
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
     assert {"action_kind": "fill_search_retry", "route_kind": "search", "chars": 6} in trace["events"]
 
 
@@ -5641,7 +5639,7 @@ def test_search_liepin_cards_retries_structured_stale_search_input_ref(tmp_path:
     assert envelope["status"] == "succeeded"
     assert ("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家") in commands.calls
     assert ("opencli", "browser", "seektalent-liepin", "fill", "41", "数据开发专家") in commands.calls
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
     assert {
         "action_kind": "fill_search_retry",
         "route_kind": "search",
@@ -5694,7 +5692,7 @@ def test_search_liepin_cards_retries_stale_search_button_ref(tmp_path: Path) -> 
 
     assert envelope["status"] == "succeeded"
     assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "click", "29")) == 2
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
     assert {
         "action_kind": "click_search_retry",
         "route_kind": "search",
@@ -5744,7 +5742,7 @@ def test_search_liepin_cards_retries_repeated_transient_fill_status(tmp_path: Pa
 
     assert envelope["status"] == "succeeded"
     assert commands.calls.count(("opencli", "browser", "seektalent-liepin", "fill", "26", "数据开发专家")) == 3
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
     assert [event["action_kind"] for event in trace["events"]].count("fill_search_retry") == 2
 
 
@@ -5779,7 +5777,7 @@ def test_search_liepin_cards_rechecks_transient_unready_state(tmp_path: Path) ->
     )
 
     assert envelope["status"] == "succeeded"
-    trace = json.loads((tmp_path / "protected" / "pi-trace" / "run-1" / "action-trace.json").read_text())
+    trace = _read_action_trace(tmp_path, "run-1")
     assert any(event["action_kind"] == "observe_retry_after_unready" for event in trace["events"])
 
 

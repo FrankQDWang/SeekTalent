@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from pathlib import Path
 
 
@@ -146,6 +147,67 @@ def test_liepin_site_payloads_module_owns_current_blocked_cards_envelope() -> No
     }
     assert writes[0][0] == "protected"
     assert writes[0][1] == "pi-trace/run-1/action-trace.json"
+
+
+def test_liepin_cards_action_traces_do_not_overwrite_between_queries_in_one_lane() -> None:
+    from seektalent.providers.liepin import liepin_site_payloads
+
+    writes: dict[tuple[str, str], object] = {}
+
+    def write_pi_artifact(visibility: str, path: str, payload: object) -> str:
+        writes[(visibility, path)] = payload
+        return f"artifact://{path}"
+
+    first_identity = liepin_site_payloads.cards_trace_identity(
+        query="SENTINEL_SHARED_QUERY",
+        native_filters={"city": {"section": "expected", "label": "苏州"}},
+        max_pages=1,
+        max_cards=10,
+    )
+    second_identity = liepin_site_payloads.cards_trace_identity(
+        query="SENTINEL_SHARED_QUERY",
+        native_filters={"city": {"section": "expected", "label": "杭州"}},
+        max_pages=1,
+        max_cards=10,
+    )
+    assert first_identity != second_identity
+    assert len(first_identity) == len(second_identity) == 64
+    assert "SENTINEL_SHARED_QUERY" not in first_identity
+
+    first = liepin_site_payloads.cards_envelope(
+        source_run_id="lane-1",
+        query="SENTINEL_SHARED_QUERY",
+        safe_run_id="lane-1",
+        trace_identity=first_identity,
+        pages_visited=1,
+        events=({"action_kind": "observe"},),
+        state_text="safe state",
+        cards=(),
+        write_pi_artifact=write_pi_artifact,
+    )
+    second = liepin_site_payloads.blocked_cards_envelope(
+        source_run_id="lane-1",
+        query="SENTINEL_SHARED_QUERY",
+        safe_reason_code="liepin_opencli_malformed_state",
+        safe_run_id="lane-1",
+        trace_identity=second_identity,
+        pages_visited=1,
+        events=({"action_kind": "observe"},),
+        write_pi_artifact=write_pi_artifact,
+    )
+
+    assert first["action_trace_ref"] != second["action_trace_ref"]
+    trace_paths = {
+        path
+        for visibility, path in writes
+        if visibility == "protected" and path.endswith("/action-trace.json")
+    }
+    assert len(trace_paths) == 2
+    encoded_traces = json.dumps(
+        [writes[("protected", path)] for path in sorted(trace_paths)],
+        ensure_ascii=False,
+    )
+    assert "SENTINEL_SHARED_QUERY" not in encoded_traces
 
 
 def test_source_adapters_is_import_compatible_package() -> None:

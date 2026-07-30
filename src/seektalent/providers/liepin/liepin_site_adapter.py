@@ -1982,12 +1982,30 @@ class LiepinSiteAdapter:
         recovering_search_surface: bool,
     ) -> dict[str, object]:
         safe_run_id = _safe_artifact_segment(source_run_id)
+        trace_identity = liepin_site_payloads.cards_trace_identity(
+            query=query,
+            native_filters=native_filters,
+            max_pages=max_pages,
+            max_cards=max_cards,
+        )
         events: list[dict[str, object]] = (
             [{"action_kind": "recover_search_surface", "route_kind": "search"}]
             if recovering_search_surface
             else []
         )
         pages_visited = 0
+
+        def blocked_cards(safe_reason_code: str) -> dict[str, object]:
+            return self._blocked_cards_envelope(
+                source_run_id=source_run_id,
+                query=query,
+                safe_reason_code=safe_reason_code,
+                safe_run_id=safe_run_id,
+                trace_identity=trace_identity,
+                pages_visited=pages_visited,
+                events=events,
+            )
+
         try:
             self._validate_keyword_text(query)
             events.append({"action_kind": "open_search", "route_kind": "search"})
@@ -2039,13 +2057,8 @@ class LiepinSiteAdapter:
             if not opened.ok:
                 events[-1]["ok"] = False
                 events[-1]["safe_reason_code"] = opened.safe_reason_code
-                return self._blocked_cards_envelope(
-                    source_run_id=source_run_id,
-                    query=query,
-                    safe_reason_code=opened.safe_reason_code or "liepin_opencli_search_not_ready",
-                    safe_run_id=safe_run_id,
-                    pages_visited=pages_visited,
-                    events=events,
+                return blocked_cards(
+                    opened.safe_reason_code or "liepin_opencli_search_not_ready"
                 )
             pages_visited = 1
             events.append({"action_kind": "wait_search_ready", "route_kind": "search"})
@@ -2118,13 +2131,9 @@ class LiepinSiteAdapter:
             if not ready_result.ok or first_state is None:
                 events[-1]["ok"] = False
                 events[-1]["safe_reason_code"] = ready_result.safe_reason_code
-                return self._blocked_cards_envelope(
-                    source_run_id=source_run_id,
-                    query=query,
-                    safe_reason_code=ready_result.safe_reason_code or "liepin_opencli_search_not_ready",
-                    safe_run_id=safe_run_id,
-                    pages_visited=pages_visited,
-                    events=events,
+                return blocked_cards(
+                    ready_result.safe_reason_code
+                    or "liepin_opencli_search_not_ready"
                 )
             first_state_text = first_state.private_output or str(first_state.observation.get("text") or "")
             clear_state = first_state
@@ -2154,28 +2163,16 @@ class LiepinSiteAdapter:
             )
             first_state = clear_state
             if not clear_result.ok or not first_state.ok:
-                return self._blocked_cards_envelope(
-                    source_run_id=source_run_id,
-                    query=query,
-                    safe_reason_code=clear_result.safe_reason_code
+                return blocked_cards(
+                    clear_result.safe_reason_code
                     or first_state.safe_reason_code
-                    or "liepin_opencli_filter_clear_failed",
-                    safe_run_id=safe_run_id,
-                    pages_visited=pages_visited,
-                    events=events,
+                    or "liepin_opencli_filter_clear_failed"
                 )
             first_state_text = first_state.private_output or str(first_state.observation.get("text") or "")
             search_input_ref = extract_liepin_search_input_ref(first_state_text)
             search_button_ref = extract_liepin_search_button_ref(first_state_text)
             if search_input_ref is None or search_button_ref is None:
-                return self._blocked_cards_envelope(
-                    source_run_id=source_run_id,
-                    query=query,
-                    safe_reason_code="liepin_opencli_search_not_ready",
-                    safe_run_id=safe_run_id,
-                    pages_visited=pages_visited,
-                    events=events,
-                )
+                return blocked_cards("liepin_opencli_search_not_ready")
             events.append({"action_kind": "fill_search", "route_kind": "search", "chars": len(query)})
             fill_target = search_input_ref
             fill_retry_state: OpenCliBrowserResult | None = None
@@ -2278,15 +2275,10 @@ class LiepinSiteAdapter:
                 )
             )
             if not fill_result.ok or click_ready_state is None or not click_ready_state.ok:
-                return self._blocked_cards_envelope(
-                    source_run_id=source_run_id,
-                    query=query,
-                    safe_reason_code=fill_result.safe_reason_code
+                return blocked_cards(
+                    fill_result.safe_reason_code
                     or (click_ready_state.safe_reason_code if click_ready_state is not None else None)
-                    or "liepin_opencli_search_not_ready",
-                    safe_run_id=safe_run_id,
-                    pages_visited=pages_visited,
-                    events=events,
+                    or "liepin_opencli_search_not_ready"
                 )
             click_ready_state_text = click_ready_state.private_output or str(
                 click_ready_state.observation.get("text") or ""
@@ -2353,13 +2345,9 @@ class LiepinSiteAdapter:
                 )
             )
             if not click_result.ok:
-                return self._blocked_cards_envelope(
-                    source_run_id=source_run_id,
-                    query=query,
-                    safe_reason_code=click_result.safe_reason_code or "liepin_opencli_search_not_ready",
-                    safe_run_id=safe_run_id,
-                    pages_visited=pages_visited,
-                    events=events,
+                return blocked_cards(
+                    click_result.safe_reason_code
+                    or "liepin_opencli_search_not_ready"
                 )
             final_state: OpenCliBrowserResult | None = None
 
@@ -2474,13 +2462,9 @@ class LiepinSiteAdapter:
                 )
             )
             if not observe_results.ok or final_state is None:
-                return self._blocked_cards_envelope(
-                    source_run_id=source_run_id,
-                    query=query,
-                    safe_reason_code=observe_results.safe_reason_code or "liepin_opencli_status_unavailable",
-                    safe_run_id=safe_run_id,
-                    pages_visited=pages_visited,
-                    events=events,
+                return blocked_cards(
+                    observe_results.safe_reason_code
+                    or "liepin_opencli_status_unavailable"
                 )
             if native_filters:
                 filter_state = final_state
@@ -2509,28 +2493,19 @@ class LiepinSiteAdapter:
                 )
                 final_state = filter_state
                 if not apply_filter_result.ok or not final_state.ok:
-                    return self._blocked_cards_envelope(
-                        source_run_id=source_run_id,
-                        query=query,
-                        safe_reason_code=apply_filter_result.safe_reason_code
+                    return blocked_cards(
+                        apply_filter_result.safe_reason_code
                         or final_state.safe_reason_code
-                        or "liepin_opencli_filter_unapplied",
-                        safe_run_id=safe_run_id,
-                        pages_visited=pages_visited,
-                        events=events,
+                        or "liepin_opencli_filter_unapplied"
                     )
                 final_state = self._ensure_liepin_results_ready_after_native_filters(
                     current_state=final_state,
                     events=events,
                 )
                 if not final_state.ok:
-                    return self._blocked_cards_envelope(
-                        source_run_id=source_run_id,
-                        query=query,
-                        safe_reason_code=final_state.safe_reason_code or "liepin_opencli_results_not_ready",
-                        safe_run_id=safe_run_id,
-                        pages_visited=pages_visited,
-                        events=events,
+                    return blocked_cards(
+                        final_state.safe_reason_code
+                        or "liepin_opencli_results_not_ready"
                     )
             state_text = final_state.private_output
             structured_cards: OpenCliBrowserResult | None = None
@@ -2566,15 +2541,10 @@ class LiepinSiteAdapter:
             if not extract_result.ok or structured_cards is None or not structured_cards.ok:
                 events[-1]["ok"] = False
                 events[-1]["safe_reason_code"] = extract_result.safe_reason_code
-                return self._blocked_cards_envelope(
-                    source_run_id=source_run_id,
-                    query=query,
-                    safe_reason_code=extract_result.safe_reason_code
+                return blocked_cards(
+                    extract_result.safe_reason_code
                     or (structured_cards.safe_reason_code if structured_cards is not None else None)
-                    or "liepin_opencli_card_extract_failed",
-                    safe_run_id=safe_run_id,
-                    pages_visited=pages_visited,
-                    events=events,
+                    or "liepin_opencli_card_extract_failed"
                 )
             events[-1]["ok"] = True
             raw_cards = structured_cards.observation.get("cards")
@@ -2594,20 +2564,14 @@ class LiepinSiteAdapter:
                 source_run_id=source_run_id,
                 query=query,
                 safe_run_id=safe_run_id,
+                trace_identity=trace_identity,
                 pages_visited=pages_visited,
                 events=events,
                 state_text=state_text,
                 cards=cards,
             )
         except OpenCliBrowserError as exc:
-            return self._blocked_cards_envelope(
-                source_run_id=source_run_id,
-                query=query,
-                safe_reason_code=exc.safe_reason_code,
-                safe_run_id=safe_run_id,
-                pages_visited=pages_visited,
-                events=events,
-            )
+            return blocked_cards(exc.safe_reason_code)
 
     def _ensure_liepin_results_ready_after_native_filters(
         self,
@@ -2824,6 +2788,7 @@ class LiepinSiteAdapter:
         for attempt_index in range(3):
             clicked_option = False
             picker_effect_started = False
+            city_retry_authorized_by_reconciliation = False
             city_option_ref: str | None = None
             exact_city_filter = filter_name == "city" and section in {"current", "expected"}
             city_picker_active = False
@@ -2900,38 +2865,53 @@ class LiepinSiteAdapter:
                     else:
                         self._click_native_filter_option(label, state_text=state_text, section=section)
                     clicked_option = True
-                    state = self.state()
-                    events.append(
-                        dict(action_kind="observe_after_native_filter", filter=filter_name, section=section, ok=state.ok)
-                    )
-                    if not state.ok:
-                        raise OpenCliBrowserError(state.safe_reason_code)
-                    state_text = _opencli_result_text(state)
-                    if (
-                        exact_city_filter
-                        and not native_filter_selection_applied(state_text, section=section, label=label)
-                    ):
-                        pending_confirm, confirm_ref = city_picker.pending_confirm_ref(
-                            self, section=section, label=label, state_text=state_text
+                    if exact_city_filter:
+                        state, reconciliation, confirm_ref = (
+                            city_picker.reconcile_city_filter_effect(
+                                self,
+                                section=section,
+                                label=label,
+                                events=events,
+                                allow_pending_confirm=True,
+                            )
                         )
-                        if pending_confirm and confirm_ref is None:
-                            raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
+                        state_text = _opencli_result_text(state)
+                        pending_confirm = reconciliation == "selected"
+                        city_retry_authorized_by_reconciliation = (
+                            reconciliation == "open_unselected"
+                        )
+                    else:
+                        state = self.state()
+                        events.append(
+                            dict(
+                                action_kind="observe_after_native_filter",
+                                filter=filter_name,
+                                section=section,
+                                ok=state.ok,
+                            )
+                        )
+                        if not state.ok:
+                            raise OpenCliBrowserError(state.safe_reason_code)
+                        state_text = _opencli_result_text(state)
                 if pending_confirm and confirm_ref is not None:
                     mark_picker_effect_started()
                     self._click_native_filter_ref(confirm_ref)
                     events.append(
                         dict(action_kind="confirm_native_city_filter", filter="city", section=section, value=label, ok=True)
                     )
-                    state = self.state()
-                    events.append(
-                        dict(
-                            action_kind="observe_after_native_city_filter_confirm",
-                            filter="city", section=section, ok=state.ok,
+                    state, reconciliation, _unused_confirm_ref = (
+                        city_picker.reconcile_city_filter_effect(
+                            self,
+                            section=section,
+                            label=label,
+                            events=events,
+                            allow_pending_confirm=False,
                         )
                     )
-                    if not state.ok:
-                        raise OpenCliBrowserError(state.safe_reason_code)
                     state_text = _opencli_result_text(state)
+                    city_retry_authorized_by_reconciliation = (
+                        reconciliation == "open_unselected"
+                    )
                 if not native_filter_selection_applied(state_text, section=section, label=label):
                     events.append(
                         {
@@ -2986,13 +2966,26 @@ class LiepinSiteAdapter:
                     and exc.safe_reason_code == "liepin_opencli_filter_unapplied"
                 ):
                     raise
+                if (
+                    exact_city_filter
+                    and picker_effect_started
+                    and exc.safe_reason_code == "liepin_opencli_filter_unapplied"
+                    and not city_retry_authorized_by_reconciliation
+                ):
+                    raise
                 if exc.safe_reason_code not in RETRYABLE_NATIVE_FILTER_REASONS or attempt_index == 2:
                     raise
                 reconcile_city_picker_before_retry = reconcile_city_picker_before_retry or (
                     exact_city_filter
                     and picker_effect_started
-                    and exc.safe_reason_code
-                    in {"liepin_opencli_status_unavailable", "liepin_opencli_timeout"}
+                    and (
+                        exc.safe_reason_code
+                        in {"liepin_opencli_status_unavailable", "liepin_opencli_timeout"}
+                        or (
+                            exc.safe_reason_code == "liepin_opencli_filter_unapplied"
+                            and city_retry_authorized_by_reconciliation
+                        )
+                    )
                 )
                 events.append(
                     {
@@ -3046,6 +3039,7 @@ class LiepinSiteAdapter:
         query: str,
         safe_reason_code: str,
         safe_run_id: str,
+        trace_identity: str | None,
         pages_visited: int,
         events: list[dict[str, object]],
     ) -> dict[str, object]:
@@ -3054,6 +3048,7 @@ class LiepinSiteAdapter:
             query=query,
             safe_reason_code=safe_reason_code,
             safe_run_id=safe_run_id,
+            trace_identity=trace_identity,
             pages_visited=pages_visited,
             events=events,
             write_pi_artifact=self._write_pi_artifact,
@@ -3065,6 +3060,7 @@ class LiepinSiteAdapter:
         source_run_id: str,
         query: str,
         safe_run_id: str,
+        trace_identity: str | None,
         pages_visited: int,
         events: list[dict[str, object]],
         state_text: str,
@@ -3074,6 +3070,7 @@ class LiepinSiteAdapter:
             source_run_id=source_run_id,
             query=query,
             safe_run_id=safe_run_id,
+            trace_identity=trace_identity,
             pages_visited=pages_visited,
             events=events,
             state_text=state_text,
