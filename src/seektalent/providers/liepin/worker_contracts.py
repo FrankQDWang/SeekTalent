@@ -2,6 +2,7 @@ from __future__ import annotations
 
 
 from collections.abc import Mapping
+import re
 from typing import Any
 from typing import Literal
 
@@ -47,6 +48,18 @@ LIEPIN_CARD_PAYLOAD_TEXT_TAIL_KEYS = frozenset(
         "page_text",
     }
 )
+_SAFE_BROWSER_EFFECT_REASON = re.compile(r"^[a-z][a-z0-9_]{0,159}$")
+
+
+class LiepinBrowserEffectBoundaryError(RuntimeError):
+    def __init__(self, safe_reason_code: str) -> None:
+        reason = (
+            safe_reason_code
+            if _SAFE_BROWSER_EFFECT_REASON.fullmatch(safe_reason_code)
+            else "liepin_opencli_status_unavailable"
+        )
+        self.safe_reason_code = reason
+        super().__init__(reason)
 
 
 class LiepinWorkerModeError(SourceWorkerError):

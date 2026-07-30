@@ -4,14 +4,15 @@ from __future__ import annotations
 
 import asyncio
 import time
-from hashlib import sha256
 
 from seektalent.config import AppSettings
 from seektalent.opencli_browser.contracts import OpenCliBrowserError
 from seektalent.opencli_browser.daemon_process import connect_installed_opencli_daemon
-from seektalent.opencli_browser.lifecycle import browser_control_key
 from seektalent.opencli_launcher import BootstrapError, ensure_opencli_runtime, runtime_requirement
 from seektalent.providers.liepin.client import LiepinWorkerModeError
+from seektalent.providers.liepin.liepin_opencli_policy import (
+    LIEPIN_BROWSER_CONTROL_KEY,
+)
 from seektalent.providers.liepin.browser_environment import (
     BrowserBridgeEnvironmentStatus,
     check_browser_bridge_environment,
@@ -58,14 +59,6 @@ def _verify_session(settings: AppSettings) -> None:
     remaining = deadline_at - time.monotonic()
     if remaining <= 0:
         _raise_reason("liepin_opencli_timeout")
-    profile_digest = sha256(
-        (f"{requirement.bridge_build_id}\0{requirement.runtime_identity.state.root_dir}\0existing_profile").encode()
-    ).hexdigest()
-    control_key = browser_control_key(
-        source_kind="liepin",
-        browser_profile_id=f"wtscli-profile:{profile_digest}",
-        provider_account_hash="unbound",
-    )
     daemon = connect_installed_opencli_daemon(
         runtime,
         verify_timeout_seconds=remaining,
@@ -74,7 +67,7 @@ def _verify_session(settings: AppSettings) -> None:
         reason = probe_wtscli_liepin_session(
             daemon=daemon,
             bridge_requirement=requirement,
-            control_key=control_key,
+            control_key=LIEPIN_BROWSER_CONTROL_KEY,
             deadline_at=deadline_at,
             monotonic_clock=time.monotonic,
             poll_wait=time.sleep,

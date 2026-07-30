@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import http.client
 import json
 from collections.abc import Mapping
 from pathlib import Path
@@ -24,6 +25,7 @@ from seektalent.opencli_browser.reason_codes import (
     OPENCLI_BRIDGE_PROTOCOL_MISMATCH,
     OPENCLI_BRIDGE_WRONG_IMPLEMENTATION,
     OPENCLI_COMMAND_RESULT_UNKNOWN,
+    OPENCLI_DAEMON_NOT_RUNNING,
     OPENCLI_FORBIDDEN_COMMAND,
     OPENCLI_FOREIGN_OWNER,
     OPENCLI_SELECTOR_NOT_FOUND,
@@ -288,12 +290,14 @@ def test_bridge_status_mapping_and_strict_validator_share_one_causal_taxonomy(
     assert captured.value.safe_reason_code == expected[1]
 
 
-def test_daemon_client_reuses_connection_and_sends_unique_deadlined_commands() -> None:
-    connection = _Connection(status_payload=_status())
+def test_daemon_client_uses_one_closed_connection_per_http_request() -> None:
+    connections: list[_Connection] = []
     factory_calls: list[tuple[str, int, float]] = []
 
     def factory(host: str, port: int, timeout: float) -> _Connection:
         factory_calls.append((host, port, timeout))
+        connection = _Connection(status_payload=_status())
+        connections.append(connection)
         return connection
 
     client = OpenCliDaemonClient(requirement=_requirement(), connection_factory=factory)
@@ -301,19 +305,113 @@ def test_daemon_client_reuses_connection_and_sends_unique_deadlined_commands() -
     first = client.command("tabs", {"op": "list", "session": "scope_a"}, timeout_seconds=3)
     second = client.command("tabs", {"op": "list", "session": "scope_a"}, timeout_seconds=3)
 
-    assert len(factory_calls) == 1
-    assert [request[0:2] for request in connection.requests] == [
+    assert len(factory_calls) == 3
+    assert [
+        request[0:2]
+        for connection in connections
+        for request in connection.requests
+    ] == [
         ("GET", "/status"),
         ("POST", "/command"),
         ("POST", "/command"),
     ]
-    command_bodies = [json.loads(request[2] or b"{}") for request in connection.requests[1:]]
+    assert all(connection.closed for connection in connections)
+    command_bodies = [
+        json.loads(connection.requests[0][2] or b"{}")
+        for connection in connections[1:]
+    ]
     assert command_bodies[0]["id"] != command_bodies[1]["id"]
     assert all(body["deadlineAt"] > 0 and body["timeout"] == 3 for body in command_bodies)
     assert first.data == {"echo": "tabs"}
     assert first.page == "page_1"
     assert first.idle_deadline_at == 123456
     assert second.command_id != first.command_id
+
+
+def test_daemon_client_starts_next_logical_command_on_a_fresh_connection_after_idle_close() -> None:
+    class IdleClosedConnection(_Connection):
+        def request(
+            self,
+            method: str,
+            path: str,
+            body: bytes | None = None,
+            headers: Mapping[str, str] | None = None,
+        ) -> None:
+            if self.requests:
+                raise http.client.RemoteDisconnected(
+                    "server closed idle keep-alive"
+                )
+            super().request(method, path, body=body, headers=headers)
+
+    connections: list[IdleClosedConnection] = []
+
+    def factory(*_args: object) -> IdleClosedConnection:
+        connection = IdleClosedConnection(status_payload=_status())
+        connections.append(connection)
+        return connection
+
+    client = OpenCliDaemonClient(
+        requirement=_requirement(),
+        connection_factory=factory,
+    )
+
+    result = client.command(
+        "tabs",
+        {"op": "list", "session": "scope_a"},
+        timeout_seconds=3,
+    )
+
+    assert result.data == {"echo": "tabs"}
+    assert len(connections) == 2
+    assert [connection.requests[0][0] for connection in connections] == [
+        "GET",
+        "POST",
+    ]
+    assert all(connection.closed for connection in connections)
+
+
+def test_daemon_client_does_not_retry_post_disconnected_before_response() -> None:
+    class DisconnectingPostConnection(_Connection):
+        def getresponse(self) -> _Response:
+            if self.requests[-1][0] == "POST":
+                raise http.client.RemoteDisconnected(
+                    "command result is unknown"
+                )
+            return super().getresponse()
+
+    connections: list[_Connection] = []
+
+    def factory(*_args: object) -> _Connection:
+        connection: _Connection
+        if connections:
+            connection = DisconnectingPostConnection(
+                status_payload=_status()
+            )
+        else:
+            connection = _Connection(status_payload=_status())
+        connections.append(connection)
+        return connection
+
+    client = OpenCliDaemonClient(
+        requirement=_requirement(),
+        connection_factory=factory,
+    )
+
+    with pytest.raises(OpenCliBrowserError) as captured:
+        client.command(
+            "navigate",
+            {"url": "https://h.liepin.com/"},
+            timeout_seconds=3,
+        )
+
+    assert captured.value.safe_reason_code == OPENCLI_DAEMON_NOT_RUNNING
+    assert len(connections) == 2
+    assert [
+        request[0]
+        for connection in connections
+        for request in connection.requests
+    ] == ["GET", "POST"]
+    assert all(connection.closed for connection in connections)
 
 
 def test_daemon_client_conservatively_normalizes_fractional_idle_deadline_milliseconds() -> None:

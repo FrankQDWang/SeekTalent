@@ -27,6 +27,7 @@ from seektalent.liepin_cards_source_operation import (
     LiepinCardsSourceOperationExecutor,
     _HistoryUnknown,
     _authorization_from_acceptance,
+    _parse_sidecar_exit_diagnostic,
     _sidecar_environment,
     _spawn_sidecar,
 )
@@ -36,6 +37,10 @@ from seektalent.liepin_cards_sidecar import (
     _terminal_observation_digest,
 )
 from seektalent.providers.liepin.liepin_site_adapter import LiepinSiteAdapter
+from seektalent.opencli_browser.contracts import OpenCliBrowserError
+from seektalent.providers.liepin.worker_contracts import (
+    LiepinBrowserEffectBoundaryError,
+)
 from seektalent.source_port.authenticated_liepin_cards_frames import (
     LiepinCardsAcceptedAckV1,
     LiepinCardsResultV1,
@@ -479,6 +484,42 @@ def test_sidecar_browser_scope_cleanup_runs_when_effect_fails(
     assert events == ["begin", "effect", "finish"]
 
 
+def test_site_adapter_translates_browser_error_at_sidecar_effect_boundary(
+    monkeypatch,
+) -> None:
+    site = object.__new__(LiepinSiteAdapter)
+    monkeypatch.setattr(
+        LiepinSiteAdapter,
+        "_begin_browser_control_scope",
+        lambda _self: None,
+    )
+    monkeypatch.setattr(
+        LiepinSiteAdapter,
+        "_search_liepin_cards_once",
+        lambda _self, **_kwargs: (_ for _ in ()).throw(
+            OpenCliBrowserError("opencli_stale_control_fence")
+        ),
+    )
+    monkeypatch.setattr(
+        LiepinSiteAdapter,
+        "_finish_browser_control_scope",
+        lambda _self: None,
+    )
+
+    with pytest.raises(LiepinBrowserEffectBoundaryError) as raised:
+        site._execute_liepin_cards_sidecar_effect(
+            source_run_id="lane-1",
+            query="python",
+            max_pages=1,
+            max_cards=10,
+        )
+
+    assert (
+        raised.value.safe_reason_code
+        == "liepin_opencli_stale_control_fence"
+    )
+
+
 def test_observed_history_replay_closes_stale_process_before_exact_redelivery(
     monkeypatch,
 ) -> None:
@@ -774,6 +815,189 @@ def test_supervised_sidecar_fault_matrix_persists_phase_before_effect(
         else 0
     )
     assert effect_count == expected_effects
+
+
+def test_cards_browser_failure_after_dispatch_intent_emits_only_safe_diagnostic(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = AppSettings(
+        _env_file=None,
+        workspace_root=str(Path(__file__).parents[1]),
+    )
+    journal_path = tmp_path / "journal.sqlite3"
+    artifact_root = tmp_path / "artifacts"
+    counter_path = tmp_path / "effect-count"
+    request = _request()
+    identity = _identity(request)
+    authorization = DispatchAuthorizationV1.create_initial(
+        identity=identity,
+        dispatch_intent_id="dispatch-cards-1",
+        dispatch_intent_revision=1,
+        source_operation_acceptance_ref="source-acceptance-cards-1",
+    )
+    submit = LiepinCardsSubmitV1(
+        contract_version="seektalent.source.liepin-cards.submit/v1",
+        identity=identity,
+        delivery=InitialDeliveryV1(
+            delivery_mode="initial",
+            authorization=authorization,
+        ),
+        request=request,
+    )
+    executor = object.__new__(LiepinCardsSourceOperationExecutor)
+    executor._settings = settings
+    executor._channel_lock = threading.Lock()
+    executor._process = _spawn_sidecar(
+        settings=settings,
+        journal_path=journal_path,
+        artifact_root=artifact_root,
+        history_only=False,
+        module="tests.test_liepin_cards_source_operation",
+        environment_overrides={
+            "SEEKTALENT_TEST_EFFECT_COUNTER": str(counter_path),
+            "SEEKTALENT_TEST_EFFECT_STATUS": "browser_error",
+        },
+    )
+    try:
+        with pytest.raises((OSError, RuntimeError, SidecarReadinessError)):
+            executor._exchange(submit)
+        with monkeypatch.context() as scoped:
+            scoped.setattr(executor._process.process, "poll", lambda: None)
+            diagnostic = executor._process.exit_diagnostic()
+    finally:
+        executor._process.close()
+
+    assert diagnostic is not None
+    assert diagnostic.boundary == "cards_effect"
+    assert diagnostic.operation_kind == "cards"
+    assert diagnostic.safe_reason_code == "liepin_opencli_stale_control_fence"
+    with sqlite3.connect(journal_path) as connection:
+        phase = connection.execute(
+            "SELECT phase FROM source_history_heads"
+        ).fetchone()
+    assert phase == ("dispatch_intent",)
+    assert counter_path.read_text(encoding="utf-8") == "1"
+
+
+def test_large_non_diagnostic_sidecar_stderr_neither_blocks_nor_becomes_diagnostic(
+    tmp_path: Path,
+) -> None:
+    settings = AppSettings(
+        _env_file=None,
+        workspace_root=str(Path(__file__).parents[1]),
+    )
+    request = _request()
+    identity = _identity(request)
+    authorization = DispatchAuthorizationV1.create_initial(
+        identity=identity,
+        dispatch_intent_id="dispatch-cards-1",
+        dispatch_intent_revision=1,
+        source_operation_acceptance_ref="source-acceptance-cards-1",
+    )
+    submit = LiepinCardsSubmitV1(
+        contract_version="seektalent.source.liepin-cards.submit/v1",
+        identity=identity,
+        delivery=InitialDeliveryV1(
+            delivery_mode="initial",
+            authorization=authorization,
+        ),
+        request=request,
+    )
+    executor = object.__new__(LiepinCardsSourceOperationExecutor)
+    executor._settings = settings
+    executor._channel_lock = threading.Lock()
+    executor._process = _spawn_sidecar(
+        settings=settings,
+        journal_path=tmp_path / "journal.sqlite3",
+        artifact_root=tmp_path / "artifacts",
+        history_only=False,
+        module="tests.test_liepin_cards_source_operation",
+        environment_overrides={
+            "SEEKTALENT_TEST_EFFECT_COUNTER": str(
+                tmp_path / "effect-count"
+            ),
+            "SEEKTALENT_TEST_EFFECT_STATUS": "stderr_noise",
+        },
+    )
+    diagnostic_path = executor._process.diagnostic_path
+    try:
+        _acknowledged, terminal = executor._exchange(submit)
+        assert isinstance(terminal, ReceivedLiepinCardsResult)
+        assert executor._process.exit_diagnostic() is None
+        assert executor._process.process.poll() is None
+    finally:
+        executor._process.close()
+
+    assert not diagnostic_path.exists()
+
+
+def test_non_boundary_effect_failure_stays_unknown_without_safe_diagnostic(
+    tmp_path: Path,
+) -> None:
+    settings = AppSettings(
+        _env_file=None,
+        workspace_root=str(Path(__file__).parents[1]),
+    )
+    journal_path = tmp_path / "journal.sqlite3"
+    counter_path = tmp_path / "effect-count"
+    request = _request()
+    authorization = DispatchAuthorizationV1.create_initial(
+        identity=_identity(request),
+        dispatch_intent_id="dispatch-cards-1",
+        dispatch_intent_revision=1,
+        source_operation_acceptance_ref="source-acceptance-cards-1",
+    )
+    submit = LiepinCardsSubmitV1(
+        contract_version="seektalent.source.liepin-cards.submit/v1",
+        identity=_identity(request),
+        delivery=InitialDeliveryV1(
+            delivery_mode="initial",
+            authorization=authorization,
+        ),
+        request=request,
+    )
+    executor = object.__new__(LiepinCardsSourceOperationExecutor)
+    executor._settings = settings
+    executor._channel_lock = threading.Lock()
+    executor._process = _spawn_sidecar(
+        settings=settings,
+        journal_path=journal_path,
+        artifact_root=tmp_path / "artifacts",
+        history_only=False,
+        module="tests.test_liepin_cards_source_operation",
+        environment_overrides={
+            "SEEKTALENT_TEST_EFFECT_COUNTER": str(counter_path),
+            "SEEKTALENT_TEST_EFFECT_STATUS": "generic_error",
+        },
+    )
+    try:
+        with pytest.raises((OSError, RuntimeError, SidecarReadinessError)):
+            executor._exchange(submit)
+        assert executor._process.exit_diagnostic() is None
+    finally:
+        executor._process.close()
+
+    with sqlite3.connect(journal_path) as connection:
+        phase = connection.execute(
+            "SELECT phase FROM source_history_heads"
+        ).fetchone()
+    assert phase == ("dispatch_intent",)
+    assert counter_path.read_text(encoding="utf-8") == "1"
+
+
+@pytest.mark.parametrize(
+    "raw",
+    (
+        b"",
+        b'{"schema_version":"seektalent.liepin-sidecar-exit.v1","boundary":"cards_effect","operation_kind":"cards","safe_reason_code":"contains secret"}',
+        b'{"schema_version":"wrong","boundary":"cards_effect","operation_kind":"cards","safe_reason_code":"opencli_status_unavailable"}',
+    ),
+)
+def test_sidecar_exit_diagnostic_rejects_unbounded_or_noncanonical_stderr(
+    raw: bytes,
+) -> None:
+    assert _parse_sidecar_exit_diagnostic(raw) is None
 
 
 @pytest.mark.parametrize(
@@ -1363,6 +1587,14 @@ class _SidecarHarnessSite:
             else 0
         )
         self._counter_path.write_text(str(count + 1), encoding="utf-8")
+        if self._status == "browser_error":
+            raise LiepinBrowserEffectBoundaryError(
+                "liepin_opencli_stale_control_fence"
+            )
+        if self._status == "generic_error":
+            raise RuntimeError("unsafe third-party exception text")
+        if self._status == "stderr_noise":
+            os.write(2, b"not-a-safe-diagnostic\n" * 65_536)
         envelope = {
             "status": self._status,
             "cards_seen": 1 if self._status != "failed" else 0,

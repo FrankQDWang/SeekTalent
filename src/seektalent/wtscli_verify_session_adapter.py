@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 import math
@@ -10,14 +10,16 @@ import re
 import time
 from typing import Protocol
 from urllib.parse import urlparse
-import uuid
 
 from seektalent.browser_bridge_manifest import BrowserBridgeRequirement
 from seektalent.opencli_browser.contracts import BrowserHostTab, OpenCliBrowserError
 from seektalent.opencli_browser.daemon_transport import OpenCliDaemonAction, OpenCliDaemonResult
 from seektalent.opencli_browser.lifecycle import OPENCLI_OWNED_TAB_IDLE_SECONDS
 from seektalent.opencli_browser.reason_codes import OPENCLI_STATUS_UNAVAILABLE
-from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_URL
+from seektalent.providers.liepin.liepin_opencli_policy import (
+    LIEPIN_RECRUITER_SEARCH_URL,
+    LIEPIN_SEARCH_TAB_SESSION,
+)
 from seektalent.wtscli_verify_session_classification import (
     VerifySessionEffectReply,
     VerifySessionRequestV1,
@@ -132,7 +134,33 @@ class _BrowserReadinessProbe:
             probe.safe_reason = host_reason
             return
 
-        owned_session = f"st_verify_{uuid.uuid4().hex}"
+        listed = self._command(
+            deadline_at,
+            probe,
+            "tabs",
+            {
+                **self._controlled_params(probe, LIEPIN_SEARCH_TAB_SESSION),
+                "op": "list",
+            },
+        )
+        if not isinstance(listed.data, list):
+            probe.safe_reason = "liepin_opencli_status_unavailable"
+            return
+        if listed.data:
+            owned_page = _unique_inactive_web_page(listed.data)
+            if owned_page is None:
+                probe.safe_reason = "liepin_opencli_status_unavailable"
+                return
+            probe.owned_page = owned_page
+            probe.owned_session = LIEPIN_SEARCH_TAB_SESSION
+            page_params = self._controlled_params(
+                probe,
+                LIEPIN_SEARCH_TAB_SESSION,
+            )
+            page_params["page"] = owned_page
+            self._observe_owned_page(deadline_at, probe, page_params)
+            return
+
         remaining = self._require_current(deadline_at)
         command_timeout = _command_timeout_within(remaining)
         if command_timeout is None:
@@ -141,7 +169,7 @@ class _BrowserReadinessProbe:
         opened = self._daemon.command(
             "tabs",
             {
-                **self._controlled_params(probe, owned_session),
+                **self._controlled_params(probe, LIEPIN_SEARCH_TAB_SESSION),
                 "op": "new",
                 "hostPage": host.page_id,
                 "url": LIEPIN_RECRUITER_SEARCH_URL,
@@ -153,7 +181,7 @@ class _BrowserReadinessProbe:
         opened_payload = _mapping(opened.data)
         if isinstance(opened.page, str) and _SAFE_PAGE_ID.fullmatch(opened.page):
             probe.owned_page = opened.page
-            probe.owned_session = owned_session
+            probe.owned_session = LIEPIN_SEARCH_TAB_SESSION
         if (
             probe.owned_page is None
             or opened_payload is None
@@ -164,7 +192,10 @@ class _BrowserReadinessProbe:
             probe.safe_reason = "liepin_opencli_tab_response_malformed"
             return
 
-        page_params = self._controlled_params(probe, owned_session)
+        page_params = self._controlled_params(
+            probe,
+            LIEPIN_SEARCH_TAB_SESSION,
+        )
         page_params["page"] = probe.owned_page
         self._observe_owned_page(deadline_at, probe, page_params)
 
@@ -592,6 +623,25 @@ def _mapping(value: object) -> dict[str, object] | None:
             return None
         payload[key] = item
     return payload
+
+
+def _unique_inactive_web_page(items: Sequence[object]) -> str | None:
+    if len(items) != 1:
+        return None
+    payload = _mapping(items[0])
+    if payload is None:
+        return None
+    page = payload.get("page")
+    url = payload.get("url")
+    if (
+        not isinstance(page, str)
+        or _SAFE_PAGE_ID.fullmatch(page) is None
+        or not isinstance(url, str)
+        or not is_concrete_navigation_url(url)
+        or payload.get("active") is not False
+    ):
+        return None
+    return page
 
 
 def _command_timeout_within(remaining: float) -> float | None:

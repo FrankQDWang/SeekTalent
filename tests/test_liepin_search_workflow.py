@@ -1442,6 +1442,21 @@ def test_workflow_initial_card_extraction_uses_state_probe_before_and_after() ->
     assert any(event.get("action_kind") == "extract_structured_cards" and event.get("ok") is True for event in site.events)
 
 
+def test_source_port_workflow_observation_never_reads_main_browser_state() -> None:
+    class SourcePortAdapter:
+        _cards_operation_executor = object()
+
+        def state(self) -> OpenCliBrowserResult:
+            raise AssertionError("main browser state must not be read for source-port effects")
+
+    site = _LiepinSearchWorkflowSite(
+        adapter=cast(LiepinSiteAdapter, SourcePortAdapter())
+    )
+
+    assert site.observe_liepin_search_state().ok is True
+    assert site.observe_liepin_detail_state().ok is True
+
+
 def test_workflow_refresh_card_extraction_uses_state_probe_before_and_after() -> None:
     site = FakeLiepinSearchWorkflowSite(
         structured_cards=[
@@ -1479,6 +1494,24 @@ def test_workflow_detail_operations_use_source_port_details_operation() -> None:
     restore_index = site.calls.index("restore_liepin_search_page")
     assert site.calls[restore_index + 1] == "observe_liepin_search_state"
     assert any(event.get("action_kind") == "return_to_search_after_capture" for event in site.events)
+
+
+def test_source_port_managed_search_restore_does_not_refresh_cards_from_main() -> None:
+    class SourcePortManagedSite(FakeLiepinSearchWorkflowSite):
+        def restore_liepin_search_page(self) -> str | None:
+            self.calls.append("restore_liepin_search_page")
+            return "source-port-managed"
+
+    site = SourcePortManagedSite()
+
+    envelope = LiepinSearchWorkflow(site=site).search_detail_backed_resumes(
+        _request(target_resumes=3)
+    )
+
+    assert envelope["status"] == "succeeded"
+    assert envelope["resumes_returned"] == 3
+    assert site.calls.count("extract_structured_liepin_cards") == 1
+    assert _details_op_calls(site, "cached_locator") == 3
 
 
 def test_workflow_opens_from_structured_detail_targets_without_raw_ref_token() -> None:

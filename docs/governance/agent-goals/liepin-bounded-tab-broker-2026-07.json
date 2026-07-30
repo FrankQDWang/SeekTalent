@@ -1,0 +1,54 @@
+{
+  "schema_version": "seektalent.major_refactor_goal.v1",
+  "goal_id": "runtime-control-plane-2026-06",
+  "change_type": "major_refactor",
+  "summary": "Bound Liepin search and detail tab ownership inside the supervised sidecar.",
+  "rationale": "The Source Port sidecar is the only production browser-effect owner for Liepin cards and details. This change reuses one search tab and one detail tab across candidates and sidecar generations, makes direct readiness reuse the same extension-owned search surface without becoming a cards or details effect owner, and keeps poisoned or missing tabs fail closed until the extension proves the owned session is empty.",
+  "touched_layers": [
+    "other",
+    "provider"
+  ],
+  "red_files": [
+    "src/seektalent/providers/liepin/liepin_opencli_policy.py",
+    "src/seektalent/providers/liepin/liepin_search_workflow.py",
+    "src/seektalent/providers/liepin/liepin_site_adapter.py",
+    "src/seektalent/providers/liepin/liepin_workflow_site.py",
+    "src/seektalent/providers/liepin/worker_contracts.py"
+  ],
+  "verification": [
+    "uv run pytest tests/test_runtime_control_*.py -q",
+    "uv run python tools/check_source_boundaries.py",
+    "uv run pytest",
+    "uv run --group dev pytest -q tests/test_opencli_daemon_automation.py tests/test_liepin_opencli_host_selection.py tests/test_liepin_search_workflow.py",
+    "uv run --group dev pytest -q -p no:tach tests/test_liepin_cards_source_operation.py tests/test_liepin_details_source_operation.py tests/test_wtscli_verify_session_adapter.py tests/test_liepin_verify_session_gate.py tests/test_opencli_daemon_automation.py",
+    "uv run --group dev pytest -q -p no:tach",
+    "uv run --group dev ruff check src tests experiments tools",
+    "uv run --group dev ty check src tests tools",
+    "uv run --group dev python tools/check_pr_governance.py --base origin/main",
+    "uv run --group dev python tools/check_privacy_gate.py --base origin/main",
+    "uv run --group dev python tools/check_agent_safety_gate.py --base origin/main",
+    "uv run --group dev python tools/check_ai_bad_smells.py --base origin/main",
+    "uv run --group dev python tools/check_arch_imports.py",
+    "uv run --group dev python tools/check_tach_baseline.py",
+    "scripts/verify-red-zone.sh"
+  ],
+  "deletion_targets": [
+    "Per-candidate Liepin detail tab allocation in the supervised sidecar",
+    "Main-process cards and details browser observation after Source Port dispatch",
+    "Synchronous sidecar tab close during poisoned or missing tab retirement",
+    "Per-query random direct-verify tab sessions and their separate control fence lane",
+    "Unbounded or blocking sidecar stderr capture"
+  ],
+  "risks": [
+    "A retiring tab must block replacement while the extension still reports any live, ambiguous, invalid, or unknown owned-session state.",
+    "A sidecar restart must recover only one unambiguous live extension-owned tab and must not trust stale Python memory.",
+    "The bounded replacement budget must not become durable candidate truth or a second browser lifecycle control plane.",
+    "The user host tab and host window must never be navigated, automated, closed, activated, or replaced.",
+    "Direct readiness may observe or create the shared search surface but must never execute cards or details browser effects.",
+    "Sidecar failure diagnostics must remain privacy-safe, non-blocking, capped, and independent of Source Port reconciliation."
+  ],
+  "line_count_exemptions": [
+    "src/seektalent/providers/liepin/liepin_site_adapter.py"
+  ],
+  "line_count_rationale": "The pre-existing oversized adapter remains the provider semantic boundary. This slice changes only its existing search/detail broker call sites; the reusable ownership and retiring state live in the focused generic browser automation module."
+}

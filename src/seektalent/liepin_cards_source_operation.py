@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import os
+import re
 import secrets
 import subprocess
 import sys
@@ -84,12 +87,41 @@ from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_runtime_control.errors import RuntimeControlLookupError
 
 
+_LOGGER = logging.getLogger(__name__)
+_SAFE_SIDECAR_REASON = re.compile(r"^[a-z][a-z0-9_]{0,159}$")
+
+
+@dataclass(frozen=True, slots=True)
+class _SidecarExitDiagnostic:
+    boundary: str
+    operation_kind: str
+    safe_reason_code: str
+
+
 @dataclass(slots=True)
 class _SidecarProcess:
     process: subprocess.Popen[bytes]
     transport: _ProtocolTransport
     cards_session: PostHandshakeLiepinSourceSession | None
     history_session: PostHandshakeHistorySession | None
+    diagnostic_path: Path
+    _exit_diagnostic: _SidecarExitDiagnostic | None = None
+    _exit_diagnostic_read: bool = False
+
+    def exit_diagnostic(self) -> _SidecarExitDiagnostic | None:
+        if self._exit_diagnostic_read:
+            return self._exit_diagnostic
+        try:
+            with self.diagnostic_path.open("rb") as stream:
+                raw = stream.read(4097)
+        except OSError:
+            return None
+        self._exit_diagnostic_read = True
+        self.diagnostic_path.unlink(missing_ok=True)
+        if len(raw) > 4096:
+            return None
+        self._exit_diagnostic = _parse_sidecar_exit_diagnostic(raw)
+        return self._exit_diagnostic
 
     def close(self) -> None:
         self.transport.close()
@@ -100,6 +132,7 @@ class _SidecarProcess:
             except subprocess.TimeoutExpired:
                 self.process.kill()
                 self.process.wait(timeout=5)
+        self.diagnostic_path.unlink(missing_ok=True)
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,6 +402,7 @@ class LiepinCardsSourceOperationExecutor:
             if terminal is None:
                 ack, terminal = self._exchange(submit)
         except (OSError, RuntimeError, SidecarReadinessError):
+            self._report_sidecar_exit()
             recovered = self._query_terminal_history_safely(accepted, identity)
             if recovered is None:
                 return _unknown_result()
@@ -587,6 +621,7 @@ class LiepinCardsSourceOperationExecutor:
             if terminal is None:
                 ack, terminal = self._exchange_details(submit)
         except (OSError, RuntimeError, SidecarReadinessError):
+            self._report_sidecar_exit()
             recovered = self._query_terminal_history_safely(accepted, identity)
             if recovered is None:
                 return _details_unknown_result()
@@ -1141,6 +1176,22 @@ class LiepinCardsSourceOperationExecutor:
             )
         return self._process
 
+    def _report_sidecar_exit(self) -> None:
+        process = self._process
+        if process is None:
+            return
+        diagnostic = process.exit_diagnostic()
+        if diagnostic is None:
+            return
+        _LOGGER.warning(
+            "liepin_source_sidecar_effect_failed boundary=%s "
+            "operation_kind=%s safe_reason_code=%s exit_code=%s",
+            diagnostic.boundary,
+            diagnostic.operation_kind,
+            diagnostic.safe_reason_code,
+            process.process.returncode,
+        )
+
 
 def _spawn_sidecar(
     *,
@@ -1166,6 +1217,13 @@ def _spawn_sidecar(
     if history_only:
         command.append("--history-only")
     environment = _sidecar_environment(environment_overrides)
+    diagnostic_path = (
+        journal_path.parent
+        / f".liepin-sidecar-exit-{secrets.token_hex(16)}.json"
+    )
+    environment["SEEKTALENT_LIEPIN_SIDECAR_DIAGNOSTIC_PATH"] = str(
+        diagnostic_path
+    )
     process = subprocess.Popen(
         command,
         stdin=subprocess.PIPE,
@@ -1177,6 +1235,7 @@ def _spawn_sidecar(
     if process.stdin is None or process.stdout is None:
         process.kill()
         process.wait()
+        diagnostic_path.unlink(missing_ok=True)
         raise RuntimeError("liepin_cards_sidecar_pipe_missing")
     transport = _ProtocolTransport(process.stdout, process.stdin)
     identity = liepin_cards_sidecar_identity()
@@ -1195,6 +1254,7 @@ def _spawn_sidecar(
         transport.close()
         process.kill()
         process.wait()
+        diagnostic_path.unlink(missing_ok=True)
         raise
     cards_session = (
         None
@@ -1222,6 +1282,44 @@ def _spawn_sidecar(
         transport=transport,
         cards_session=cards_session,
         history_session=history_session,
+        diagnostic_path=diagnostic_path,
+    )
+
+
+def _parse_sidecar_exit_diagnostic(
+    raw: bytes,
+) -> _SidecarExitDiagnostic | None:
+    if not raw or len(raw) > 4096:
+        return None
+    try:
+        payload = json.loads(raw.decode("utf-8").strip())
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return None
+    if (
+        not isinstance(payload, dict)
+        or set(payload)
+        != {
+            "schema_version",
+            "boundary",
+            "operation_kind",
+            "safe_reason_code",
+        }
+        or payload.get("schema_version")
+        != "seektalent.liepin-sidecar-exit.v1"
+        or payload.get("boundary")
+        not in {"cards_effect", "details_effect"}
+        or payload.get("operation_kind") not in {"cards", "details"}
+        or not isinstance(payload.get("safe_reason_code"), str)
+        or _SAFE_SIDECAR_REASON.fullmatch(
+            payload["safe_reason_code"]
+        )
+        is None
+    ):
+        return None
+    return _SidecarExitDiagnostic(
+        boundary=payload["boundary"],
+        operation_kind=payload["operation_kind"],
+        safe_reason_code=payload["safe_reason_code"],
     )
 
 
