@@ -224,6 +224,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Install SeekTalent's Domi Workbench command shim.")
     parser.add_argument("--domi-python", type=Path, default=Path(sys.executable))
     parser.add_argument("--domi-node", type=Path)
+    parser.add_argument("--home", type=Path)
     parser.add_argument("--python-path", type=Path, action="append", default=[])
     parser.add_argument("--bin-dir", type=Path)
     parser.add_argument("--package-version", default=__version__)
@@ -236,6 +237,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         result = bootstrap_domi_workbench(
+            home=args.home,
             domi_python=args.domi_python,
             domi_node=args.domi_node,
             python_paths=tuple(args.python_path),

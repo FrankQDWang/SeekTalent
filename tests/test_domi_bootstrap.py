@@ -223,6 +223,10 @@ def test_install_scripts_delegate_to_package_bootstrap() -> None:
 
     assert "pip install" in windows_script
     assert "seektalent==$Version" in windows_script
+    assert "SEEKTALENT_INSTALL_HOME" in windows_script
+    assert "--home $InstallHome" in windows_script
+    assert "SEEKTALENT_INSTALL_HOME" in mac_script
+    assert '--home "${install_home}"' in mac_script
     assert "--no-deps" not in windows_script
     assert "--ignore-installed" in windows_script
     assert "function Install-SeekTalentDomi" in windows_script

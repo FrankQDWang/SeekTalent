@@ -1,10 +1,11 @@
 param(
-  [string]$Version = "0.7.49",
+  [string]$Version = "0.8.0rc1",
   [string]$DomiPython = "",
   [string]$DomiNode = "",
   [string]$WtscliBundleDir = $env:SEEKTALENT_WTSCLI_BUNDLE_DIR,
   [string]$BrowserBridgeHelper = $env:SEEKTALENT_BROWSER_BRIDGE_HELPER,
-  [string]$PreparedWtscliRuntime = $env:SEEKTALENT_WTSCLI_PREPARED_RUNTIME
+  [string]$PreparedWtscliRuntime = $env:SEEKTALENT_WTSCLI_PREPARED_RUNTIME,
+  [string]$InstallHome = $env:SEEKTALENT_INSTALL_HOME
 )
 
 function Fail($ReasonCode, $Message) {
@@ -13,15 +14,19 @@ function Fail($ReasonCode, $Message) {
 
 function Install-SeekTalentDomi {
   param(
-    [string]$Version = "0.7.49",
+    [string]$Version = "0.8.0rc1",
     [string]$DomiPython = "",
     [string]$DomiNode = "",
     [string]$WtscliBundleDir = $env:SEEKTALENT_WTSCLI_BUNDLE_DIR,
     [string]$BrowserBridgeHelper = $env:SEEKTALENT_BROWSER_BRIDGE_HELPER,
-    [string]$PreparedWtscliRuntime = $env:SEEKTALENT_WTSCLI_PREPARED_RUNTIME
+    [string]$PreparedWtscliRuntime = $env:SEEKTALENT_WTSCLI_PREPARED_RUNTIME,
+    [string]$InstallHome = $env:SEEKTALENT_INSTALL_HOME
   )
 
   $ErrorActionPreference = "Stop"
+  if (-not $InstallHome) {
+    $InstallHome = $env:USERPROFILE
+  }
 
   if (-not $DomiPython) {
     $DomiPython = Join-Path $env:APPDATA "Domi\runtime\python\bin\python.exe"
@@ -73,9 +78,9 @@ function Install-SeekTalentDomi {
     Fail "wtscli_runtime_missing" "The prepared WTSCLI runtime was not found in the SeekTalent product package: $PreparedWtscliRuntime"
   }
 
-  $Prefix = Join-Path $env:USERPROFILE ".seektalent\python-prefix\$Version"
+  $Prefix = Join-Path $InstallHome ".seektalent\python-prefix\$Version"
   $SitePackages = Join-Path $Prefix "Lib\site-packages"
-  $BinDir = Join-Path $env:USERPROFILE ".seektalent\bin"
+  $BinDir = Join-Path $InstallHome ".seektalent\bin"
   $CandidateRoot = Join-Path ([IO.Path]::GetTempPath()) ("seektalent-domi-install-" + [Guid]::NewGuid().ToString("N"))
   $CandidatePrefix = Join-Path $CandidateRoot "python-prefix"
   $CandidateSitePackages = Join-Path $CandidatePrefix "Lib\site-packages"
@@ -93,6 +98,7 @@ function Install-SeekTalentDomi {
     $env:PYTHONPATH = if ($env:PYTHONPATH) { "$CandidateSitePackages;$env:PYTHONPATH" } else { $CandidateSitePackages }
     & $DomiPython -m seektalent.domi_bootstrap `
       --package-version $Version `
+      --home $InstallHome `
       --python-path $SitePackages `
       --python-prefix-candidate $CandidatePrefix `
       --python-prefix-target $Prefix `
@@ -119,8 +125,7 @@ function Install-SeekTalentDomi {
   }
 
   Write-Host "SeekTalent Domi install ready. Run: seektalent workbench"
-  Write-Host "固定扩展目录：~/.seektalent/chrome-extension/wtscli"
-  Write-Host "Chrome 扩展目录：$env:USERPROFILE\.seektalent\chrome-extension\wtscli"
+  Write-Host "Chrome 扩展目录：$InstallHome\.seektalent\chrome-extension\wtscli"
   Write-Host "打开 chrome://extensions，启用“开发者模式”，选择“加载已解压的扩展程序”，并选择上面的唯一目录。"
   Write-Host "升级后请在该页面点击 WTSCLI 的“重新加载”；若仍显示旧版本，请完全退出并重启 Chrome。"
   Write-Host "检查：seektalent browser-check"
@@ -128,7 +133,7 @@ function Install-SeekTalentDomi {
 
 if ($MyInvocation.MyCommand.Path -and $MyInvocation.InvocationName -ne ".") {
   try {
-    Install-SeekTalentDomi -Version $Version -DomiPython $DomiPython -DomiNode $DomiNode -WtscliBundleDir $WtscliBundleDir -BrowserBridgeHelper $BrowserBridgeHelper -PreparedWtscliRuntime $PreparedWtscliRuntime
+    Install-SeekTalentDomi -Version $Version -DomiPython $DomiPython -DomiNode $DomiNode -WtscliBundleDir $WtscliBundleDir -BrowserBridgeHelper $BrowserBridgeHelper -PreparedWtscliRuntime $PreparedWtscliRuntime -InstallHome $InstallHome
   } catch {
     Write-Error $_
     exit 1

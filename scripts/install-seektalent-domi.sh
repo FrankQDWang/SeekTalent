@@ -14,10 +14,11 @@ _seektalent_domi_fail() {
 }
 
 _seektalent_domi_install() {
-  local version="${1:-0.7.49}"
+  local version="${1:-0.8.0rc1}"
   local requested_bundle_dir="${2:-${SEEKTALENT_WTSCLI_BUNDLE_DIR:-}}"
   local domi_python="${DOMI_PYTHON:-}"
   local domi_node="${DOMI_NODE:-${SEEKTALENT_DOMI_NODE:-}}"
+  local install_home="${SEEKTALENT_INSTALL_HOME:-${HOME}}"
   local script_path="${BASH_SOURCE[0]}"
   local script_dir="${script_path%/*}"
   if [[ "${script_dir}" == "${script_path}" ]]; then
@@ -91,9 +92,9 @@ _seektalent_domi_install() {
     return 1
   fi
 
-  local prefix="${HOME}/.seektalent/python-prefix/${version}"
+  local prefix="${install_home}/.seektalent/python-prefix/${version}"
   local site_packages="${prefix}/site-packages"
-  local bin_dir="${HOME}/.seektalent/bin"
+  local bin_dir="${install_home}/.seektalent/bin"
   local candidate_root
   candidate_root="$(mktemp -d "${TMPDIR:-/tmp}/seektalent-domi-install.XXXXXX")" || {
     _seektalent_domi_fail "seektalent_bootstrap_directory_failed" "Failed to create the temporary SeekTalent candidate."
@@ -126,6 +127,7 @@ _seektalent_domi_install() {
   PYTHONPATH="${candidate_site_packages}${PYTHONPATH:+:${PYTHONPATH}}" \
     "${domi_python}" -m seektalent.domi_bootstrap \
       --package-version "${version}" \
+      --home "${install_home}" \
       --python-path "${site_packages}" \
       --python-prefix-candidate "${candidate_prefix}" \
       --python-prefix-target "${prefix}" \
@@ -147,7 +149,7 @@ _seektalent_domi_install() {
   esac
 
   echo "SeekTalent Domi install ready. Run: seektalent workbench"
-  echo "Chrome 扩展目录：${HOME}/.seektalent/chrome-extension/wtscli"
+  echo "Chrome 扩展目录：${install_home}/.seektalent/chrome-extension/wtscli"
   echo "打开 chrome://extensions，启用“开发者模式”，选择“加载已解压的扩展程序”，并选择上面的唯一目录。"
   echo "升级后请在该页面点击 WTSCLI 的“重新加载”；若仍显示旧版本，请完全退出并重启 Chrome。"
   echo "检查：seektalent browser-check"
