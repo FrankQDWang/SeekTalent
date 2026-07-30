@@ -5,6 +5,9 @@ from __future__ import annotations
 import argparse
 from collections.abc import Callable
 from hashlib import sha256
+import json
+import os
+import re
 import time
 from pathlib import Path
 from typing import Literal
@@ -13,6 +16,9 @@ from pydantic import ValidationError
 
 from seektalent.config import AppSettings
 from seektalent.providers.liepin.client import build_liepin_opencli_site_adapter
+from seektalent.providers.liepin.worker_contracts import (
+    LiepinBrowserEffectBoundaryError,
+)
 from seektalent.sidecar_child_session import serve_sidecar_handshake
 from seektalent.sidecar_handshake_protocol import (
     SidecarReadinessError,
@@ -59,6 +65,9 @@ from seektalent.source_port.liepin_cards_sidecar_identity import (
 from seektalent.source_port.history_sqlite_reader import SourceHistorySQLiteReader
 from seektalent.source_port.wire_primitives import canonical_json_bytes
 from seektalent.strict_json import strict_json_object_loads
+
+
+_SAFE_REASON = re.compile(r"^[a-z][a-z0-9_]{0,159}$")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -254,7 +263,15 @@ def _handle_cards_submit(
     )
     _inject_fault(fault_hook, "after_dispatch_intent")
     site = _ensure_site(site, site_factory)
-    artifact = _execute_cards(site, submit)
+    try:
+        artifact = _execute_cards(site, submit)
+    except LiepinBrowserEffectBoundaryError as exc:
+        _write_safe_exit_diagnostic(
+            boundary="cards_effect",
+            operation_kind="cards",
+            safe_reason_code=exc.safe_reason_code,
+        )
+        raise
     _inject_fault(fault_hook, "after_effect")
     artifact_ref, artifact_hash = write_liepin_cards_artifact(
         cards_artifacts,
@@ -403,7 +420,15 @@ def _handle_details_submit(
     )
     _inject_fault(fault_hook, "after_dispatch_intent")
     site = _ensure_site(site, site_factory)
-    artifact = _execute_details(site, submit, locator_root=locator_root)
+    try:
+        artifact = _execute_details(site, submit, locator_root=locator_root)
+    except LiepinBrowserEffectBoundaryError as exc:
+        _write_safe_exit_diagnostic(
+            boundary="details_effect",
+            operation_kind="details",
+            safe_reason_code=exc.safe_reason_code,
+        )
+        raise
     _inject_fault(fault_hook, "after_effect")
     artifact_ref, artifact_hash = write_liepin_details_artifact(
         details_artifacts,
@@ -499,6 +524,44 @@ def _inject_fault(
 ) -> None:
     if fault_hook is not None:
         fault_hook(point)
+
+
+def _write_safe_exit_diagnostic(
+    *,
+    boundary: str,
+    operation_kind: str,
+    safe_reason_code: str,
+) -> None:
+    reason = (
+        safe_reason_code
+        if _SAFE_REASON.fullmatch(safe_reason_code)
+        else "liepin_opencli_status_unavailable"
+    )
+    payload = {
+        "schema_version": "seektalent.liepin-sidecar-exit.v1",
+        "boundary": boundary,
+        "operation_kind": operation_kind,
+        "safe_reason_code": reason,
+    }
+    path = os.environ.get("SEEKTALENT_LIEPIN_SIDECAR_DIAGNOSTIC_PATH")
+    if not path:
+        return
+    encoded = (
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+        + b"\n"
+    )
+    if len(encoded) > 4096:
+        return
+    try:
+        descriptor = os.open(
+            path,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
+            0o600,
+        )
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(encoded)
+    except OSError:
+        return
 
 
 def _execute_cards(site, submit) -> LiepinCardsArtifactV1:

@@ -187,6 +187,7 @@ class _FakeDaemon:
         }
         self.user_tabs = {"user-host-page", "user-other-page"}
         self.owned_tabs: set[str] = set()
+        self.session_tabs: list[dict[str, object]] | None = None
         self._idle_deadlines: dict[str, float] = {}
 
     def verify_bridge(
@@ -218,6 +219,23 @@ class _FakeDaemon:
             )
         elif label == "tabs.find":
             result = OpenCliDaemonResult("tabs-find-1", data=list(self.host_tabs))
+        elif label == "tabs.list":
+            data = (
+                list(self.session_tabs)
+                if self.session_tabs is not None
+                else (
+                    [
+                        {
+                            "page": "owned-search-page",
+                            "url": self.page_url,
+                            "active": False,
+                        }
+                    ]
+                    if "owned-search-page" in self.owned_tabs
+                    else []
+                )
+            )
+            result = OpenCliDaemonResult("tabs-list-1", data=data)
         elif label == "tabs.new":
             page = "owned-search-page"
             self.owned_tabs.add(page)
@@ -328,6 +346,7 @@ def test_direct_production_probe_executes_ready_browser_observation_without_cont
         "status.validate",
         "control.activate",
         "tabs.find",
+        "tabs.list",
         "tabs.new",
         "browser.get-url",
         "browser.state",
@@ -338,6 +357,88 @@ def test_direct_production_probe_executes_ready_browser_observation_without_cont
     assert tabs_new["idleTimeout"] == 60
     assert daemon.user_tabs == {"user-host-page", "user-other-page"}
     assert all(call[0] != "tabs.close" for call in daemon.calls)
+
+
+def test_direct_production_probe_reuses_one_broker_search_tab_across_query_groups() -> None:
+    clock = _Clock()
+    daemon = _FakeDaemon(clock)
+
+    first_reason = probe_wtscli_liepin_session(
+        daemon=daemon,
+        bridge_requirement=BRIDGE_REQUIREMENT,
+        control_key=CONTROL_KEY,
+        deadline_at=clock() + 10,
+        monotonic_clock=clock,
+        poll_wait=clock.advance,
+    )
+    second_reason = probe_wtscli_liepin_session(
+        daemon=daemon,
+        bridge_requirement=BRIDGE_REQUIREMENT,
+        control_key=CONTROL_KEY,
+        deadline_at=clock() + 10,
+        monotonic_clock=clock,
+        poll_wait=clock.advance,
+    )
+
+    assert first_reason is None
+    assert second_reason is None
+    assert [label for label, *_ in daemon.calls].count("tabs.new") == 1
+    assert [label for label, *_ in daemon.calls].count("tabs.list") == 2
+    assert daemon.owned_tabs == {"owned-search-page"}
+    browser_calls = [call for call in daemon.calls if call[0].startswith("browser.")]
+    assert all(call[1]["session"] == "st_liepin_search" for call in browser_calls)
+
+
+@pytest.mark.parametrize(
+    "observed_tabs",
+    (
+        [
+            {
+                "page": "owned-search-page",
+                "url": SEARCH_URL,
+                "active": False,
+            },
+            {
+                "page": "owned-search-page-2",
+                "url": SEARCH_URL,
+                "active": False,
+            },
+        ],
+        [
+            {
+                "page": "owned-search-page",
+                "url": "javascript:alert(1)",
+                "active": False,
+            }
+        ],
+        [
+            {
+                "page": "owned-search-page",
+                "url": SEARCH_URL,
+                "active": True,
+            }
+        ],
+    ),
+)
+def test_direct_production_probe_fails_closed_on_ambiguous_or_invalid_broker_search_session(
+    observed_tabs: list[dict[str, object]],
+) -> None:
+    clock = _Clock()
+    daemon = _FakeDaemon(clock)
+    daemon.session_tabs = observed_tabs
+
+    reason = probe_wtscli_liepin_session(
+        daemon=daemon,
+        bridge_requirement=BRIDGE_REQUIREMENT,
+        control_key=CONTROL_KEY,
+        deadline_at=clock() + 10,
+        monotonic_clock=clock,
+        poll_wait=clock.advance,
+    )
+
+    assert reason == "liepin_opencli_status_unavailable"
+    assert "tabs.new" not in [label for label, *_ in daemon.calls]
+    assert not any(label.startswith("browser.") for label, *_ in daemon.calls)
 
 
 def test_direct_production_probe_returns_browser_readiness_failure() -> None:

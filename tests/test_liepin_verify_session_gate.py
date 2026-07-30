@@ -15,6 +15,7 @@ from seektalent.providers.liepin.client import LiepinWorkerModeError
 from seektalent.providers.liepin.browser_environment import (
     BrowserBridgeEnvironmentStatus,
 )
+from seektalent.providers.liepin.liepin_site_adapter import LiepinOpenCliSiteConfig
 from seektalent.sources.liepin.reason_codes import public_source_problem_message
 from tests.browser_bridge_bundle_fixtures import exact_browser_bridge_requirement
 from tests.settings_factory import make_settings
@@ -101,6 +102,10 @@ def test_production_gate_executes_direct_wtscli_success_path(
     assert probe_calls[0]["daemon"] is daemon
     assert probe_calls[0]["bridge_requirement"] == exact_browser_bridge_requirement()
     assert probe_calls[0]["deadline_at"] > 0
+    assert probe_calls[0]["control_key"] == LiepinOpenCliSiteConfig(
+        allowed_hosts=(),
+        allowed_start_urls=(),
+    ).control_key
     assert daemon.closed is True
 
 

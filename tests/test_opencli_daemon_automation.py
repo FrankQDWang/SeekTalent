@@ -9,13 +9,24 @@ from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 from seektalent.opencli_browser.contracts import (
     OpenCliBrowserConfig,
     OpenCliBrowserError,
+    OpenCliTabKind,
 )
 from seektalent.opencli_browser.controlled_tab_lock import (
     CONTROLLED_TAB_HELPER_TIMEOUT_SECONDS,
     install_script,
 )
 from seektalent.opencli_browser.daemon_transport import OpenCliDaemonResult
-from seektalent.opencli_browser.reason_codes import OPENCLI_PAGE_NOT_READY, OPENCLI_SELECTOR_NOT_FOUND
+from seektalent.opencli_browser.reason_codes import (
+    OPENCLI_EXTENSION_DISCONNECTED,
+    OPENCLI_OWNED_TAB_MISSING,
+    OPENCLI_PAGE_NOT_READY,
+    OPENCLI_SELECTOR_NOT_FOUND,
+    OPENCLI_STATUS_UNAVAILABLE,
+    OPENCLI_TIMEOUT,
+)
+from seektalent.providers.liepin.liepin_opencli_policy import (
+    liepin_broker_tab_session,
+)
 
 
 class NoSubprocessCommands:
@@ -28,6 +39,7 @@ class RecordingDaemon:
         self.calls: list[tuple[str, dict[str, object], float]] = []
         self.closed = False
         self.tab_count = 0
+        self.session_pages: dict[str, str] = {}
 
     def close(self) -> None:
         self.closed = True
@@ -90,19 +102,34 @@ class RecordingDaemon:
                     ],
                 )
             if payload["op"] == "list":
-                page = str(payload.get("page") or "page-1")
+                session = str(payload["session"])
+                page = self.session_pages.get(session)
                 return OpenCliDaemonResult(
                     "tabs-1",
-                    data=[{"page": page, "url": "https://h.liepin.com/resume/search", "active": False}],
+                    data=(
+                        [
+                            {
+                                "page": page,
+                                "url": "https://h.liepin.com/resume/search",
+                                "active": False,
+                            }
+                        ]
+                        if page is not None
+                        else []
+                    ),
+                    idle_deadline_at=123456 if page is not None else None,
                 )
             if payload["op"] == "new":
                 self.tab_count += 1
+                page = f"owned-{self.tab_count}"
+                self.session_pages[str(payload["session"])] = page
                 return OpenCliDaemonResult(
                     "tabs-new-1",
                     data={"active": False, "placement": "borrowed-host-window"},
-                    page=f"owned-{self.tab_count}",
+                    page=page,
                     idle_deadline_at=123456,
                 )
+            self.session_pages.pop(str(payload["session"]), None)
             return OpenCliDaemonResult("tabs-1", data={"outcome": "closed"}, page=str(payload["page"]))
         raise AssertionError(f"unexpected daemon action: {action}")
 
@@ -176,43 +203,355 @@ def test_daemon_automation_requires_host_scoped_tab_creation() -> None:
     assert daemon.calls == []
 
 
-def test_daemon_automation_creates_each_owned_tab_in_the_existing_host_window() -> None:
+@pytest.mark.parametrize("detail_count", (3, 5, 10))
+def test_daemon_automation_reuses_one_detail_tab_in_the_existing_host_window(
+    detail_count: int,
+) -> None:
     daemon = RecordingDaemon()
     browser = automation(daemon)
 
     scope = browser.activate_control_scope("lane-key")
     host = browser.find_host_tabs("https://h.liepin.com/")[0]
-    owned_tabs = [
-        browser.open_owned_tab(
+    search_tab, search_reused = browser.acquire_owned_tab(
+        host_page=host.page_id,
+        url="https://h.liepin.com/resume/search",
+        tab_kind="search",
+    )
+    detail_tabs = [
+        browser.acquire_owned_tab(
             host_page=host.page_id,
-            url=(
-                "https://h.liepin.com/resume/search"
-                if index == 0
-                else f"https://h.liepin.com/resume/detail?index={index}"
-            ),
-            tab_kind="search" if index == 0 else "detail",
+            url=f"https://h.liepin.com/resume/detail?index={index}",
+            tab_kind="detail",
         )
-        for index in range(4)
+        for index in range(detail_count)
     ]
     browser.readonly_eval("location.href")
     listed = browser.run_browser_command("tab", ("list",))
     calls_before_select = len(daemon.calls)
-    browser.run_browser_command("tab", ("select", owned_tabs[0].page_id))
+    browser.run_browser_command("tab", ("select", search_tab.page_id))
     assert len(daemon.calls) == calls_before_select
     browser.readonly_eval("location.href")
 
     assert scope.fence_token == 7
-    assert len({tab.session for tab in owned_tabs}) == 4
-    assert len({tab.tab_token for tab in owned_tabs}) == 4
+    assert search_reused is False
+    assert [reused for _tab, reused in detail_tabs] == [False] + [True] * (detail_count - 1)
+    assert len({tab.page_id for tab, _reused in detail_tabs}) == 1
+    assert len({tab.session for tab, _reused in detail_tabs}) == 1
+    assert len({tab.tab_token for tab, _reused in detail_tabs}) == 1
     new_tab_calls = [params for action, params, _timeout in daemon.calls if action == "tabs" and params["op"] == "new"]
-    assert len(new_tab_calls) == 4
+    assert len(new_tab_calls) == 2
     assert all(params["hostPage"] == "host-1" and params["active"] is False for params in new_tab_calls)
     assert all(params["idleTimeout"] == 60 for params in new_tab_calls)
-    assert len(json.loads(listed)) == 4
-    assert daemon.calls[-1][1]["page"] == owned_tabs[0].page_id
-    assert daemon.calls[-1][1]["session"] == owned_tabs[0].session
+    assert len(json.loads(listed)) == 2
+    assert daemon.calls[-1][1]["page"] == search_tab.page_id
+    assert daemon.calls[-1][1]["session"] == search_tab.session
     assert daemon.calls[-1][1]["controlKey"] == "lane-key"
     assert daemon.calls[-1][1]["fenceToken"] == 7
+
+
+def test_liepin_broker_tab_session_rejects_unknown_kind() -> None:
+    with pytest.raises(
+        ValueError,
+        match="liepin broker tab kind must be search or detail",
+    ):
+        liepin_broker_tab_session("other")
+
+
+def test_owned_tab_selection_fails_closed_on_same_kind_different_session() -> None:
+    daemon = RecordingDaemon()
+    browser = automation(daemon)
+    browser.activate_control_scope("lane-key")
+    first = browser.open_owned_tab(
+        host_page="host-1",
+        url="https://example.com/detail-1",
+        tab_kind="detail",
+        session="st_liepin_detail",
+    )
+    new_calls_before = sum(
+        action == "tabs" and params.get("op") == "new"
+        for action, params, _timeout in daemon.calls
+    )
+
+    with pytest.raises(OpenCliBrowserError) as selected:
+        browser.select_owned_tab(
+            "detail",
+            session="st_other_detail",
+        )
+    with pytest.raises(OpenCliBrowserError) as acquired:
+        browser.acquire_owned_tab(
+            host_page="host-1",
+            url="https://example.com/detail-2",
+            tab_kind="detail",
+            session="st_other_detail",
+        )
+
+    assert selected.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
+    assert acquired.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
+    assert browser._owned_tabs == {first.page_id: first}  # noqa: SLF001
+    assert (
+        sum(
+            action == "tabs" and params.get("op") == "new"
+            for action, params, _timeout in daemon.calls
+        )
+        == new_calls_before
+    )
+
+
+@pytest.mark.parametrize("tab_kind", ("search", "detail"))
+def test_daemon_automation_user_closed_signal_requires_extension_confirmation(
+    tab_kind: OpenCliTabKind,
+) -> None:
+    class UserClosedTabDaemon(RecordingDaemon):
+        missing_once = True
+
+        def command(
+            self,
+            action: str,
+            params: Mapping[str, object],
+            *,
+            timeout_seconds: float,
+        ) -> OpenCliDaemonResult:
+            if action == "navigate" and self.missing_once:
+                self.missing_once = False
+                raise OpenCliBrowserError(OPENCLI_OWNED_TAB_MISSING)
+            return super().command(action, params, timeout_seconds=timeout_seconds)
+
+    daemon = UserClosedTabDaemon()
+    browser = automation(daemon)
+    browser.activate_control_scope("lane-key")
+    first, _reused = browser.acquire_owned_tab(
+        host_page="host-1",
+        url=f"https://h.liepin.com/resume/{tab_kind}?index=1",
+        tab_kind=tab_kind,
+    )
+
+    with pytest.raises(OpenCliBrowserError) as raised:
+        browser.acquire_owned_tab(
+            host_page="host-1",
+            url=f"https://h.liepin.com/resume/{tab_kind}?index=2",
+            tab_kind=tab_kind,
+        )
+
+    assert raised.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
+    assert daemon.tab_count == 1
+    assert browser._owned_tabs == {first.page_id: first}  # noqa: SLF001
+    assert tab_kind in browser._retiring_tabs  # noqa: SLF001
+    assert not any(
+        action == "tabs" and params.get("op") == "close"
+        for action, params, _timeout in daemon.calls
+    )
+
+
+@pytest.mark.parametrize("reason", (OPENCLI_TIMEOUT, OPENCLI_EXTENSION_DISCONNECTED))
+def test_daemon_automation_does_not_replace_detail_when_navigation_is_unknown(
+    reason: str,
+) -> None:
+    class UnknownNavigationDaemon(RecordingDaemon):
+        fail_navigation = False
+
+        def command(
+            self,
+            action: str,
+            params: Mapping[str, object],
+            *,
+            timeout_seconds: float,
+        ) -> OpenCliDaemonResult:
+            if action == "navigate" and self.fail_navigation:
+                raise OpenCliBrowserError(reason)
+            return super().command(action, params, timeout_seconds=timeout_seconds)
+
+    daemon = UnknownNavigationDaemon()
+    browser = automation(daemon)
+    browser.activate_control_scope("lane-key")
+    first, _reused = browser.acquire_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/resume/detail?index=1",
+        tab_kind="detail",
+    )
+    daemon.fail_navigation = True
+
+    with pytest.raises(OpenCliBrowserError) as raised:
+        browser.acquire_owned_tab(
+            host_page="host-1",
+            url="https://h.liepin.com/resume/detail?index=2",
+            tab_kind="detail",
+        )
+
+    assert raised.value.safe_reason_code == reason
+    assert daemon.tab_count == 1
+    assert browser._owned_tabs == {first.page_id: first}  # noqa: SLF001
+
+
+def test_daemon_automation_retiring_transport_unknown_stays_sticky() -> None:
+    class DisconnectOnObservationDaemon(RecordingDaemon):
+        disconnect_observation = False
+
+        def command(
+            self,
+            action: str,
+            params: Mapping[str, object],
+            *,
+            timeout_seconds: float,
+        ) -> OpenCliDaemonResult:
+            if action == "tabs" and params.get("op") == "list" and self.disconnect_observation:
+                raise OpenCliBrowserError(OPENCLI_EXTENSION_DISCONNECTED)
+            return super().command(action, params, timeout_seconds=timeout_seconds)
+
+    daemon = DisconnectOnObservationDaemon()
+    browser = automation(daemon)
+    browser.activate_control_scope("lane-key")
+    first, _reused = browser.acquire_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/resume/detail?index=1",
+        tab_kind="detail",
+    )
+
+    browser.retire_owned_tab("detail", safe_reason_code=OPENCLI_PAGE_NOT_READY)
+    daemon.disconnect_observation = True
+
+    with pytest.raises(OpenCliBrowserError) as raised:
+        browser.acquire_owned_tab(
+            host_page="host-1",
+            url="https://h.liepin.com/resume/detail?index=2",
+            tab_kind="detail",
+        )
+
+    assert raised.value.safe_reason_code == OPENCLI_EXTENSION_DISCONNECTED
+    assert daemon.tab_count == 1
+    assert browser._owned_tabs == {first.page_id: first}  # noqa: SLF001
+    assert browser._retiring_tabs["detail"].safe_reason_code == OPENCLI_PAGE_NOT_READY  # noqa: SLF001
+    assert not any(
+        action == "tabs" and params.get("op") == "close"
+        for action, params, _timeout in daemon.calls
+    )
+
+
+def test_daemon_automation_reconciles_extension_idle_then_allows_one_replacement() -> None:
+    daemon = RecordingDaemon()
+    browser = automation(daemon)
+    browser.activate_control_scope("lane-key")
+    first, _reused = browser.acquire_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/resume/detail?index=1",
+        tab_kind="detail",
+    )
+
+    browser.retire_owned_tab("detail", safe_reason_code=OPENCLI_PAGE_NOT_READY)
+    with pytest.raises(OpenCliBrowserError) as still_live:
+        browser.acquire_owned_tab(
+            host_page="host-1",
+            url="https://h.liepin.com/resume/detail?index=2",
+            tab_kind="detail",
+        )
+    assert still_live.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
+    assert daemon.tab_count == 1
+
+    daemon.session_pages.pop(first.session)
+    replacement, reused = browser.acquire_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/resume/detail?index=2",
+        tab_kind="detail",
+    )
+    assert reused is False
+    assert replacement.page_id != first.page_id
+    assert daemon.tab_count == 2
+
+    browser.retire_owned_tab("detail", safe_reason_code=OPENCLI_PAGE_NOT_READY)
+    daemon.session_pages.pop(replacement.session)
+    with pytest.raises(OpenCliBrowserError) as exhausted:
+        browser.acquire_owned_tab(
+            host_page="host-1",
+            url="https://h.liepin.com/resume/detail?index=3",
+            tab_kind="detail",
+        )
+    assert exhausted.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
+    assert daemon.tab_count == 2
+    assert not any(
+        action == "tabs" and params.get("op") == "close"
+        for action, params, _timeout in daemon.calls
+    )
+
+
+def test_daemon_automation_hundred_poison_idle_cycles_have_bounded_allocations() -> None:
+    daemon = RecordingDaemon()
+    browser = automation(daemon)
+    browser.activate_control_scope("lane-key")
+    current, _reused = browser.acquire_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/resume/detail?index=0",
+        tab_kind="detail",
+    )
+    outcomes: list[str] = ["ok"]
+
+    for index in range(1, 101):
+        if "detail" not in browser._retiring_tabs and browser._owned_tabs:  # noqa: SLF001
+            browser.retire_owned_tab("detail", safe_reason_code=OPENCLI_PAGE_NOT_READY)
+            daemon.session_pages.pop(current.session, None)
+        try:
+            current, _reused = browser.acquire_owned_tab(
+                host_page="host-1",
+                url=f"https://h.liepin.com/resume/detail?index={index}",
+                tab_kind="detail",
+            )
+        except OpenCliBrowserError as exc:
+            outcomes.append(exc.safe_reason_code)
+        else:
+            outcomes.append("ok")
+
+    assert outcomes.count("ok") == 2
+    assert outcomes.count(OPENCLI_STATUS_UNAVAILABLE) == 99
+    assert daemon.tab_count == 2
+    assert len(browser._owned_tabs) <= 1  # noqa: SLF001
+    assert not any(
+        action == "tabs" and params.get("op") == "close"
+        for action, params, _timeout in daemon.calls
+    )
+
+
+def test_daemon_automation_hundred_user_closed_cycles_have_bounded_allocations() -> None:
+    class RepeatedUserClosedDaemon(RecordingDaemon):
+        def command(
+            self,
+            action: str,
+            params: Mapping[str, object],
+            *,
+            timeout_seconds: float,
+        ) -> OpenCliDaemonResult:
+            if action == "navigate":
+                self.session_pages.pop(str(params["session"]), None)
+                raise OpenCliBrowserError(OPENCLI_OWNED_TAB_MISSING)
+            return super().command(action, params, timeout_seconds=timeout_seconds)
+
+    daemon = RepeatedUserClosedDaemon()
+    browser = automation(daemon)
+    browser.activate_control_scope("lane-key")
+    browser.acquire_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/resume/detail?index=0",
+        tab_kind="detail",
+    )
+    outcomes: list[str] = ["ok"]
+
+    for index in range(1, 101):
+        try:
+            browser.acquire_owned_tab(
+                host_page="host-1",
+                url=f"https://h.liepin.com/resume/detail?index={index}",
+                tab_kind="detail",
+            )
+        except OpenCliBrowserError as exc:
+            outcomes.append(exc.safe_reason_code)
+        else:
+            outcomes.append("ok")
+
+    assert outcomes.count("ok") == 2
+    assert outcomes.count(OPENCLI_STATUS_UNAVAILABLE) == 99
+    assert daemon.tab_count == 2
+    assert len(browser._owned_tabs) <= 1  # noqa: SLF001
+    assert not any(
+        action == "tabs" and params.get("op") == "close"
+        for action, params, _timeout in daemon.calls
+    )
 
 
 def test_daemon_automation_waits_for_owned_page_navigation_url() -> None:
@@ -293,7 +632,7 @@ def test_daemon_automation_reports_explicit_page_not_ready_at_deadline(
     assert delays == [0.1, 0.1]
 
 
-def test_finishing_scope_releases_memory_without_requesting_tab_reclaim() -> None:
+def test_finishing_scope_keeps_sidecar_owned_tabs_without_requesting_tab_reclaim() -> None:
     daemon = RecordingDaemon()
     browser = automation(daemon)
 
@@ -311,7 +650,190 @@ def test_finishing_scope_releases_memory_without_requesting_tab_reclaim() -> Non
     assert scope.scope_id
     assert tab.page_id == "owned-1"
     assert browser._control_scope is None  # noqa: SLF001
-    assert browser._owned_tabs == {}  # noqa: SLF001
+    assert browser._owned_tabs == {tab.page_id: tab}  # noqa: SLF001
+
+
+def test_new_scope_can_select_a_sidecar_lifecycle_owned_tab() -> None:
+    daemon = RecordingDaemon()
+    browser = automation(daemon)
+    browser.activate_control_scope("lane-key")
+    tab = browser.open_owned_tab(
+        host_page="host-1",
+        url="https://example.com/search",
+        tab_kind="search",
+    )
+    browser.finish_control_scope()
+
+    browser.activate_control_scope("lane-key")
+    selected = browser.select_owned_tab("search")
+    browser.readonly_eval("location.href")
+
+    assert selected == tab
+    assert daemon.calls[-1][1]["page"] == tab.page_id
+    assert daemon.calls[-1][1]["session"] == tab.session
+
+
+def test_new_sidecar_instance_recovers_only_the_live_extension_owned_tab() -> None:
+    daemon = RecordingDaemon()
+    first_instance = automation(daemon)
+    first_instance.activate_control_scope("lane-key")
+    first_instance.open_owned_tab(
+        host_page="host-1",
+        url="https://example.com/detail-1",
+        tab_kind="detail",
+    )
+    first_instance.finish_control_scope()
+
+    restarted_instance = automation(daemon)
+    restarted_instance.activate_control_scope("lane-key")
+    recovered = restarted_instance.select_owned_tab("detail")
+
+    assert recovered is not None
+    assert recovered.page_id == "owned-1"
+    assert recovered.session == "st_owned_detail"
+    assert restarted_instance._owned_tabs == {"owned-1": recovered}  # noqa: SLF001
+    recover_calls = [
+        params
+        for action, params, _timeout in daemon.calls
+        if action == "tabs" and params.get("op") == "list"
+    ]
+    assert recover_calls[-1]["session"] == "st_owned_detail"
+
+
+def test_runtime_generation_turnover_reuses_live_search_and_detail_sessions_without_new_tabs() -> None:
+    daemon = RecordingDaemon()
+    first_generation = automation(daemon)
+    first_generation.activate_control_scope("lane-key")
+    search, search_reused = first_generation.acquire_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/resume/search",
+        tab_kind="search",
+        session="st_liepin_search",
+    )
+    detail, detail_reused = first_generation.acquire_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/resume/detail/1",
+        tab_kind="detail",
+        session="st_liepin_detail",
+    )
+    first_generation.finish_control_scope()
+
+    second_generation = automation(daemon)
+    second_generation.activate_control_scope("lane-key")
+    recovered_search, recovered_search_reused = second_generation.acquire_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/resume/search?query=2",
+        tab_kind="search",
+        session="st_liepin_search",
+    )
+    recovered_detail, recovered_detail_reused = second_generation.acquire_owned_tab(
+        host_page="host-1",
+        url="https://h.liepin.com/resume/detail/2",
+        tab_kind="detail",
+        session="st_liepin_detail",
+    )
+
+    assert search_reused is False
+    assert detail_reused is False
+    assert recovered_search_reused is True
+    assert recovered_detail_reused is True
+    assert recovered_search.page_id == search.page_id
+    assert recovered_detail.page_id == detail.page_id
+    assert daemon.tab_count == 2
+    assert set(daemon.session_pages) == {
+        "st_liepin_search",
+        "st_liepin_detail",
+    }
+
+
+@pytest.mark.parametrize(
+    "observed_tabs",
+    (
+        [
+            {
+                "page": "owned-1",
+                "url": "https://example.com/detail-1",
+                "active": False,
+            },
+            {
+                "page": "owned-2",
+                "url": "https://example.com/detail-2",
+                "active": False,
+            },
+        ],
+        [
+            {
+                "page": "owned-1",
+                "url": "javascript:alert(1)",
+                "active": False,
+            }
+        ],
+    ),
+)
+def test_new_sidecar_instance_fails_closed_on_ambiguous_or_invalid_recovery(
+    observed_tabs: list[dict[str, object]],
+) -> None:
+    class UnsafeRecoveryDaemon(RecordingDaemon):
+        def command(
+            self,
+            action: str,
+            params: Mapping[str, object],
+            *,
+            timeout_seconds: float,
+        ) -> OpenCliDaemonResult:
+            if action == "tabs" and params.get("op") == "list":
+                payload = dict(params)
+                self.calls.append((action, payload, timeout_seconds))
+                return OpenCliDaemonResult("tabs-unsafe", data=observed_tabs)
+            return super().command(action, params, timeout_seconds=timeout_seconds)
+
+    daemon = UnsafeRecoveryDaemon()
+    restarted_instance = automation(daemon)
+    restarted_instance.activate_control_scope("lane-key")
+
+    with pytest.raises(OpenCliBrowserError) as raised:
+        restarted_instance.acquire_owned_tab(
+            host_page="host-1",
+            url="https://example.com/detail-3",
+            tab_kind="detail",
+        )
+
+    assert raised.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
+    assert daemon.tab_count == 0
+    assert restarted_instance._owned_tabs == {}  # noqa: SLF001
+
+
+@pytest.mark.parametrize(
+    ("command", "args"),
+    (
+        ("open", ("--tab", "owned-1", "https://example.com/detail-2")),
+        ("tab", ("select", "owned-1")),
+        ("state", ()),
+    ),
+)
+def test_retiring_owned_page_rejects_explicit_navigation_selection_and_browser_operation(
+    command: str,
+    args: tuple[str, ...],
+) -> None:
+    daemon = RecordingDaemon()
+    browser = automation(daemon)
+    browser.activate_control_scope("lane-key")
+    browser.open_owned_tab(
+        host_page="host-1",
+        url="https://example.com/detail-1",
+        tab_kind="detail",
+    )
+    browser.retire_owned_tab(
+        "detail",
+        safe_reason_code=OPENCLI_PAGE_NOT_READY,
+    )
+    daemon.calls.clear()
+
+    with pytest.raises(OpenCliBrowserError) as raised:
+        browser.run_browser_command(command, args)
+
+    assert raised.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
+    assert daemon.calls == []
 
 
 def test_controlled_tab_lock_uses_dokobot_style_veil_and_double_line_countdown() -> None:

@@ -75,9 +75,21 @@ class _LiepinSearchWorkflowSite:
         return self.adapter.extract_structured_liepin_cards(source_run_id=source_run_id, max_cards=max_cards)
 
     def observe_liepin_search_state(self) -> OpenCliBrowserResult:
+        if self.adapter._cards_operation_executor is not None:
+            return OpenCliBrowserResult(
+                ok=True,
+                action="observe_liepin_search_state",
+                observation={"source_port_managed": True},
+            )
         return self.adapter.state()
 
     def observe_liepin_detail_state(self) -> OpenCliBrowserResult:
+        if self.adapter._cards_operation_executor is not None:
+            return OpenCliBrowserResult(
+                ok=True,
+                action="observe_liepin_detail_state",
+                observation={"source_port_managed": True},
+            )
         return self.adapter.state()
 
     def run_liepin_details_operation(

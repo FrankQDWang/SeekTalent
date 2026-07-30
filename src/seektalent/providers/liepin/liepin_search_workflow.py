@@ -523,6 +523,8 @@ class LiepinSearchWorkflow:
                 source_run_id=request.source_run_id,
                 rank=selected_rank,
             )
+            if restored_page_id == "source-port-managed":
+                continue
             if restored_page_id is None:
                 if has_cached_url_for_remaining_candidate():
                     continue

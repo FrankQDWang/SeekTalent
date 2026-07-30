@@ -27,6 +27,8 @@ class HostAutomation:
     daemon_enabled: bool = True
     scope_calls: int = 0
     opened: list[tuple[str, str, OpenCliTabKind]] = field(default_factory=list)
+    navigated: list[tuple[str, str]] = field(default_factory=list)
+    owned_by_kind: dict[OpenCliTabKind, OpenCliOwnedTab] = field(default_factory=dict)
 
     def status(self) -> OpenCliBrowserResult:
         return OpenCliBrowserResult(ok=True, action="status")
@@ -45,16 +47,47 @@ class HostAutomation:
         host_page: str,
         url: str,
         tab_kind: OpenCliTabKind,
+        session: str | None = None,
     ) -> OpenCliOwnedTab:
         self.opened.append((host_page, url, tab_kind))
         index = len(self.opened)
-        return OpenCliOwnedTab(
+        owned = OpenCliOwnedTab(
             tab_token=f"token-{index}",
-            session=f"session-{index}",
+            session=session or f"session-{index}",
             page_id=f"owned-{index}",
             tab_kind=tab_kind,
             idle_deadline_at=123456,
         )
+        self.owned_by_kind[tab_kind] = owned
+        return owned
+
+    def select_owned_tab(
+        self,
+        tab_kind: OpenCliTabKind,
+        *,
+        session: str | None = None,
+    ) -> OpenCliOwnedTab | None:
+        del session
+        return self.owned_by_kind.get(tab_kind)
+
+    def acquire_owned_tab(
+        self,
+        *,
+        host_page: str,
+        url: str,
+        tab_kind: OpenCliTabKind,
+        session: str | None = None,
+    ) -> tuple[OpenCliOwnedTab, bool]:
+        owned = self.select_owned_tab(tab_kind, session=session)
+        if owned is not None:
+            self.navigated.append((owned.page_id, url))
+            return owned, True
+        return self.open_owned_tab(
+            host_page=host_page,
+            url=url,
+            tab_kind=tab_kind,
+            session=session,
+        ), False
 
 
 def host(
@@ -185,7 +218,7 @@ def test_session_probe_is_read_only_and_missing_host_requires_login(tmp_path: Pa
     assert automation.opened == []
 
 
-def test_scope_uses_one_host_window_for_any_number_of_owned_tabs(tmp_path: Path) -> None:
+def test_scope_uses_one_host_window_with_one_search_and_one_detail_tab(tmp_path: Path) -> None:
     automation = HostAutomation((host("host-a", window_id=10, active=True, focused=True),))
     adapter = site(tmp_path, automation)
 
@@ -204,6 +237,7 @@ def test_scope_uses_one_host_window_for_any_number_of_owned_tabs(tmp_path: Path)
     )
 
     assert all(result.ok for result in opened)
-    assert len(automation.opened) == 4
+    assert len(automation.opened) == 2
     assert all(host_page == "host-a" for host_page, _url, _kind in automation.opened)
-    assert [kind for _host, _url, kind in automation.opened] == ["search", "detail", "detail", "detail"]
+    assert [kind for _host, _url, kind in automation.opened] == ["search", "detail"]
+    assert [page for page, _url in automation.navigated] == ["owned-2", "owned-2"]

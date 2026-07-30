@@ -10,6 +10,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, cast
@@ -98,13 +99,12 @@ class OpenCliDaemonClient:
         self.host = requirement.runtime_identity.endpoint.host
         self.port = requirement.runtime_identity.endpoint.port
         self._connection_factory = connection_factory or _http_connection
-        self._connection: http.client.HTTPConnection | None = None
         self._verified = False
         self._lock = threading.Lock()
 
     def close(self) -> None:
         with self._lock:
-            self._drop_connection()
+            self._verified = False
 
     def new_connection(self) -> OpenCliDaemonClient:
         return OpenCliDaemonClient(
@@ -185,7 +185,7 @@ class OpenCliDaemonClient:
             if payload.get("ok") is not True:
                 self._raise_command_error(status, payload)
             if status < 200 or status >= 300 or payload.get("id") != command_id:
-                self._drop_connection()
+                self._verified = False
                 raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
             return OpenCliDaemonResult(
                 command_id=command_id,
@@ -228,13 +228,6 @@ class OpenCliDaemonClient:
         timeout_seconds: float,
     ) -> tuple[int, dict[str, object], str]:
         ownership = _load_daemon_ownership(self.requirement)
-        connection = self._connection
-        if connection is None:
-            connection = self._connection_factory(self.host, self.port, timeout_seconds)
-            self._connection = connection
-        connection.timeout = timeout_seconds
-        if connection.sock is not None:
-            connection.sock.settimeout(timeout_seconds)
         encoded_body = (
             None
             if body is None
@@ -249,7 +242,16 @@ class OpenCliDaemonClient:
             headers[transport.ownership_header] = ownership.token
         if encoded_body is not None:
             headers["Content-Type"] = "application/json"
+        connection: http.client.HTTPConnection | None = None
         try:
+            connection = self._connection_factory(
+                self.host,
+                self.port,
+                timeout_seconds,
+            )
+            connection.timeout = timeout_seconds
+            if connection.sock is not None:
+                connection.sock.settimeout(timeout_seconds)
             connection.request(method, path, body=encoded_body, headers=headers)
             response = connection.getresponse()
             expected_owner_hash = ownership.token_hash if ownership is not None else None
@@ -259,25 +261,33 @@ class OpenCliDaemonClient:
                 or expected_owner_hash is None
                 or response.getheader(transport.owner_proof_header) != expected_owner_hash
             ):
-                self._drop_connection()
+                self._verified = False
                 raise OpenCliBrowserError(OPENCLI_FOREIGN_OWNER)
             raw = response.read(OPENCLI_DAEMON_MAX_RESPONSE_BYTES + 1)
             status = response.status
-            if response.will_close:
-                self._drop_connection()
+            if len(raw) > OPENCLI_DAEMON_MAX_RESPONSE_BYTES:
+                self._verified = False
+                raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+            try:
+                payload = _json_object_loads_with_unique_keys(raw)
+            except (
+                UnicodeDecodeError,
+                json.JSONDecodeError,
+                ValueError,
+            ) as exc:
+                self._verified = False
+                raise OpenCliBrowserError(
+                    OPENCLI_STATUS_UNAVAILABLE
+                ) from exc
         except OpenCliBrowserError:
             raise
         except (OSError, socket.timeout, http.client.HTTPException) as exc:
-            self._drop_connection()
+            self._verified = False
             raise OpenCliBrowserError(OPENCLI_DAEMON_NOT_RUNNING) from exc
-        if len(raw) > OPENCLI_DAEMON_MAX_RESPONSE_BYTES:
-            self._drop_connection()
-            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
-        try:
-            payload = _json_object_loads_with_unique_keys(raw)
-        except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
-            self._drop_connection()
-            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE) from exc
+        finally:
+            if connection is not None:
+                with suppress(OSError):
+                    connection.close()
         return (
             status,
             {str(key): value for key, value in payload.items()},
@@ -304,17 +314,6 @@ class OpenCliDaemonClient:
         if reason.startswith("opencli_bridge_"):
             self._verified = False
         raise OpenCliBrowserError(reason)
-
-    def _drop_connection(self) -> None:
-        connection = self._connection
-        self._connection = None
-        self._verified = False
-        if connection is not None:
-            try:
-                connection.close()
-            except OSError:
-                return
-
 
 def _load_daemon_ownership(
     requirement: OpenCliBridgeRequirement,
