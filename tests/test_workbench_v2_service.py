@@ -3691,7 +3691,7 @@ def test_v2_runtime_display_drops_non_string_query_group_scalars(field: str, bad
             "liepin_opencli_daemon_not_running",
             "source_browser_backend_unavailable",
             "runtime/daemon",
-            "WTSCLI 服务",
+            "重新打开当前 SeekTalent/Domi",
         ),
         (
             "liepin_opencli_extension_disconnected",

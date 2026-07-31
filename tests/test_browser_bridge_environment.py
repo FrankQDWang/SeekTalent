@@ -128,7 +128,7 @@ def test_environment_check_classifies_installed_pair_failures(
         (
             _Client(error="opencli_daemon_not_running"),
             "wtscli_daemon_missing",
-            "WTSCLI 服务",
+            "重新打开当前 SeekTalent/Domi",
         ),
         (
             _Client(error="opencli_foreign_owner"),
@@ -154,7 +154,7 @@ def test_environment_check_classifies_installed_pair_failures(
                 failure=("bridge", OPENCLI_BRIDGE_BUILD_MISMATCH),
             ),
             "wtscli_daemon_stale",
-            "重新运行环境检查",
+            "重新打开与当前安装包配对的 SeekTalent",
         ),
     ],
 )

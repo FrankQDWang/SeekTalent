@@ -386,6 +386,8 @@ def test_opencli_python_helper_exposes_no_direct_cards_or_resume_search_action()
 
     assert hasattr(LiepinSiteAdapter, "search_liepin_resumes")
     assert "def search_liepin_resumes(" in site_text
+    assert "WtsCliLifecycleSupervisor.attach" in cli_text
+    assert "daemon restart" not in cli_text
     assert 'action == "search_cards"' not in cli_text
     assert 'action == "search_resumes"' not in cli_text
     assert "runner.search_liepin_cards(" not in cli_text
@@ -414,7 +416,6 @@ def test_search_readiness_evidence_exposes_only_safe_surface_state() -> None:
 
 def test_liepin_opencli_policy_rejects_api_ajax_graphql_download_and_export_routes() -> None:
     browser_config = OpenCliBrowserConfig(
-        command=("opencli",),
         session="seektalent-test",
         timeout_seconds=10,
         pacing_enabled=False,

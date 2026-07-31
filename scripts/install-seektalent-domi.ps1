@@ -31,18 +31,18 @@ function Install-SeekTalentDomi {
   }
 
   if (-not $DomiPython) {
-    $DomiPython = Join-Path $env:APPDATA "Domi\runtime\python\bin\python.exe"
+    $DomiPython = $env:SEEKTALENT_DOMI_PYTHON
   }
-  if (-not (Test-Path -Path $DomiPython -PathType Leaf)) {
-    Fail "domi_python_missing" "Domi Python was not found: $DomiPython"
-  }
+ if (-not (Test-Path -Path $DomiPython -PathType Leaf)) {
+    Fail "domi_python_missing" "Set DOMI_PYTHON or SEEKTALENT_DOMI_PYTHON to the Domi-provided Python executable: $DomiPython"
+ }
 
   if (-not $DomiNode) {
-    $DomiNode = Join-Path $env:APPDATA "Domi\runtime\node\node.exe"
+    $DomiNode = if ($env:SEEKTALENT_DOMI_NODE) { $env:SEEKTALENT_DOMI_NODE } else { $env:DOMI_NODE }
   }
-  if (-not (Test-Path -Path $DomiNode -PathType Leaf)) {
-    Fail "domi_node_missing" "Domi Node was not found: $DomiNode"
-  }
+ if (-not (Test-Path -Path $DomiNode -PathType Leaf)) {
+    Fail "domi_node_missing" "Set DOMI_NODE or SEEKTALENT_DOMI_NODE to the Domi-provided Node executable: $DomiNode"
+ }
   if (-not $WtscliBundleDir) {
     $WtscliBundleDir = Join-Path $PSScriptRoot "wtscli-browser-bridge"
   }
@@ -133,6 +133,7 @@ function Install-SeekTalentDomi {
       --domi-node $DomiNode `
       --browser-bridge-bundle-dir $WtscliBundleDir `
       --browser-bridge-prepared-runtime-dir $PreparedRuntimeDir `
+      --product-wheel $ProductWheel `
       @DeliveryManifestArgs `
       --bin-dir $BinDir `
       --print-json
@@ -152,7 +153,7 @@ function Install-SeekTalentDomi {
     $env:Path = "$BinDir;$env:Path"
   }
 
-  Write-Host "SeekTalent Domi install ready. Run: seektalent workbench"
+  Write-Host "SeekTalent Domi install ready. Start with: $PSScriptRoot\start-seektalent-domi.ps1"
   Write-Host "Chrome 扩展目录：$InstallHome\.seektalent\chrome-extension\wtscli"
   Write-Host "打开 chrome://extensions，启用“开发者模式”，选择“加载已解压的扩展程序”，并选择上面的唯一目录。"
   Write-Host "升级后请在该页面点击 WTSCLI 的“重新加载”；若仍显示旧版本，请完全退出并重启 Chrome。"

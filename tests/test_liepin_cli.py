@@ -1,11 +1,7 @@
 from __future__ import annotations
 
-import subprocess
 from types import SimpleNamespace
-from collections.abc import Mapping
 from pathlib import Path
-
-import pytest
 
 import seektalent.cli as cli
 import seektalent.liepin_smoke_cli as smoke_cli
@@ -15,90 +11,6 @@ from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerModeError
 from tests.settings_factory import make_settings
-
-
-def test_workbench_action_reason_preserves_liepin_opencli_reason_only() -> None:
-    assert (
-        cli._workbench_action_reason({"safeReasonCode": "liepin_opencli_identity_intercept"})
-        == "liepin_opencli_identity_intercept"
-    )
-    assert (
-        cli._workbench_action_reason({"safeReasonCode": "liepin_opencli_removed_config"})
-        == "liepin_opencli_removed_config"
-    )
-    assert cli._workbench_action_reason({"safeReasonCode": "liepin_opencli_typo"}) == "liepin_opencli_status_unavailable"
-    assert cli._workbench_action_reason({"safeReasonCode": "source_login_required"}) == "liepin_opencli_status_unavailable"
-    assert cli._workbench_action_reason({"safeReasonCode": ""}) == "liepin_opencli_status_unavailable"
-
-
-def test_workbench_reason_message_covers_search_and_results_readiness() -> None:
-    assert (
-        cli._workbench_reason_message("liepin_opencli_search_input_unapplied")
-        == "猎聘页面响应超时，请稍后重试。"
-    )
-    assert (
-        cli._workbench_reason_message("liepin_opencli_search_not_ready")
-        == "猎聘页面当前不可操作，请切换到 Chrome 查看并处理。"
-    )
-    assert (
-        cli._workbench_reason_message("liepin_opencli_results_not_ready")
-        == "猎聘页面响应超时，请稍后重试。"
-    )
-    assert (
-        cli._workbench_reason_message("liepin_opencli_removed_config")
-        == "检测到已移除的旧即时回收/cleanup 配置，请删除旧配置后重试；"
-        "标签页正常回收仅由 60 秒空闲到期负责。"
-    )
-
-
-def test_workbench_liepin_action_decodes_opencli_helper_output_as_utf8(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured_kwargs: dict[str, object] = {}
-
-    def fake_run(_argv: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        captured_kwargs.update(kwargs)
-        return subprocess.CompletedProcess(
-            _argv,
-            0,
-            stdout='{"ok": true, "action": "status"}',
-            stderr="",
-        )
-
-    monkeypatch.setattr(cli.subprocess, "run", fake_run)
-
-    result = cli._run_workbench_liepin_action("status", env={"PATH": "test"})
-
-    assert result["ok"] is True
-    assert captured_kwargs["encoding"] == "utf-8"
-    assert captured_kwargs["errors"] == "replace"
-
-
-def test_workbench_preflight_timeout_allows_slow_windows_opencli_recover() -> None:
-    assert cli._WORKBENCH_PREFLIGHT_ACTION_TIMEOUT_SECONDS >= 60
-
-
-def test_workbench_preflight_checks_opencli_connection_only(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    actions: list[str] = []
-
-    def fake_action(
-        action: str,
-        *,
-        env: Mapping[str, str],
-        payload: Mapping[str, object] | None = None,
-    ) -> dict[str, object]:
-        del env, payload
-        actions.append(action)
-        return {"ok": True, "action": action, "safeReasonCode": "configured"}
-
-    monkeypatch.setattr(cli, "_run_workbench_liepin_action", fake_action)
-
-    result = cli._run_workbench_liepin_preflight_actions(env={})
-
-    assert result["ok"] is True
-    assert actions == ["status"]
 
 
 def test_liepin_compliance_gate_create_and_verify(capsys, tmp_path: Path) -> None:

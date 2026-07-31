@@ -109,7 +109,6 @@ def host(
 
 def site(tmp_path: Path, automation: HostAutomation) -> LiepinSiteAdapter:
     browser_config = OpenCliBrowserConfig(
-        command=("seektalent-opencli",),
         session="seektalent-liepin",
         timeout_seconds=30,
         pacing_enabled=False,

@@ -19,7 +19,7 @@ on:
       - "src/seektalent/browser_bridge_runtime_receipt.py"
       - "src/seektalent/domi_bootstrap.py"
       - "src/seektalent/opencli_browser/**"
-      - "src/seektalent/opencli_launcher.py"
+      - "src/seektalent/wtscli_runtime.py"
       - "tests/browser_bridge_bundle_fixtures.py"
       - "tests/test_domi_delivery_admission.py"
       - "tests/test_browser_bridge_environment.py"

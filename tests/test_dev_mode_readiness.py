@@ -12,14 +12,6 @@ from seektalent_ui.server import _can_recover_with_dev_mode_env_diagnostics, cre
 from tests.settings_factory import make_settings
 
 
-def _write_opencli_binary(root: Path) -> Path:
-    opencli_bin = root / "apps" / "web-react" / "node_modules" / ".bin" / "opencli"
-    opencli_bin.parent.mkdir(parents=True, exist_ok=True)
-    opencli_bin.write_text("#!/usr/bin/env node\n", encoding="utf-8")
-    opencli_bin.chmod(0o755)
-    return opencli_bin
-
-
 def test_raw_env_diagnostics_do_not_expose_secret_values(tmp_path: Path) -> None:
     skill_path = tmp_path / "liepin.md"
     env = {
@@ -28,7 +20,6 @@ def test_raw_env_diagnostics_do_not_expose_secret_values(tmp_path: Path) -> None
         "SEEKTALENT_CTS_TENANT_SECRET": "tenant-secret-value",
         "SEEKTALENT_LIEPIN_WORKER_MODE": "opencli",
         "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND": "opencli",
-        "SEEKTALENT_LIEPIN_OPENCLI_COMMAND": f"{tmp_path / 'missing-opencli'} --token secret",
         "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET": "account-binding-secret",
     }
 
@@ -40,9 +31,8 @@ def test_raw_env_diagnostics_do_not_expose_secret_values(tmp_path: Path) -> None
     assert "tenant-key-secret" not in raw
     assert "tenant-secret-value" not in raw
     assert "account-binding-secret" not in raw
-    assert "--token secret" not in raw
     assert str(skill_path) not in raw
-    assert payload["overallStatus"] == "needs_setup"
+    assert payload["overallStatus"] == "ready"
     assert "cts" not in components
 
 
@@ -78,13 +68,11 @@ def test_raw_env_diagnostics_reports_opencli_missing_setup_without_appsettings(t
 
 
 def test_raw_env_diagnostics_reports_configured_opencli_browser(tmp_path: Path) -> None:
-    opencli_bin = _write_opencli_binary(tmp_path)
     payload = build_dev_mode_env_diagnostics(
         {
             "SEEKTALENT_LIEPIN_WORKER_MODE": "opencli",
             "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND": "opencli",
             "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET": "account-binding-secret",
-            "SEEKTALENT_LIEPIN_OPENCLI_COMMAND": str(opencli_bin),
         },
         workspace_root=tmp_path,
     )
@@ -97,41 +85,6 @@ def test_raw_env_diagnostics_reports_configured_opencli_browser(tmp_path: Path) 
     assert "liepin_pi" not in raw
     assert "DokoBot" not in raw
     assert str(tmp_path) not in raw
-
-
-def test_raw_env_diagnostics_reports_missing_opencli_command(tmp_path: Path) -> None:
-    payload = build_dev_mode_env_diagnostics(
-        {
-            "SEEKTALENT_LIEPIN_WORKER_MODE": "opencli",
-            "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND": "opencli",
-            "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET": "account-binding-secret",
-            "SEEKTALENT_LIEPIN_OPENCLI_COMMAND": str(tmp_path / "missing-opencli"),
-        },
-        workspace_root=tmp_path,
-    )
-    components = {component.name: component for component in payload.components}
-
-    assert payload.overallStatus == "needs_setup"
-    assert components["liepin_opencli_browser"].status == "needs_setup"
-    assert components["liepin_opencli_browser"].reasonCode == "liepin_opencli_command_missing"
-    assert not any(name.startswith("liepin_pi") for name in components)
-
-
-def test_raw_env_diagnostics_reports_invalid_opencli_command(tmp_path: Path) -> None:
-    payload = build_dev_mode_env_diagnostics(
-        {
-            "SEEKTALENT_LIEPIN_WORKER_MODE": "opencli",
-            "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND": "opencli",
-            "SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET": "account-binding-secret",
-            "SEEKTALENT_LIEPIN_OPENCLI_COMMAND": "'unterminated",
-        },
-        workspace_root=tmp_path,
-    )
-    components = {component.name: component for component in payload.components}
-
-    assert payload.overallStatus == "invalid"
-    assert components["liepin_opencli_browser"].status == "invalid"
-    assert components["liepin_opencli_browser"].reasonCode == "liepin_opencli_command_invalid"
 
 
 def test_server_startup_can_fallback_to_readiness_for_invalid_opencli_config(tmp_path: Path) -> None:
@@ -166,7 +119,6 @@ def test_server_startup_does_not_recover_legacy_pi_agent_config(tmp_path: Path) 
 
 
 def test_valid_settings_status_reports_configured_components(tmp_path: Path) -> None:
-    opencli_bin = _write_opencli_binary(tmp_path)
     settings = make_settings(
         workspace_root=str(tmp_path),
         provider_name="cts",
@@ -175,7 +127,6 @@ def test_valid_settings_status_reports_configured_components(tmp_path: Path) -> 
         cts_tenant_secret="tenant-secret",
         liepin_worker_mode="opencli",
         liepin_browser_action_backend="opencli",
-        liepin_opencli_command=str(opencli_bin),
         liepin_account_binding_secret="non-placeholder-secret",
     )
 
@@ -192,11 +143,9 @@ def test_valid_settings_status_reports_configured_components(tmp_path: Path) -> 
 
 
 def test_dev_mode_status_uses_configured_opencli_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    opencli_bin = _write_opencli_binary(tmp_path)
     monkeypatch.setenv("SEEKTALENT_WORKSPACE_ROOT", str(tmp_path))
     monkeypatch.setenv("SEEKTALENT_LIEPIN_WORKER_MODE", "opencli")
     monkeypatch.setenv("SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND", "opencli")
-    monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_COMMAND", str(opencli_bin))
     monkeypatch.setenv("SEEKTALENT_LIEPIN_ACCOUNT_BINDING_SECRET", "secret")
 
     status = build_dev_mode_status(AppSettings(_env_file=None))

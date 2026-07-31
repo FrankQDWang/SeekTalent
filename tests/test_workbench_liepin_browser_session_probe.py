@@ -12,8 +12,6 @@ from seektalent_ui.liepin_account_binding import (
     bind_observed_liepin_account,
     ensure_workbench_liepin_provider_connection,
 )
-from seektalent_ui.workbench_response import liepin_start_probe_warning_message
-
 from tests.test_workbench_api import (
     _approve_requirement_review,
     _ensure_local_actor,
@@ -205,14 +203,6 @@ def _assert_runtime_start(payload: dict, source_kinds: list[str]) -> None:
     assert runtime_job is not None
     assert runtime_job["status"] in {"queued", "running"}
     assert runtime_job["sourceKinds"] == source_kinds
-
-
-def test_removed_opencli_config_uses_canonical_cleanup_warning_message() -> None:
-    assert (
-        liepin_start_probe_warning_message("liepin_opencli_removed_config")
-        == "检测到已移除的旧即时回收/cleanup 配置，请删除旧配置后重试；"
-        "标签页正常回收仅由 60 秒空闲到期负责。"
-    )
 
 
 def test_liepin_provider_connection_binding_is_idempotent_for_same_connection(tmp_path) -> None:

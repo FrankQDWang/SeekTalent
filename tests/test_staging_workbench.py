@@ -218,7 +218,7 @@ def test_main_launches_downloaded_package_server_with_prod_shape(
     launch_calls: list[tuple[list[str], dict[str, str]]] = []
 
     class Runtime:
-        opencli_main = tmp_path / "runtime" / "main.js"
+        wtscli_main = tmp_path / "runtime" / "main.js"
 
         def __init__(self) -> None:
             self.node = node
@@ -248,7 +248,6 @@ def test_main_launches_downloaded_package_server_with_prod_shape(
     assert command[command.index("--liepin-browser-action-backend") + 1] == "opencli"
     assert env["SEEKTALENT_TEXT_LLM_PROVIDER_LABEL"] == "bailian"
     assert env["SEEKTALENT_TEXT_LLM_API_KEY"] == "staging-key"
-    assert str(Runtime.opencli_main) in env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"]
 
 
 def test_check_reports_paths_without_secret(
@@ -261,7 +260,7 @@ def test_check_reports_paths_without_secret(
         monkeypatch.setenv(key, value)
 
     class Runtime:
-        opencli_main = tmp_path / "runtime" / "main.js"
+        wtscli_main = tmp_path / "runtime" / "main.js"
 
         def __init__(self) -> None:
             self.node = node
@@ -304,7 +303,7 @@ def test_check_fails_when_paired_browser_extension_is_not_connected(
         monkeypatch.setenv(key, value)
 
     class Runtime:
-        opencli_main = tmp_path / "runtime" / "main.js"
+        wtscli_main = tmp_path / "runtime" / "main.js"
 
         def __init__(self) -> None:
             self.node = node
@@ -342,7 +341,7 @@ def test_main_handles_operator_interrupt_without_traceback(
         monkeypatch.setenv(key, value)
 
     class Runtime:
-        opencli_main = tmp_path / "runtime" / "main.js"
+        wtscli_main = tmp_path / "runtime" / "main.js"
 
         def __init__(self) -> None:
             self.node = node

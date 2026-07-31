@@ -27,12 +27,6 @@ DOMI_NODE_ENV_KEYS = ("SEEKTALENT_DOMI_NODE", "DOMI_NODE")
 DEFAULT_BIN_DIR = Path.home() / ".seektalent" / "bin"
 INSTALL_RECEIPT_RELATIVE_PATH = Path(".seektalent") / "install-receipt.json"
 INSTALL_RECEIPT_SCHEMA = "seektalent.install-receipt.v1"
-WINDOWS_DEFAULT_NODE_RELATIVE = Path("Domi") / "runtime" / "node" / "node.exe"
-MAC_DEFAULT_NODE_CANDIDATES = (
-    Path("/Applications/Domi.app/Contents/Resources/extraResources/node/runtime/bin/node"),
-    Path("/Applications/Domi.app/Contents/Resources/extraResources/node/bin/node"),
-    Path("/Applications/Domi.app/Contents/Resources/extraResources/node/node"),
-)
 
 
 class DomiBootstrapError(RuntimeError):
@@ -73,6 +67,7 @@ def bootstrap_domi_workbench(
     browser_bridge_bundle_dir: Path | None = None,
     browser_bridge_prepared_runtime_dir: Path | None = None,
     delivery_manifest_path: Path | None = None,
+    product_wheel_path: Path | None = None,
     python_prefix_candidate: Path | None = None,
     python_prefix_target: Path | None = None,
     env: Mapping[str, str] | None = None,
@@ -108,6 +103,18 @@ def bootstrap_domi_workbench(
         delivery_manifest_path,
         package_version=package_version,
     )
+    if delivery_identity is not None and product_wheel_path is not None:
+        product_wheel_path = product_wheel_path.expanduser()
+        if (
+            not product_wheel_path.is_file()
+            or product_wheel_path.name != str(delivery_identity["wheelFilename"])
+            or hashlib.sha256(product_wheel_path.read_bytes()).hexdigest()
+            != delivery_identity["wheelSha256"]
+        ):
+            raise DomiBootstrapError(
+                "delivery_manifest_identity_mismatch",
+                "The exact SeekTalent wheel does not match the delivery manifest.",
+            )
 
     resolved_python = (domi_python or Path(sys.executable)).expanduser()
     _require_executable_runtime(
@@ -210,6 +217,24 @@ def bootstrap_domi_workbench(
                         root / INSTALL_RECEIPT_RELATIVE_PATH,
                     )
                 )
+                if product_wheel_path is not None and delivery_manifest_path is not None:
+                    additional_targets.append(
+                        (
+                            delivery_manifest_path.expanduser(),
+                            root / ".seektalent" / str(
+                                delivery_identity["deliveryManifestFilename"]
+                            ),
+                        )
+                    )
+                if product_wheel_path is not None:
+                    additional_targets.append(
+                        (
+                            product_wheel_path,
+                            root / ".seektalent" / str(
+                                delivery_identity["wheelFilename"]
+                            ),
+                        )
+                    )
             try:
                 install_browser_bridge_bundle(
                     bundle_dir=browser_bridge_bundle_dir.expanduser(),
@@ -241,13 +266,6 @@ def resolve_domi_node(*, env: Mapping[str, str] | None = None, platform: str | N
         raw = source_env.get(key)
         if raw and raw.strip():
             return _resolve_node_path(raw.strip(), platform=current_platform)
-
-    candidates = list(_default_node_candidates(env=source_env, platform=current_platform, home=home or Path.home()))
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    if candidates:
-        return candidates[0]
     return Path("node.exe" if current_platform == "win32" else "node")
 
 
@@ -262,6 +280,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--browser-bridge-bundle-dir", type=Path)
     parser.add_argument("--browser-bridge-prepared-runtime-dir", type=Path)
     parser.add_argument("--delivery-manifest", type=Path)
+    parser.add_argument("--product-wheel", type=Path)
     parser.add_argument("--python-prefix-candidate", type=Path)
     parser.add_argument("--python-prefix-target", type=Path)
     parser.add_argument("--print-json", action="store_true")
@@ -278,6 +297,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             browser_bridge_bundle_dir=args.browser_bridge_bundle_dir,
             browser_bridge_prepared_runtime_dir=args.browser_bridge_prepared_runtime_dir,
             delivery_manifest_path=args.delivery_manifest,
+            product_wheel_path=args.product_wheel,
             python_prefix_candidate=args.python_prefix_candidate,
             python_prefix_target=args.python_prefix_target,
         )
@@ -291,25 +311,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"SeekTalent Domi command ready: {result.bin_dir / result.command_name}")
     return 0
 
-
-def _default_node_candidates(*, env: Mapping[str, str], platform: str, home: Path) -> tuple[Path, ...]:
-    if platform == "win32":
-        bases = []
-        appdata = env.get("APPDATA")
-        local_appdata = env.get("LOCALAPPDATA")
-        if appdata:
-            bases.append(Path(appdata))
-        if local_appdata:
-            bases.append(Path(local_appdata))
-        return tuple(base / WINDOWS_DEFAULT_NODE_RELATIVE for base in bases)
-
-    home_candidates = (
-        home / "Library" / "Application Support" / "Domi" / "runtime" / "node" / "node",
-        home / "Library" / "Application Support" / "Domi" / "runtime" / "node" / "bin" / "node",
-        home / ".domi" / "runtime" / "node" / "node",
-        home / ".domi" / "runtime" / "node" / "bin" / "node",
-    )
-    return (*MAC_DEFAULT_NODE_CANDIDATES, *home_candidates)
 
 
 def _delivery_identity(
@@ -348,6 +349,7 @@ def _delivery_identity(
         )
     source_revision = payload.get("source_revision")
     wheel_sha256 = payload.get("seektalent_wheel_sha256")
+    wheel_filename = payload.get("seektalent_wheel")
     product_build_id = payload.get("product_build_id")
     if (
         not isinstance(source_revision, str)
@@ -355,6 +357,10 @@ def _delivery_identity(
         or any(character not in "0123456789abcdef" for character in source_revision)
         or not isinstance(wheel_sha256, str)
         or len(wheel_sha256) != 64
+        or any(character not in "0123456789abcdef" for character in wheel_sha256)
+        or not isinstance(wheel_filename, str)
+        or Path(wheel_filename).name != wheel_filename
+        or Path(wheel_filename).suffix != ".whl"
         or not isinstance(product_build_id, str)
         or product_build_id
         != f"seektalent-{package_version}+{source_revision}"
@@ -369,7 +375,9 @@ def _delivery_identity(
         "sourceRevision": source_revision,
         "productBuildId": product_build_id,
         "wheelSha256": wheel_sha256,
+        "wheelFilename": wheel_filename,
         "deliveryManifestSha256": hashlib.sha256(raw).hexdigest(),
+        "deliveryManifestFilename": manifest_path.name,
         "bridgeBuildId": WTSCLI_BUILD_ID,
         "wtscliVersion": WTSCLI_VERSION,
         "wtscliForkCommit": payload.get("wtscli_fork_commit"),
@@ -408,27 +416,30 @@ def _write_windows_shims(
         f"""$ErrorActionPreference = "Stop"
 $DomiPython = "{_escape_powershell(domi_python)}"
 $DomiNode = "{_escape_powershell(domi_node)}"
+$ResolvedDomiPython = if ($env:SEEKTALENT_DOMI_PYTHON) {{ $env:SEEKTALENT_DOMI_PYTHON }} elseif ($env:DOMI_PYTHON) {{ $env:DOMI_PYTHON }} else {{ $DomiPython }}
+$ResolvedDomiNode = if ($env:SEEKTALENT_DOMI_NODE) {{ $env:SEEKTALENT_DOMI_NODE }} elseif ($env:DOMI_NODE) {{ $env:DOMI_NODE }} else {{ $DomiNode }}
 $PythonPathEntries = @()
 {python_path_lines}
 if ($PythonPathEntries.Count -gt 0) {{
   $env:PYTHONPATH = if ($env:PYTHONPATH) {{ ($PythonPathEntries + @($env:PYTHONPATH)) -join ";" }} else {{ $PythonPathEntries -join ";" }}
 }}
 $env:PATH = "{_escape_powershell(domi_python.parent)};{_escape_powershell(domi_node.parent)};$env:PATH"
-$env:SEEKTALENT_DOMI_NODE = $DomiNode
-$env:DOMI_NODE = $DomiNode
+$env:SEEKTALENT_DOMI_PYTHON = $ResolvedDomiPython
+$env:SEEKTALENT_DOMI_NODE = $ResolvedDomiNode
+$env:DOMI_NODE = $ResolvedDomiNode
 if ($args.Count -ge 1 -and $args[0] -eq "workbench") {{
   $remaining = @()
   if ($args.Count -gt 1) {{ $remaining = $args[1..($args.Count - 1)] }}
-  & $DomiPython -m seektalent.domi_workbench @remaining
+  & $ResolvedDomiPython -m seektalent.domi_workbench @remaining
   exit $LASTEXITCODE
 }}
 if ($args.Count -ge 1 -and $args[0] -eq "maintenance") {{
   $remaining = @()
   if ($args.Count -gt 1) {{ $remaining = $args[1..($args.Count - 1)] }}
-  & $DomiPython -m seektalent_ui.maintenance @remaining
+  & $ResolvedDomiPython -m seektalent_ui.maintenance @remaining
   exit $LASTEXITCODE
 }}
-& $DomiPython -m seektalent @args
+& $ResolvedDomiPython -m seektalent @args
 exit $LASTEXITCODE
 """,
         encoding="utf-8",
@@ -474,9 +485,11 @@ set -eu
 DOMI_PYTHON={_shell_quote(domi_python)}
 DOMI_NODE={_shell_quote(domi_node)}
 {pythonpath_block}PATH={_shell_quote(domi_python.parent)}:{_shell_quote(domi_node.parent)}:$PATH
+DOMI_PYTHON="${{SEEKTALENT_DOMI_PYTHON:-$DOMI_PYTHON}}"
+DOMI_NODE="${{SEEKTALENT_DOMI_NODE:-${{DOMI_NODE:-$DOMI_NODE}}}}"
+SEEKTALENT_DOMI_PYTHON="$DOMI_PYTHON"
 SEEKTALENT_DOMI_NODE="$DOMI_NODE"
-DOMI_NODE="$DOMI_NODE"
-export PATH SEEKTALENT_DOMI_NODE DOMI_NODE
+export PATH SEEKTALENT_DOMI_PYTHON SEEKTALENT_DOMI_NODE DOMI_NODE
 if [ "${{1:-}}" = "workbench" ]; then
   shift
   exec "$DOMI_PYTHON" -m seektalent.domi_workbench "$@"

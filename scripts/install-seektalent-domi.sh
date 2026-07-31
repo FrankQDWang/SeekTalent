@@ -2,7 +2,7 @@
 
 if ! (return 0 2>/dev/null); then
   echo "reason_code=domi_bootstrap_shell_not_sourced source this script so it can update PATH for the current shell." >&2
-  echo "Run the release install command with source, then run: seektalent workbench" >&2
+  echo "Run the release install command with source, then run the delivered start-seektalent-domi.sh script." >&2
   exit 1
 fi
 
@@ -16,7 +16,7 @@ _seektalent_domi_fail() {
 _seektalent_domi_install() {
   local version="${1:-0.8.0rc1}"
   local requested_bundle_dir="${2:-${SEEKTALENT_WTSCLI_BUNDLE_DIR:-}}"
-  local domi_python="${DOMI_PYTHON:-}"
+  local domi_python="${SEEKTALENT_DOMI_PYTHON:-${DOMI_PYTHON:-}}"
   local domi_node="${DOMI_NODE:-${SEEKTALENT_DOMI_NODE:-}}"
   local install_home="${SEEKTALENT_INSTALL_HOME:-${HOME}}"
   local script_path=""
@@ -56,46 +56,15 @@ _seektalent_domi_install() {
     return 1
   fi
 
-  if [[ -z "${domi_python}" ]]; then
-    local python_candidate
-    for python_candidate in \
-      "/Applications/Domi.app/Contents/Resources/extraResources/python/runtime/bin/python" \
-      "/Applications/Domi.app/Contents/Resources/extraResources/python/runtime/bin/python3" \
-      "${HOME}/Library/Application Support/Domi/runtime/python/bin/python" \
-      "${HOME}/Library/Application Support/Domi/runtime/python/bin/python3" \
-      "${HOME}/.domi/runtime/python/bin/python" \
-      "${HOME}/.domi/runtime/python/bin/python3"; do
-      if [[ -x "${python_candidate}" ]]; then
-        domi_python="${python_candidate}"
-        break
-      fi
-    done
-  fi
-  if [[ ! -x "${domi_python}" ]]; then
-    _seektalent_domi_fail "domi_python_missing" "Domi Python was not found: ${domi_python}"
-    return 1
-  fi
+ if [[ ! -x "${domi_python}" ]]; then
+    _seektalent_domi_fail "domi_python_missing" "Set DOMI_PYTHON or SEEKTALENT_DOMI_PYTHON to the Domi-provided Python executable: ${domi_python}"
+   return 1
+ fi
 
-  if [[ -z "${domi_node}" ]]; then
-    local candidate
-    for candidate in \
-      "/Applications/Domi.app/Contents/Resources/extraResources/node/runtime/bin/node" \
-      "/Applications/Domi.app/Contents/Resources/extraResources/node/bin/node" \
-      "/Applications/Domi.app/Contents/Resources/extraResources/node/node" \
-      "${HOME}/Library/Application Support/Domi/runtime/node/node" \
-      "${HOME}/Library/Application Support/Domi/runtime/node/bin/node" \
-      "${HOME}/.domi/runtime/node/node" \
-      "${HOME}/.domi/runtime/node/bin/node"; do
-      if [[ -x "${candidate}" ]]; then
-        domi_node="${candidate}"
-        break
-      fi
-    done
-  fi
-  if [[ -z "${domi_node}" || ! -x "${domi_node}" ]]; then
-    _seektalent_domi_fail "domi_node_missing" "Domi Node was not found. Set DOMI_NODE or SEEKTALENT_DOMI_NODE to the Domi node executable path."
-    return 1
-  fi
+ if [[ -z "${domi_node}" || ! -x "${domi_node}" ]]; then
+    _seektalent_domi_fail "domi_node_missing" "Set DOMI_NODE or SEEKTALENT_DOMI_NODE to the Domi-provided Node executable."
+   return 1
+ fi
   if [[ ! -f "${wtscli_bundle_dir}/bridge-manifest.json" ]]; then
     _seektalent_domi_fail "wtscli_bundle_missing" "The exact WTSCLI bundle was not found in the SeekTalent product package: ${wtscli_bundle_dir}"
     return 1
@@ -214,6 +183,7 @@ PY
       --domi-node "${domi_node}" \
       --browser-bridge-bundle-dir "${wtscli_bundle_dir}" \
       --browser-bridge-prepared-runtime-dir "${prepared_runtime_dir}" \
+      --product-wheel "${product_wheel}" \
       "${delivery_manifest_args[@]}" \
       --bin-dir "${bin_dir}" \
       --print-json || {
@@ -232,7 +202,7 @@ PY
     *) export PATH="${bin_dir}:${PATH}" ;;
   esac
 
-  echo "SeekTalent Domi install ready. Run: seektalent workbench"
+  echo "SeekTalent Domi install ready. Start with: ${script_dir}/start-seektalent-domi.sh"
   echo "Chrome 扩展目录：${install_home}/.seektalent/chrome-extension/wtscli"
   echo "打开 chrome://extensions，启用“开发者模式”，选择“加载已解压的扩展程序”，并选择上面的唯一目录。"
   echo "升级后请在该页面点击 WTSCLI 的“重新加载”；若仍显示旧版本，请完全退出并重启 Chrome。"

@@ -177,6 +177,7 @@ def test_bootstrap_installs_prepared_runtime_only_with_its_exact_bundle(
                 "product_build_id": (
                     "seektalent-0.8.0rc1+" + "a" * 40
                 ),
+                "seektalent_wheel": "seektalent-0.8.0rc1-py3-none-any.whl",
                 "seektalent_wheel_sha256": "b" * 64,
                 "bridge_build_id": WTSCLI_BUILD_ID,
                 "wtscli_version": WTSCLI_VERSION,
@@ -240,11 +241,8 @@ def test_bootstrap_installs_prepared_runtime_only_with_its_exact_bundle(
         )
 
 
-def test_resolve_domi_node_uses_windows_default_appdata_path(tmp_path: Path) -> None:
-    appdata = tmp_path / "AppData" / "Roaming"
-    expected = _touch(appdata / "Domi" / "runtime" / "node" / "node.exe")
-
-    assert domi_bootstrap.resolve_domi_node(env={"APPDATA": str(appdata)}, platform="win32", home=tmp_path) == expected
+def test_resolve_domi_node_requires_an_explicit_host_path() -> None:
+    assert domi_bootstrap.resolve_domi_node(env={"APPDATA": "/ignored"}, platform="win32") == Path("node.exe")
 
 
 def test_resolve_domi_node_accepts_env_directory_alias(tmp_path: Path) -> None:
@@ -448,7 +446,7 @@ esac
     assert result.returncode == 0, result.stderr
 
 
-def test_posix_install_script_finds_user_runtime_domi_python_when_app_bundle_path_is_missing(tmp_path: Path) -> None:
+def test_posix_install_script_uses_the_explicit_host_python_path(tmp_path: Path) -> None:
     home = tmp_path / "home"
     domi_python = home / "Library" / "Application Support" / "Domi" / "runtime" / "python" / "bin" / "python"
     domi_node = tmp_path / "Domi.app" / "node" / "runtime" / "bin" / "node"
@@ -481,16 +479,12 @@ exit 2
     domi_python.chmod(0o755)
     domi_node.chmod(0o755)
     script = tmp_path / "install-seektalent-domi.sh"
-    script.write_text(
-        Path("scripts/install-seektalent-domi.sh")
-        .read_text(encoding="utf-8")
-        .replace("/Applications/Domi.app", str(tmp_path / "missing" / "Domi.app")),
-        encoding="utf-8",
-    )
+    script.write_text(Path("scripts/install-seektalent-domi.sh").read_text(encoding="utf-8"), encoding="utf-8")
     bash_code = f"""
 set +e +u +o pipefail
 export HOME={_bash_quote(home)}
-unset DOMI_PYTHON
+export DOMI_PYTHON={_bash_quote(domi_python)}
+export DOMI_NODE={_bash_quote(domi_node)}
 export DOMI_NODE={_bash_quote(domi_node)}
 export SEEKTALENT_WTSCLI_PREPARED_RUNTIME={_bash_quote(_write_runtime_marker(tmp_path))}
 export SEEKTALENT_BROWSER_BRIDGE_HELPER={_bash_quote(Path("scripts/install_staging_browser_bridge.py").resolve())}

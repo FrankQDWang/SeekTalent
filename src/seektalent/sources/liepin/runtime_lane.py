@@ -87,6 +87,7 @@ async def run_liepin_first_page_expansion(*, settings: AppSettings,
         build_liepin_worker_client(
             settings,
             cards_operation_executor=cards_operation_executor,
+            lifecycle_supervisor=_lifecycle_supervisor_from_executor(cards_operation_executor),
         )
         if cards_operation_executor is not None
         else build_liepin_worker_client(settings)
@@ -199,6 +200,7 @@ async def run_liepin_source_lane(
         build_liepin_worker_client(
             settings,
             cards_operation_executor=cards_operation_executor,
+            lifecycle_supervisor=_lifecycle_supervisor_from_executor(cards_operation_executor),
         )
         if cards_operation_executor is not None
         else build_liepin_worker_client(settings)
@@ -358,6 +360,7 @@ async def run_liepin_logical_query_bundle(
         build_liepin_worker_client(
             settings,
             cards_operation_executor=cards_operation_executor,
+            lifecycle_supervisor=_lifecycle_supervisor_from_executor(cards_operation_executor),
         )
         if cards_operation_executor is not None
         else build_liepin_worker_client(settings)
@@ -758,6 +761,7 @@ async def _run_detail_lane(
     client = worker_client or build_liepin_worker_client(
         settings,
         cards_operation_executor=cards_operation_executor,
+        lifecycle_supervisor=_lifecycle_supervisor_from_executor(cards_operation_executor),
     )
     provider = _build_provider(
         settings=settings,
@@ -1450,6 +1454,12 @@ def _build_provider(
             else None
         ),
     )
+
+
+def _lifecycle_supervisor_from_executor(executor: object | None):
+    if executor is None:
+        return None
+    return getattr(executor, "_wtscli_lifecycle_supervisor", None)
 
 
 def _liepin_max_pages(budget: RuntimeSourceBudgetPolicy) -> int:

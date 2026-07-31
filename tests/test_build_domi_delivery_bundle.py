@@ -37,6 +37,7 @@ def test_build_delivery_bundle_contains_exact_pair_runtime_and_platform_installe
         names = set(delivery.namelist())
         root = archive.stem
         assert f"{root}/install-seektalent-domi.ps1" in names
+        assert f"{root}/start-seektalent-domi.ps1" in names
         assert f"{root}/install_staging_browser_bridge.py" in names
         assert f"{root}/wtscli-browser-bridge/bridge-manifest.json" in names
         assert f"{root}/wtscli-browser-bridge/extension/manifest.json" in names
@@ -51,6 +52,12 @@ def test_build_delivery_bundle_contains_exact_pair_runtime_and_platform_installe
         assert manifest["product_build_id"] == (
             "seektalent-0.8.0rc1+" + "a" * 40
         )
+        assert manifest["startup_script"] == "start-seektalent-domi.ps1"
+        assert manifest["startup_contract"] == {
+            "jwt_env": "SEEKTALENT_DOMI_JWT",
+            "python_env": "DOMI_PYTHON",
+            "node_env": "DOMI_NODE",
+        }
 
 
 def test_exact_head_native_delivery_archive_contains_the_bound_pair() -> None:
@@ -76,7 +83,13 @@ def test_exact_head_native_delivery_archive_contains_the_bound_pair() -> None:
             if expected_platform == "windows-x64"
             else "install-seektalent-domi.sh"
         )
+        startup_script = (
+            "start-seektalent-domi.ps1"
+            if expected_platform == "windows-x64"
+            else "start-seektalent-domi.sh"
+        )
         assert f"{root}/{installer}" in names
+        assert f"{root}/{startup_script}" in names
         for path_key, hash_key in (
             ("browser_bridge_bundle", "browser_bridge_manifest_sha256"),
             ("prepared_runtime", "prepared_runtime_sha256"),
@@ -104,6 +117,26 @@ def test_delivery_installers_default_to_the_adjacent_exact_product_bundle() -> N
     assert "--browser-bridge-prepared-runtime-dir" in powershell
     assert "npm install" not in posix
     assert "npm install" not in powershell
+
+
+def test_host_start_scripts_require_domi_runtime_and_use_installed_package() -> None:
+    root = Path(__file__).resolve().parents[1]
+    posix = (root / "scripts" / "start-seektalent-domi.sh").read_text(encoding="utf-8")
+    powershell = (root / "scripts" / "start-seektalent-domi.ps1").read_text(
+        encoding="utf-8"
+    )
+
+    for script in (posix, powershell):
+        assert "SEEKTALENT_DOMI_JWT" in script
+        assert "DOMI_PYTHON" in script
+        assert "DOMI_NODE" in script
+        assert "install-receipt" in script
+        assert "wtscli-runtime" in script
+        assert "chrome-extension" in script
+        assert "workbench" in script
+        assert "19826" not in script
+        assert "Domi.app" not in script
+        assert "daemon restart" not in script
 
 
 def test_installers_print_one_fixed_extension_directory_and_chinese_steps() -> None:

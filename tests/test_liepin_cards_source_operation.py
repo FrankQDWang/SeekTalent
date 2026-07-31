@@ -187,7 +187,9 @@ def test_prepare_readiness_is_durable_source_operation_under_browser_lane(
     monkeypatch.setattr(
         "seektalent.liepin_verify_session_gate"
         "._prepare_session_mutating",
-        lambda _settings, *, request, current_profile_snapshot: (
+        lambda _settings, *, request, current_profile_snapshot, lifecycle_supervisor,
+        on_effect_started, on_effect_completed: (
+            lifecycle_supervisor,
             effects.append((request, current_profile_snapshot))
         ),
     )
@@ -258,10 +260,14 @@ def test_prepare_readiness_unknown_effect_keeps_lane_fenced(
         *,
         request,
         current_profile_snapshot,
+        lifecycle_supervisor,
+        on_effect_started,
+        on_effect_completed,
     ) -> None:
         nonlocal effects
-        del request, current_profile_snapshot
+        del request, current_profile_snapshot, lifecycle_supervisor
         effects += 1
+        on_effect_started()
         raise RuntimeError("simulated effect uncertainty")
 
     monkeypatch.setattr(

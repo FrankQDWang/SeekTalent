@@ -165,13 +165,18 @@ seektalent workbench
 
 The command starts the FastAPI backend and serves the packaged React Workbench from the same loopback origin. It does not require pnpm, Node, Vite, or a repository checkout on the user's machine.
 
-On first use, `seektalent workbench` uses Domi Node to install the pinned OpenCLI CLI package under `~/.seektalent/opencli-runtime` when needed, then probes that CLI before the server launches. It does not download a replacement Node runtime. Users still need the OpenCLI Chrome extension installed and Liepin already logged in in their local Chrome profile. If the LLM key, Domi Node, or OpenCLI bootstrap fails, startup exits before launching the server and prints a `reason_code=...` diagnostic on stderr.
+On first use, `seektalent workbench` validates the installed WTSCLI runtime/bridge pair during application startup and starts its single supervised lifecycle owner. Users still need the WTSCLI Chrome extension installed and Liepin already logged in in their local Chrome profile. If the Domi JWT, exact runtime, or browser bridge is unavailable, the UI stays available and exposes a bounded readiness reason.
 
 ## `seektalent-domi`
 
-`seektalent-domi` is the prepared-machine Domi launcher. It requires `SEEKTALENT_DOMI_JWT` and `SEEKTALENT_DOMI_NODE`, where `SEEKTALENT_DOMI_NODE` points to the Domi node executable or node bin directory.
+The delivery archive's `start-seektalent-domi.sh` or
+`start-seektalent-domi.ps1` is the prepared-machine host launcher. It requires
+`SEEKTALENT_DOMI_JWT`, `DOMI_PYTHON`, and `DOMI_NODE` from the separate Domi host.
+It validates the installed exact receipt and WTSCLI pair, then delegates to the
+installed `seektalent workbench` package. It does not discover a Domi app version,
+read Domi Electron storage, or start `19826` directly.
 
-The launcher sets the Domi LLM provider and normalized Domi Node path, then delegates to `seektalent workbench` with the same arguments.
+The startup script exports the Domi provider and supplied Node path, then delegates to `seektalent workbench` with the same arguments.
 
 ## `seektalent-domi-bootstrap`
 
@@ -191,7 +196,7 @@ source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0
 seektalent workbench
 ```
 
-The bootstrap path writes only under `~/.seektalent`, refreshes the root-level `~/.seektalent/seektalent.*` Windows compatibility shims so existing WindowsApps launchers cannot point at stale prefixes, updates `PATH` only for the current terminal session, uses Domi Python and Domi Node, and leaves the Domi app/runtime, Chrome, and the OpenCLI Chrome extension untouched.
+The bootstrap path writes only under `~/.seektalent`, refreshes the root-level `~/.seektalent/seektalent.*` Windows compatibility shims so existing WindowsApps launchers cannot point at stale prefixes, updates `PATH` only for the current terminal session, uses Domi Python and Domi Node, and leaves the Domi app/runtime, Chrome, and the WTSCLI Chrome extension untouched.
 
 ## Failure Behavior
 
@@ -201,7 +206,7 @@ The CLI fails fast when:
 - mutually exclusive input flags are used together
 - settings validation fails
 - required provider credentials are missing
-- `seektalent workbench` cannot bootstrap OpenCLI, connect the OpenCLI Chrome extension, or verify Liepin login
+- `seektalent workbench` cannot start the supervised WTSCLI lifecycle owner, connect the WTSCLI Chrome extension, or verify Liepin login
 - CTS credentials are missing in real CTS mode
 - mock CTS is requested through the published CLI path
 - any runtime stage raises an exception

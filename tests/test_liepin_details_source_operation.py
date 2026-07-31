@@ -1190,7 +1190,6 @@ def test_details_source_port_missing_fails_closed() -> None:
 
     site = LiepinSiteAdapter(
         browser_config=OpenCliBrowserConfig(
-            command=("opencli",),
             session="seektalent-test",
             timeout_seconds=10,
             pacing_enabled=False,
@@ -1201,7 +1200,6 @@ def test_details_source_port_missing_fails_closed() -> None:
         ),
         automation=OpenCliBrowserAutomation(
             config=OpenCliBrowserConfig(
-                command=("opencli",),
                 session="seektalent-test",
                 timeout_seconds=10,
                 pacing_enabled=False,

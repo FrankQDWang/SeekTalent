@@ -96,6 +96,7 @@ from seektalent_runtime_control.errors import (
     RuntimeControlLookupError,
 )
 from seektalent_runtime_control.browser_lane import BrowserLaneGuard
+from seektalent.wtscli_lifecycle_supervisor import WtsCliLifecycleSupervisor
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -200,6 +201,7 @@ class LiepinCardsSourceOperationExecutor:
         accepted_requirement_revision_id: str,
         runtime_attempt_authority_ref: str,
         profile_binding_generation: int = 1,
+        wtscli_lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
     ) -> None:
         self._settings = settings
         self._store = store
@@ -211,6 +213,7 @@ class LiepinCardsSourceOperationExecutor:
         )
         self._runtime_attempt_authority_ref = runtime_attempt_authority_ref
         self._profile_binding_generation = profile_binding_generation
+        self._wtscli_lifecycle_supervisor = wtscli_lifecycle_supervisor
         root = settings.runtime_control_path.parent / "source-port"
         self._journal_path = root / "liepin-cards-journal.sqlite3"
         self._artifact_root = root / "liepin-cards-results"
@@ -312,11 +315,13 @@ class LiepinCardsSourceOperationExecutor:
             current = None
         if current is not None:
             if current.operation_phase == "main_committed":
+                self._ensure_supervisor_ready_for_recovery()
                 return
             if (
                 current.operation_phase == "observed"
                 and current.conclusive_observation_ref is not None
             ):
+                self._ensure_supervisor_ready_for_recovery()
                 self._pending_checkpoint_operation_ids.add(operation_id)
                 return
             raise RuntimeControlError(
@@ -387,10 +392,24 @@ class LiepinCardsSourceOperationExecutor:
                 ack_kind="new_logical_operation",
                 acknowledged_at=_now(),
             )
+            effect_started = False
+            effect_completed = False
+
+            def mark_effect_started() -> None:
+                nonlocal effect_started
+                effect_started = True
+
+            def mark_effect_completed() -> None:
+                nonlocal effect_completed
+                effect_completed = True
+
             try:
                 _prepare_session_mutating(
                     self._settings,
                     request=request,
+                    lifecycle_supervisor=self._wtscli_lifecycle_supervisor,
+                    on_effect_started=mark_effect_started,
+                    on_effect_completed=mark_effect_completed,
                     current_profile_snapshot=(
                         WtsCliCurrentProfileSnapshot(
                             runtime_attempt_fence_ref=(
@@ -414,6 +433,22 @@ class LiepinCardsSourceOperationExecutor:
                     ),
                 )
             except Exception:
+                if not effect_started or effect_completed:
+                    self._store.record_owned_source_operation_observation(
+                        runtime_run_id=self._runtime_run_id,
+                        operation_id=operation_id,
+                        executor_id=self._executor_id,
+                        attempt_no=self._attempt_no,
+                        expected_ledger_revision=1,
+                        dispatch_intent_ref=dispatch_intent_ref,
+                        conclusive_observation_ref=(
+                            f"source-observation://{operation_id}/failed"
+                        ),
+                        source_operation_disposition="failed",
+                        observed_at=_now(),
+                    )
+                    self._pending_checkpoint_operation_ids.add(operation_id)
+                    raise
                 history_digest = sha256(
                     f"{operation_id}:history-unavailable".encode()
                 ).hexdigest()
@@ -449,6 +484,17 @@ class LiepinCardsSourceOperationExecutor:
                 observed_at=_now(),
             )
             self._pending_checkpoint_operation_ids.add(operation_id)
+
+    def _ensure_supervisor_ready_for_recovery(self) -> None:
+        supervisor = self._wtscli_lifecycle_supervisor
+        if supervisor is None:
+            return
+        supervisor.ensure_ready(
+            timeout_seconds=min(
+                40.0,
+                max(1.0, self._settings.liepin_opencli_timeout_seconds),
+            )
+        )
 
     def __call__(
         self,

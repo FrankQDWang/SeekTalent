@@ -83,49 +83,14 @@ def check_browser_bridge_environment(
     timeout_seconds: float = 2.0,
 ) -> BrowserBridgeEnvironmentStatus:
     """Classify the first causal WTSCLI/Liepin readiness failure."""
+    bundle_status = check_installed_browser_bridge_bundle(install_root=install_root)
+    if not bundle_status.ok:
+        return bundle_status
     del node  # The check verifies installed bytes and never starts a runtime process.
     root = install_root.expanduser().absolute()
     extension_dir = root / "chrome-extension" / "wtscli"
     manifest_path = root / "browser-bridge" / "bridge-manifest.json"
-    runtime_root = root / "wtscli-runtime"
-    if (
-        not manifest_path.is_file()
-        or not extension_dir.is_dir()
-        or not runtime_root.is_dir()
-    ):
-        return _failure(
-            "wtscli_bundle_missing",
-            "SeekTalent 内置的 WTSCLI runtime、扩展或配对清单缺失。",
-            "请重新运行当前 SeekTalent 安装包中的安装脚本；不要单独下载扩展。",
-            extension_dir,
-        )
-    try:
-        requirement = load_browser_bridge_requirement(manifest_path)
-        runtime_dir = (
-            runtime_root
-            / requirement.runtime_identity.package.name
-            / requirement.cli.version
-        )
-        _verify_runtime_identity(runtime_dir, requirement)
-        _verify_installed_files(
-            runtime_dir=runtime_dir,
-            extension_dir=extension_dir,
-            requirement=requirement,
-        )
-    except _IdentityMismatch:
-        return _failure(
-            "wtscli_identity_mismatch",
-            "已安装的 WTSCLI runtime 与扩展清单不是同一个 exact build。",
-            "请重新运行当前 SeekTalent 安装包中的安装脚本，成对更新 runtime 与扩展。",
-            extension_dir,
-        )
-    except (BrowserBridgeManifestError, OSError, StrictJsonError, ValueError):
-        return _failure(
-            "wtscli_bundle_corrupt",
-            "SeekTalent 内置的 WTSCLI runtime 或扩展文件已损坏。",
-            "请重新运行当前 SeekTalent 安装包中的安装脚本；旧完整版本不会被安装失败覆盖。",
-            extension_dir,
-        )
+    requirement = load_browser_bridge_requirement(manifest_path)
 
     factory = client_factory or (lambda expected: OpenCliDaemonClient(requirement=expected))
     client = factory(requirement)
@@ -183,6 +148,64 @@ def check_browser_bridge_environment(
         )
     finally:
         client.close()
+
+
+def check_installed_browser_bridge_bundle(
+    *,
+    install_root: Path,
+) -> BrowserBridgeEnvironmentStatus:
+    """Verify exact installed WTSCLI bytes without contacting or starting a daemon."""
+    root = install_root.expanduser().absolute()
+    extension_dir = root / "chrome-extension" / "wtscli"
+    manifest_path = root / "browser-bridge" / "bridge-manifest.json"
+    runtime_root = root / "wtscli-runtime"
+    if (
+        not manifest_path.is_file()
+        or not extension_dir.is_dir()
+        or not runtime_root.is_dir()
+    ):
+        return _failure(
+            "wtscli_bundle_missing",
+            "SeekTalent 内置的 WTSCLI runtime、扩展或配对清单缺失。",
+            "请重新运行当前 SeekTalent 安装包中的安装脚本；不要单独下载扩展。",
+            extension_dir,
+        )
+    try:
+        requirement = load_browser_bridge_requirement(manifest_path)
+        runtime_dir = (
+            runtime_root
+            / requirement.runtime_identity.package.name
+            / requirement.cli.version
+        )
+        _verify_runtime_identity(runtime_dir, requirement)
+        _verify_installed_files(
+            runtime_dir=runtime_dir,
+            extension_dir=extension_dir,
+            requirement=requirement,
+        )
+    except _IdentityMismatch:
+        return _failure(
+            "wtscli_identity_mismatch",
+            "已安装的 WTSCLI runtime 与扩展清单不是同一个 exact build。",
+            "请重新运行当前 SeekTalent 安装包中的安装脚本，成对更新 runtime 与扩展。",
+            extension_dir,
+        )
+    except (BrowserBridgeManifestError, OSError, StrictJsonError, ValueError):
+        return _failure(
+            "wtscli_bundle_corrupt",
+            "SeekTalent 内置的 WTSCLI runtime 或扩展文件已损坏。",
+            "请重新运行当前 SeekTalent 安装包中的安装脚本；旧完整版本不会被安装失败覆盖。",
+            extension_dir,
+        )
+    return BrowserBridgeEnvironmentStatus(
+        ok=True,
+        liepin_enabled=False,
+        reason_code="wtscli_bundle_ready",
+        message="WTSCLI exact runtime、扩展和配对清单字节已验证；尚未检查 daemon 或猎聘页面。",
+        action="由 SeekTalent 生命周期 supervisor 提供常驻 daemon，再完成浏览器 readiness 校验。",
+        extension_dir=extension_dir,
+        bridge_build_id=requirement.bridge_build_id,
+    )
 
 
 class _IdentityMismatch(RuntimeError):
@@ -272,7 +295,6 @@ def _extension_files(extension_dir: Path) -> tuple[BrowserBridgeExtensionFile, .
 def _has_liepin_host_tab(client: OpenCliDaemonClient) -> bool:
     automation = OpenCliBrowserAutomation(
         config=OpenCliBrowserConfig(
-            command=(),
             session="seektalent-environment-check",
             timeout_seconds=2,
             pacing_enabled=False,
@@ -294,20 +316,20 @@ def _client_error(
         return _failure(
             "wtscli_daemon_missing",
             "未检测到 SeekTalent 自有的 WTSCLI 服务。",
-            "请启动 Chrome，确认已加载 WTSCLI 扩展，再启动 WTSCLI 服务并重新运行环境检查。",
+            "请重新打开当前 SeekTalent/Domi；生命周期 supervisor 会负责受控恢复 WTSCLI。",
             extension_dir,
         )
     if reason == OPENCLI_FOREIGN_OWNER:
         return _failure(
             "wtscli_daemon_wrong_owner",
             "19826 端口或 WTSCLI ownership 不属于当前 SeekTalent exact bundle。",
-            "请关闭错误的 WTSCLI 实例后重新运行环境检查；不要停止 legacy OpenCLI。",
+            "已安全停止本次检查；不要停止或覆盖 foreign WTSCLI，也不要停止 legacy OpenCLI。",
             extension_dir,
         )
     return _failure(
         "wtscli_daemon_stale",
         "WTSCLI 服务未返回当前 exact bundle 的有效状态。",
-        "请重新启动当前 SeekTalent 包内的 WTSCLI 服务，然后重新运行环境检查。",
+        "请重新打开当前 SeekTalent/Domi，由生命周期 supervisor 受控恢复后再检查。",
         extension_dir,
     )
 
@@ -343,14 +365,14 @@ def _status_failure(
         return _failure(
             "wtscli_daemon_stale",
             "正在运行的 WTSCLI 服务不是当前 SeekTalent 包内的 exact build。",
-            "请只重启当前 SeekTalent 自有的 WTSCLI 服务，然后重新运行环境检查；不要停止 legacy OpenCLI。",
+            "请退出并重新打开与当前安装包配对的 SeekTalent；不要停止或覆盖 legacy OpenCLI。",
             extension_dir,
             bridge_failure_reason=reason,
         )
     return _failure(
         "wtscli_daemon_stale",
         "WTSCLI 服务状态无效或已过期。",
-        "请重新启动当前 SeekTalent 自有的 WTSCLI 服务，然后重新运行环境检查。",
+        "请重新打开当前 SeekTalent/Domi，由生命周期 supervisor 受控恢复后再检查。",
         extension_dir,
     )
 
@@ -387,4 +409,5 @@ def _sha256(path: Path) -> str:
 __all__ = [
     "BrowserBridgeEnvironmentStatus",
     "check_browser_bridge_environment",
+    "check_installed_browser_bridge_bundle",
 ]

@@ -1240,17 +1240,12 @@ def test_liepin_source_connection_routes_are_scoped_without_workbench_auth(tmp_p
 
 
 def test_liepin_source_connection_list_auto_binds_ready_unbound_opencli_status(tmp_path: Path) -> None:
-    opencli_bin = tmp_path / "apps" / "web-react" / "node_modules" / ".bin" / "opencli"
-    opencli_bin.parent.mkdir(parents=True, exist_ok=True)
-    opencli_bin.write_text("ok\n", encoding="utf-8")
-    opencli_bin.chmod(0o755)
     client = _client(
         tmp_path,
         settings_overrides={
             "liepin_worker_mode": "opencli",
             "liepin_browser_action_backend": "opencli",
             "liepin_account_binding_secret": "account-binding-secret",
-            "liepin_opencli_command": str(opencli_bin),
         },
     )
     _ensure_local_actor(client)

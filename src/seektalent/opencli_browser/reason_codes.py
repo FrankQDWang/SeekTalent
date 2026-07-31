@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 
-OPENCLI_COMMAND_MISSING = "opencli_command_missing"
+OPENCLI_HELPER_MISSING = "opencli_helper_missing"
 OPENCLI_TIMEOUT = "opencli_timeout"
 OPENCLI_EXTENSION_DISCONNECTED = "opencli_extension_disconnected"
 OPENCLI_STATUS_UNAVAILABLE = "opencli_status_unavailable"

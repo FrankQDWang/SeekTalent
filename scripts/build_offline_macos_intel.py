@@ -43,13 +43,13 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def load_browser_bridge_bundle(root: Path, *, opencli_version: str) -> BrowserBridgeBundle:
+def load_browser_bridge_bundle(root: Path, *, wtscli_version: str) -> BrowserBridgeBundle:
     try:
         bundle = _load_browser_bridge_bundle(root)
     except BrowserBridgeManifestError as exc:
         raise RuntimeError(f"browser bridge bundle admission failed: {exc.code}") from exc
-    if bundle.requirement.cli.version != opencli_version:
-        raise RuntimeError(f"browser bridge CLI must be WTSCLI {opencli_version}")
+    if bundle.requirement.cli.version != wtscli_version:
+        raise RuntimeError(f"browser bridge CLI must be WTSCLI {wtscli_version}")
     return bundle
 
 
@@ -134,13 +134,13 @@ def build_project_wheel(
     return expected
 
 
-def write_readme(bundle_root: Path, *, version: str, opencli_version: str, extension_version: str) -> None:
+def write_readme(bundle_root: Path, *, version: str, wtscli_version: str, extension_version: str) -> None:
     (bundle_root / "README.md").write_text(
         f"""# SeekTalent {version} macOS Intel 离线安装包
 
 目标平台：macOS Intel x86_64、Domi Python 3.13、Domi Node。
 
-本包包含 SeekTalent {version}、全部 macOS Intel Python 依赖、离线 pip、WTSCLI {opencli_version} 完整 runtime，以及 WTSCLI Browser Bridge {extension_version} Chrome 扩展。安装过程不会访问 PyPI、npm、GitHub 或 Chrome Web Store。
+本包包含 SeekTalent {version}、全部 macOS Intel Python 依赖、离线 pip、WTSCLI {wtscli_version} 完整 runtime，以及 WTSCLI Browser Bridge {extension_version} Chrome 扩展。安装过程不会访问 PyPI、npm、GitHub 或 Chrome Web Store。
 
 前提：Domi 已安装，Chrome 已安装并登录猎聘。
 
@@ -172,10 +172,10 @@ seektalent workbench
 def build_bundle(args: argparse.Namespace) -> Path:
     repo_root = Path(__file__).resolve().parents[1]
     version = validate_version(args.version or project_version(repo_root), label="SeekTalent version")
-    opencli_version = validate_version(args.wtscli_version, label="WTSCLI version")
+    wtscli_version = validate_version(args.wtscli_version, label="WTSCLI version")
     browser_bridge = load_browser_bridge_bundle(
         args.wtscli_bundle_dir,
-        opencli_version=opencli_version,
+        wtscli_version=wtscli_version,
     )
     extension_version = browser_bridge.extension_version
 
@@ -237,7 +237,7 @@ def build_bundle(args: argparse.Namespace) -> Path:
     runtime_archive = (
         bundle_root
         / "wtscli-runtime"
-        / f"wtscli-{opencli_version}-runtime.zip"
+        / f"wtscli-{wtscli_version}-runtime.zip"
     )
     with tempfile.TemporaryDirectory(prefix="seektalent-wtscli-runtime-") as temporary:
         prepared = install_browser_bridge_bundle(
@@ -255,7 +255,7 @@ def build_bundle(args: argparse.Namespace) -> Path:
         "platform": "macos-x86_64",
         "python_version": "3.13",
         "seektalent_version": version,
-        "wtscli_version": opencli_version,
+        "wtscli_version": wtscli_version,
         "extension_version": extension_version,
         "browser_bridge_bundle": "wtscli-browser-bridge",
         "browser_bridge_runtime": runtime_archive.relative_to(bundle_root).as_posix(),
@@ -271,7 +271,7 @@ def build_bundle(args: argparse.Namespace) -> Path:
     write_readme(
         bundle_root,
         version=version,
-        opencli_version=opencli_version,
+        wtscli_version=wtscli_version,
         extension_version=extension_version,
     )
     write_bundle_checksums(bundle_root)
@@ -287,13 +287,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--version")
     parser.add_argument(
         "--wtscli-version",
-        "--opencli-version",
         dest="wtscli_version",
         default="0.1.0",
     )
     parser.add_argument(
         "--wtscli-bundle-dir",
-        "--opencli-bundle-dir",
         dest="wtscli_bundle_dir",
         type=Path,
         required=True,

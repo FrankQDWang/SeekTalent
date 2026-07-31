@@ -62,6 +62,10 @@ from seektalent.providers.liepin.worker_contracts import (
     OPENCLI_LOCAL_BROWSER_PROFILE_SUBJECT,
     SessionStatus,
 )
+from seektalent.wtscli_lifecycle_supervisor import (
+    WtsCliLifecycleError,
+    WtsCliLifecycleSupervisor,
+)
 from seektalent.providers.liepin.liepin_state_machine import (
     LiepinStateSnapshot,
     LiepinTransition,
@@ -423,6 +427,7 @@ class LiepinSiteAdapter:
         automation: OpenCliBrowserAutomation,
         cards_operation_executor: Callable[..., tuple[dict[str, object], dict[str, object]]]
         | None = None,
+        lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
     ) -> None:
         self._browser_config = browser_config
         self._site_config = site_config
@@ -431,6 +436,7 @@ class LiepinSiteAdapter:
         self._native_filter_clear_signatures_by_scope: dict[str, str] = {}
         self._continuation_store: LiepinFirstPageContinuationStore | None = None
         self._cards_operation_executor = cards_operation_executor
+        self._lifecycle_supervisor = lifecycle_supervisor
         self._remote_structured_cards: dict[str, OpenCliBrowserResult] = {}
 
     def _first_page_continuation_store(self) -> LiepinFirstPageContinuationStore:
@@ -478,10 +484,6 @@ class LiepinSiteAdapter:
         from seektalent.providers.liepin.liepin_search_workflow import LiepinSearchWorkflow
         return LiepinSearchWorkflow(site=_LiepinSearchWorkflowSite(self)).expand_first_page_continuation(
             continuation_ref=continuation_ref, detail_open_claim_context=detail_open_claim_context)
-
-    @property
-    def _commands(self):
-        return self._automation.commands
 
     def _run_liepin_transition(self, transition: LiepinTransition) -> TransitionResult:
         return LiepinTransitionRunner().run(transition)
@@ -734,25 +736,45 @@ class LiepinSiteAdapter:
                 safe_reason_code=status.safe_reason_code,
                 private_output=status.private_output,
             )
-        restarted = liepin_result_from_opencli_result(self._automation.restart_daemon())
-        if not restarted.ok:
+        if self._lifecycle_supervisor is None:
             return OpenCliBrowserResult(
                 ok=False,
                 action="recover_connection",
-                safe_reason_code=restarted.safe_reason_code,
-                private_output=restarted.private_output,
+                safe_reason_code="wtscli_supervisor_not_started",
             )
-        last_status = status
-        for _attempt in range(5):
-            time.sleep(1)
-            last_status = self.status()
-            if last_status.ok:
-                return OpenCliBrowserResult(ok=True, action="recover_connection", counts={"restarted": 1})
+        try:
+            self._lifecycle_supervisor.ensure_ready(
+                timeout_seconds=min(
+                    40.0,
+                    max(1.0, self._browser_config.timeout_seconds),
+                )
+            )
+            daemon = self._lifecycle_supervisor.connect_existing()
+        except WtsCliLifecycleError as exc:
+            return OpenCliBrowserResult(
+                ok=False,
+                action="recover_connection",
+                safe_reason_code=exc.safe_reason_code,
+            )
+        except OpenCliBrowserError as exc:
+            return OpenCliBrowserResult(
+                ok=False,
+                action="recover_connection",
+                safe_reason_code=exc.safe_reason_code,
+            )
+        self._automation.replace_daemon(daemon)
+        recovered = self.status()
+        if recovered.ok:
+            return OpenCliBrowserResult(
+                ok=True,
+                action="recover_connection",
+                counts={"supervisor_recovered": 1},
+            )
         return OpenCliBrowserResult(
             ok=False,
             action="recover_connection",
-            safe_reason_code=last_status.safe_reason_code,
-            private_output=last_status.private_output,
+            safe_reason_code=recovered.safe_reason_code,
+            private_output=recovered.private_output,
         )
 
     def open_liepin_tab(self, url: str) -> OpenCliBrowserResult:

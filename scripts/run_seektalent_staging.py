@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import shlex
 import shutil
 import subprocess
 import sys
@@ -51,7 +50,7 @@ class StagingConfigurationError(RuntimeError):
 
 class _BrowserRuntime(Protocol):
     node: Path
-    opencli_main: Path
+    wtscli_main: Path
     bridge_manifest: Path | None
 
 
@@ -79,11 +78,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"reason_code=liepin_opencli_bootstrap_failed WTSCLI/Node 启动失败：{exc}", file=sys.stderr)
         return 1
 
-    env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] = shlex.join(
-        (str(runtime.node), str(runtime.opencli_main))
-    )
-    env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND_MANAGED"] = "1"
-
     if args.check:
         status = _verify_browser_bridge(runtime)
         if not status.ok:
@@ -108,7 +102,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                     "stagingRoot": str(staging_root),
                     "python": sys.executable,
                     "node": str(runtime.node),
-                    "opencliMain": str(runtime.opencli_main),
+                    "wtscliMain": str(runtime.wtscli_main),
                 },
                 ensure_ascii=False,
             )
@@ -230,10 +224,10 @@ def _ensure_browser_runtime(
     *,
     staging_root: Path,
 ) -> _BrowserRuntime:
-    from seektalent.opencli_launcher import ensure_opencli_runtime
+    from seektalent.wtscli_runtime import ensure_wtscli_runtime
 
     runtime_root = staging_root / "home" / ".seektalent" / "wtscli-runtime"
-    return ensure_opencli_runtime(root=runtime_root, env=env)
+    return ensure_wtscli_runtime(root=runtime_root, env=env)
 
 
 def _require_staging_port_ownership(staging_root: Path) -> None:

@@ -77,9 +77,18 @@ def build_delivery_bundle(
             if platform_name == "windows-x64"
             else "install-seektalent-domi.sh"
         )
+        startup_script_name = (
+            "start-seektalent-domi.ps1"
+            if platform_name == "windows-x64"
+            else "start-seektalent-domi.sh"
+        )
         shutil.copy2(
             ROOT / "scripts" / installer_name,
             package_root / installer_name,
+        )
+        shutil.copy2(
+            ROOT / "scripts" / startup_script_name,
+            package_root / startup_script_name,
         )
         if platform_name != "windows-x64":
             shutil.copy2(
@@ -127,6 +136,12 @@ def build_delivery_bundle(
             "seektalent_wheel_sha256": _sha256(
                 package_root / seektalent_wheel.name
             ),
+            "startup_script": startup_script_name,
+            "startup_contract": {
+                "jwt_env": "SEEKTALENT_DOMI_JWT",
+                "python_env": "DOMI_PYTHON",
+                "node_env": "DOMI_NODE",
+            },
         }
         (package_root / "delivery-manifest.json").write_text(
             json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",

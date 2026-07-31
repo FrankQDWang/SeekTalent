@@ -1,6 +1,6 @@
 # SeekTalent
 
-`SeekTalent` is a local-first recruiter workbench with a stable CLI and a local browser UI. It turns a required job title, a job description, and optional sourcing notes into a deterministic multi-round shortlist using requirement extraction, local Liepin retrieval through OpenCLI, per-resume scoring, reflection, and finalization.
+`SeekTalent` is a local-first recruiter workbench with a stable CLI and a local browser UI. It turns a required job title, a job description, and optional sourcing notes into a deterministic multi-round shortlist using requirement extraction, local Liepin retrieval through the WTSCLI browser bridge, per-resume scoring, reflection, and finalization.
 
 The current product shape is local-first:
 
@@ -43,23 +43,29 @@ pip install seektalent==0.7.49
 
 ### Domi prepared-machine install
 
-For the current Domi handoff mode, the user machine only needs Domi installed, Chrome already logged in to Liepin, the OpenCLI Chrome extension installed and enabled, and `SEEKTALENT_DOMI_JWT` set in the current terminal. After that, the prepared-machine path is two commands and does not require a source checkout.
+For the current Domi handoff mode, the separate Domi host supplies its Python, Node, and `SEEKTALENT_DOMI_JWT`. The exact delivery archive contains the SeekTalent startup script and does not require a source checkout.
 
 Windows PowerShell:
 
 ```powershell
 Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.49/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.49
-seektalent workbench
+$env:SEEKTALENT_DOMI_JWT = "<inject at launch; do not commit>"
+$env:DOMI_PYTHON = "<Domi-provided Python executable>"
+$env:DOMI_NODE = "<Domi-provided Node executable>"
+& .\start-seektalent-domi.ps1
 ```
 
 macOS shell:
 
 ```bash
 source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.49/scripts/install-seektalent-domi.sh") 0.7.49
-seektalent workbench
+export SEEKTALENT_DOMI_JWT="<inject at launch; do not commit>"
+export DOMI_PYTHON="/path/to/Domi-provided/python"
+export DOMI_NODE="/path/to/Domi-provided/node"
+scripts/start-seektalent-domi.sh
 ```
 
-The install script uses Domi Python to install the PyPI package into `~/.seektalent/python-prefix/<version>`, generates the `seektalent` command shim under `~/.seektalent/bin`, wires the shim to Domi Python plus Domi Node, and refreshes the root-level `~/.seektalent/seektalent.*` Windows compatibility shims so existing WindowsApps launchers cannot point at stale prefixes. It updates `PATH` only for the current terminal session and does not modify the Domi app/runtime, Chrome, or the OpenCLI Chrome extension.
+The install script uses the explicitly supplied Domi Python and Node to install the exact package and WTSCLI pair under `~/.seektalent`. The delivered startup script validates that install, exports the host JWT at launch, and execs the package; it never discovers a Domi app version or starts `19826` directly.
 
 The current starter env defaults to the canonical text-LLM surface, with `SEEKTALENT_TEXT_LLM_PROTOCOL_FAMILY=openai_chat_completions_compatible`, the matching `SEEKTALENT_TEXT_LLM_ENDPOINT_*` values, and bare stage `*_MODEL_ID` settings. Dual-protocol support still exists through the same `SEEKTALENT_TEXT_LLM_*` surface.
 
@@ -75,7 +81,7 @@ For installed PyPI users, `seektalent init` writes a minimal `.env` with one req
 SEEKTALENT_TEXT_LLM_API_KEY=
 ```
 
-All other runtime, output, cleanup, source, OpenCLI, Liepin, and model settings use product defaults.
+All other runtime, output, cleanup, source, WTSCLI, Liepin, and model settings use product defaults.
 
 ### Fill the required value in `.env`
 
@@ -108,7 +114,7 @@ seektalent workbench
 
 The command starts the backend and serves the built React Workbench from the same loopback origin. Starting the Workbench, normal conversation, requirement extraction, requirement editing, and requirement confirmation do not depend on browser readiness. After requirements are confirmed, immediately before a real Liepin source starts, SeekTalent checks the paired WTSCLI runtime, Chrome extension, any `https://h.liepin.com/*` host tab, and the current Liepin session. If the source cannot start, the Workbench keeps the normal source status, adds the verified reason and one action, and offers **重新检查并继续** from the same task after the user fixes it. The Workbench may be open in any browser; the real WTSCLI and Liepin session must be ready in Chrome. The packaged frontend does not require pnpm, Vite, Node, a WTSCLI CLI, or a repository checkout on the user's machine.
 
-For source checkout development, use the repo-local OpenCLI/React launcher:
+For source checkout development, use the repo-local WTSCLI/React launcher:
 
 ```bash
 scripts/start-dev-workbench.sh
@@ -119,7 +125,7 @@ For production-package staging on macOS, install the published wheel into a full
 ```bash
 scripts/install-seektalent-staging.sh 0.7.49
 # In chrome://extensions, load this unpacked extension first:
-# ~/.seektalent-staging/home/.seektalent/chrome-extension/opencli
+# ~/.seektalent-staging/home/.seektalent/chrome-extension/wtscli
 ~/.seektalent-staging/bin/seektalent-staging --check
 ~/.seektalent-staging/bin/seektalent-staging
 ```
@@ -128,11 +134,11 @@ This path runs the downloaded production wheel, packaged React frontend, product
 WTSCLI browser bridge. It uses standalone Python/Node plus `SEEKTALENT_TEXT_LLM_*` configuration, rejects Domi
 runtime paths, and keeps all staging databases, browser-bridge state, caches, and generated secrets under
 `~/.seektalent-staging`. The WTSCLI Chrome extension is installed under
-`~/.seektalent-staging/home/.seektalent/chrome-extension/opencli`; load that directory as an unpacked Chrome
-extension before running `--check` or live Liepin testing. WTSCLI 0.1.0 still shares port `19825` with legacy OpenCLI, so Domi and
-staging browser bridges cannot run concurrently yet; staging fails closed if that port belongs to another bridge.
+`~/.seektalent-staging/home/.seektalent/chrome-extension/wtscli`; load that directory as an unpacked Chrome
+extension before running `--check` or live Liepin testing. WTSCLI uses its isolated `19826` endpoint; legacy OpenCLI
+`19825` remains untouched and can stay running concurrently.
 
-The development launcher installs React dependencies with pnpm when needed, points `SEEKTALENT_LIEPIN_OPENCLI_COMMAND` at `apps/web-react/node_modules/.bin/opencli`, exports `SEEKTALENT_LIEPIN_WORKER_MODE=opencli` plus `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli`, then starts the backend on `127.0.0.1:8012` and the React Workbench on `127.0.0.1:5178`. The user still installs and connects the OpenCLI Chrome extension in their own Chrome profile. When OpenCLI is selected and ready, Liepin behavior is real local browser behavior, not fixture data.
+The development launcher installs React dependencies with pnpm when needed, exports `SEEKTALENT_LIEPIN_WORKER_MODE=opencli` plus `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli`, then starts the backend on `127.0.0.1:8012` and the React Workbench on `127.0.0.1:5178`. SeekTalent owns one exact-package WTSCLI lifecycle supervisor for the application lifetime; the user still installs and connects the WTSCLI Chrome extension in their own Chrome profile. When the supervisor and browser surface are ready, Liepin behavior is real local browser behavior, not fixture data.
 
 `doctor`, `inspect --json`, cleanup, and Workbench startup do not upload local databases, provider cookies, browser sessions, raw resumes, or configured secrets. Runtime network calls are limited to the configured LLM provider and the local browser's Liepin session unless an optional provider is explicitly configured. Remote eval logging through W&B/Weave is off by default and requires explicit configuration.
 
@@ -319,7 +325,7 @@ Installed users start the packaged local Workbench with:
 seektalent workbench
 ```
 
-Source-checkout development uses the repo-local React/OpenCLI launcher:
+Source-checkout development uses the repo-local React/WTSCLI launcher:
 
 ```bash
 scripts/start-dev-workbench.sh

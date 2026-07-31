@@ -3,8 +3,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from seektalent.config import DEFAULT_LIEPIN_OPENCLI_COMMAND
-from seektalent.product_env import MANAGED_OPENCLI_COMMAND_MARKER, build_workbench_command_env, load_product_user_env
+from seektalent.product_env import build_workbench_command_env, load_product_user_env
 
 
 def test_load_product_user_env_reads_only_product_keys(tmp_path: Path) -> None:
@@ -89,39 +88,6 @@ def test_build_workbench_command_env_uses_home_workspace_root_even_when_cwd_is_r
     assert env["SEEKTALENT_WORKSPACE_ROOT"] == str(home)
 
 
-def test_build_workbench_command_env_ignores_unmarked_opencli_command(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-
-    env = build_workbench_command_env({"SEEKTALENT_LIEPIN_OPENCLI_COMMAND": "opencli browser host-global"})
-
-    assert env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] == DEFAULT_LIEPIN_OPENCLI_COMMAND
-
-
-def test_build_workbench_command_env_preserves_marked_managed_opencli_command(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    home = tmp_path / "home"
-    home.mkdir()
-    monkeypatch.setenv("HOME", str(home))
-
-    command = "/domi/node /home/user/.seektalent/opencli/main.js"
-    env = build_workbench_command_env(
-        {
-            "SEEKTALENT_LIEPIN_OPENCLI_COMMAND": command,
-            MANAGED_OPENCLI_COMMAND_MARKER: "1",
-        }
-    )
-
-    assert env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] == command
-    assert env[MANAGED_OPENCLI_COMMAND_MARKER] == "1"
-
-
 def test_build_workbench_command_env_sets_helper_python_to_current_interpreter(
     tmp_path: Path,
     monkeypatch,
@@ -179,7 +145,6 @@ def test_build_workbench_command_env_ignores_stale_seektalent_runtime_env(
             "SEEKTALENT_RUNTIME_MODE": "dev",
             "SEEKTALENT_LIEPIN_WORKER_MODE": "disabled",
             "SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND": "disabled",
-            "SEEKTALENT_LIEPIN_OPENCLI_COMMAND": "legacy-global-opencli",
             "SEEKTALENT_DOMI_JWT": "domi-test-jwt",
             "SEEKTALENT_DOMI_LLM_BASE_URL": "https://domi.example/v1",
             "SEEKTALENT_DOMI_LLM_CHANNEL": "seek_talent",
@@ -193,7 +158,6 @@ def test_build_workbench_command_env_ignores_stale_seektalent_runtime_env(
     assert env["SEEKTALENT_RUNTIME_MODE"] == "prod"
     assert env["SEEKTALENT_LIEPIN_WORKER_MODE"] == "opencli"
     assert env["SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND"] == "opencli"
-    assert env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] == DEFAULT_LIEPIN_OPENCLI_COMMAND
     assert env["SEEKTALENT_DOMI_JWT"] == "domi-test-jwt"
     assert env["SEEKTALENT_DOMI_LLM_BASE_URL"] == "https://domi.example/v1"
     assert env["SEEKTALENT_DOMI_LLM_CHANNEL"] == "seek_talent"

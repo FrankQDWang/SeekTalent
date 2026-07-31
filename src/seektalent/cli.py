@@ -4,8 +4,6 @@ import argparse
 import importlib
 import json
 import os
-import shlex
-import subprocess
 import sys
 import threading
 from collections import deque
@@ -46,10 +44,6 @@ from seektalent.resources import (
     package_spec_file,
     resolve_user_path,
 )
-from seektalent.failure_interpretation import (
-    LIEPIN_PRODUCTION_FAILURE_REASON_CODES,
-    public_source_problem_message,
-)
 from seektalent.text_inputs import read_optional_inline_or_file_text, read_required_inline_or_file_text
 from seektalent.version import __version__
 
@@ -60,7 +54,6 @@ PROVIDER_ENV_VAR_BY_PROVIDER_LABEL = {
     "bailian": "SEEKTALENT_TEXT_LLM_API_KEY",
     "domi": "SEEKTALENT_DOMI_JWT",
 }
-_MANAGED_OPENCLI_COMMAND_MARKER = "SEEKTALENT_LIEPIN_OPENCLI_COMMAND_MANAGED"
 OPTIONAL_RUNTIME_ENV_VARS = [
     "SEEKTALENT_CTS_BASE_URL",
     "SEEKTALENT_CTS_TIMEOUT_SECONDS",
@@ -141,8 +134,6 @@ SKIPPED_BENCHMARK_FILE_PATTERNS = (
     "*.only.jsonl",
     "*.subset.jsonl",
 )
-_WORKBENCH_OPENCLI_BROWSER_CLI = "seektalent.providers.liepin.opencli_browser_cli"
-_WORKBENCH_PREFLIGHT_ACTION_TIMEOUT_SECONDS = 90
 ROOT_HELP_EPILOG = """Primary workflow:
   1. seektalent doctor
   2. seektalent
@@ -1791,7 +1782,7 @@ def _browser_check_command(args: argparse.Namespace) -> int:
             liepin_enabled=False,
             reason_code="wtscli_daemon_missing",
             message="未找到 SeekTalent WTSCLI 使用的 Domi Node 运行时。",
-            action="请确认 Domi 已安装，或设置 SEEKTALENT_DOMI_NODE 后重新运行环境检查。",
+            action="请由宿主设置 DOMI_NODE 或 SEEKTALENT_DOMI_NODE 后重新运行环境检查。",
             extension_dir=Path.home() / ".seektalent" / "chrome-extension" / "wtscli",
         )
     else:
@@ -1822,31 +1813,7 @@ def _workbench_startup_preflight(env: MutableMapping[str, str]) -> bool:
         return False
     if not _configure_workbench_domi_opencli_node(env):
         _disable_liepin_source(env)
-        return True
-
-    try:
-        launcher = importlib.import_module("seektalent.opencli_launcher")
-        runtime = launcher.ensure_opencli_runtime(env=env)
-        env["SEEKTALENT_LIEPIN_OPENCLI_COMMAND"] = _workbench_managed_opencli_command(runtime, env)
-        env[_MANAGED_OPENCLI_COMMAND_MARKER] = "1"
-    except Exception as exc:
-        if exc.__class__.__name__ != "BootstrapError":
-            raise
-        _print_workbench_warning(
-            "liepin_opencli_bootstrap_failed",
-            f"WTSCLI/Node 不可用，已只禁用猎聘 source：{exc}",
-        )
-        _disable_liepin_source(env)
-
     return True
-
-
-def _workbench_managed_opencli_command(runtime: object, env: Mapping[str, str]) -> str:
-    node = getattr(runtime, "node", None) or env.get("SEEKTALENT_WTSCLI_NODE")
-    opencli_main = getattr(runtime, "opencli_main", None)
-    if node is None or opencli_main is None:
-        raise RuntimeError("WTSCLI runtime did not expose managed Node/main.js paths")
-    return shlex.join((str(node), str(opencli_main)))
 
 
 def _configure_workbench_domi_opencli_node(env: MutableMapping[str, str]) -> bool:
@@ -1870,8 +1837,6 @@ def _configure_workbench_domi_opencli_node(env: MutableMapping[str, str]) -> boo
 def _disable_liepin_source(env: MutableMapping[str, str]) -> None:
     env["SEEKTALENT_LIEPIN_WORKER_MODE"] = "disabled"
     env["SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND"] = "disabled"
-    env.pop("SEEKTALENT_LIEPIN_OPENCLI_COMMAND", None)
-    env.pop(_MANAGED_OPENCLI_COMMAND_MARKER, None)
 
 
 def _first_nonblank_env(env: Mapping[str, str], keys: Sequence[str]) -> str | None:
@@ -1880,106 +1845,6 @@ def _first_nonblank_env(env: Mapping[str, str], keys: Sequence[str]) -> str | No
         if value and value.strip():
             return value.strip()
     return None
-
-
-def _workbench_opencli_env(env: Mapping[str, str]) -> dict[str, str]:
-    preflight_env = dict(env)
-    for key in (
-        "SEEKTALENT_DOMI_JWT",
-        "SEEKTALENT_DOMI_LLM_BASE_URL",
-        "SEEKTALENT_DOMI_LLM_CHANNEL",
-    ):
-        preflight_env.pop(key, None)
-    return preflight_env
-
-
-def _run_workbench_liepin_preflight_actions(
-    *,
-    env: Mapping[str, str],
-) -> dict[str, object]:
-    return _run_workbench_liepin_action("status", env=env)
-
-
-def _run_workbench_liepin_action(
-    action: str,
-    *,
-    env: Mapping[str, str],
-    payload: Mapping[str, object] | None = None,
-) -> dict[str, object]:
-    try:
-        completed = subprocess.run(
-            [sys.executable, "-m", _WORKBENCH_OPENCLI_BROWSER_CLI, action],
-            input=json.dumps(dict(payload or {}), ensure_ascii=False),
-            capture_output=True,
-            text=True,
-            encoding="utf-8",
-            errors="replace",
-            check=False,
-            env=dict(env),
-            timeout=_WORKBENCH_PREFLIGHT_ACTION_TIMEOUT_SECONDS,
-        )
-    except subprocess.TimeoutExpired:
-        return {"ok": False, "action": action, "safeReasonCode": "liepin_opencli_timeout"}
-    except (OSError, UnicodeDecodeError):
-        return {"ok": False, "action": action, "safeReasonCode": "liepin_opencli_status_unavailable"}
-    output = (completed.stdout or "").strip()
-    if not output:
-        reason = "liepin_opencli_helper_empty_output"
-        if completed.returncode != 0 and completed.stderr:
-            reason = _workbench_reason_from_text(completed.stderr)
-        return {"ok": False, "action": action, "safeReasonCode": reason}
-    try:
-        loaded = json.loads(output)
-    except json.JSONDecodeError:
-        return {"ok": False, "action": action, "safeReasonCode": "liepin_opencli_helper_invalid_output"}
-    if not isinstance(loaded, dict):
-        return {"ok": False, "action": action, "safeReasonCode": "liepin_opencli_helper_invalid_output"}
-    return loaded
-
-
-def _workbench_action_ok(payload: Mapping[str, object]) -> bool:
-    return payload.get("ok") is True
-
-
-def _workbench_action_reason(payload: Mapping[str, object]) -> str:
-    reason = payload.get("safeReasonCode") or payload.get("safe_reason_code")
-    if isinstance(reason, str) and reason in LIEPIN_PRODUCTION_FAILURE_REASON_CODES:
-        return reason
-    return "liepin_opencli_status_unavailable"
-
-
-def _workbench_action_name(payload: Mapping[str, object]) -> str | None:
-    action = payload.get("action")
-    if isinstance(action, str) and action:
-        return action
-    return None
-
-
-def _workbench_reason_from_text(text: str) -> str:
-    for reason in (
-        "liepin_opencli_login_required",
-        "liepin_opencli_extension_disconnected",
-        "liepin_opencli_config_invalid",
-        "liepin_opencli_removed_config",
-        "liepin_opencli_helper_empty_output",
-        "liepin_opencli_helper_invalid_input",
-        "liepin_opencli_helper_invalid_output",
-        "liepin_opencli_helper_output_too_large",
-        "liepin_opencli_malformed_state",
-        "liepin_opencli_lease_malformed",
-        "liepin_opencli_owned_marker_malformed",
-        "liepin_opencli_tab_response_malformed",
-        "liepin_opencli_daemon_stale",
-        "liepin_opencli_daemon_not_running",
-        "liepin_opencli_timeout",
-    ):
-        if reason in text:
-            return reason
-    return "liepin_opencli_status_unavailable"
-
-
-def _workbench_reason_message(reason: str) -> str:
-    return public_source_problem_message(reason, source_label="猎聘") or "猎聘启动前检查失败。"
 
 
 def _print_workbench_reason(reason: str, message: str, *, action: str | None = None) -> None:
@@ -2021,11 +1886,17 @@ def _workbench_command(args: argparse.Namespace) -> int:
     for origin in args.allowed_origin or []:
         argv.extend(["--allowed-origin", origin])
     try:
-        completed = subprocess.run(argv, check=False, env=env)
+        return _run_workbench_server(argv, env)
     except FileNotFoundError:
         print("validation failed: current Python executable not found", file=sys.stderr)
         return 1
-    return completed.returncode
+
+
+def _run_workbench_server(argv: Sequence[str], env: Mapping[str, str]) -> int:
+    """Replace the launcher with the server so it is the lifecycle host."""
+    command = [str(part) for part in argv]
+    os.execvpe(command[0], command, dict(env))
+    return 0
 
 
 def _inspect_command(args: argparse.Namespace) -> int:

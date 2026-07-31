@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-import shlex
-import shutil
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from seektalent.config import DEFAULT_LIEPIN_OPENCLI_COMMAND, AppSettings, evaluate_local_data_root_policy, resolve_path_from_root
+from seektalent.config import AppSettings, evaluate_local_data_root_policy, resolve_path_from_root
 
 
 DevModeComponentStatus = Literal["configured", "missing", "needs_setup", "invalid", "ready", "warning", "safe", "unknown"]
@@ -61,10 +59,6 @@ def build_dev_mode_env_diagnostics(env: Mapping[str, str | None], *, workspace_r
         ),
         _opencli_browser_component(
             opencli_enabled=opencli_enabled,
-            command_status=_command_status(
-                _env_text(env, "SEEKTALENT_LIEPIN_OPENCLI_COMMAND") or DEFAULT_LIEPIN_OPENCLI_COMMAND,
-                root=workspace_root,
-            ),
         ),
         _component(
             "liepin_account_binding_secret",
@@ -105,7 +99,6 @@ def build_dev_mode_status(settings: AppSettings) -> DevModeStatus:
         _component("liepin_worker_mode", "Liepin worker mode", "configured" if settings.liepin_worker_mode == "opencli" else "missing"),
         _opencli_browser_component(
             opencli_enabled=liepin_opencli_enabled,
-            command_status=_command_status(settings.liepin_opencli_command, root=settings.code_base_root),
         ),
         _component(
             "liepin_account_binding_secret",
@@ -136,7 +129,6 @@ def build_dev_mode_status(settings: AppSettings) -> DevModeStatus:
 def _opencli_browser_component(
     *,
     opencli_enabled: bool,
-    command_status: tuple[Literal["configured", "missing", "invalid"], str],
 ) -> DevModeComponentStatusItem:
     if not opencli_enabled:
         return _component(
@@ -145,38 +137,12 @@ def _opencli_browser_component(
             "missing",
             reason_code="liepin_opencli_backend_disabled",
         )
-    status, reason_code = command_status
-    if status != "configured":
-        return _component(
-            "liepin_opencli_browser",
-            "Liepin browser channel",
-            "needs_setup" if status == "missing" else "invalid",
-            reason_code=reason_code,
-        )
     return _component(
         "liepin_opencli_browser",
         "Liepin browser channel",
         "configured",
         reason_code="liepin_opencli_preflight_required",
     )
-
-
-def _command_status(command_value: str, *, root: Path) -> tuple[Literal["configured", "missing", "invalid"], str]:
-    try:
-        argv = shlex.split(command_value)
-    except ValueError:
-        return "invalid", "liepin_opencli_command_invalid"
-    if not argv:
-        return "missing", "liepin_opencli_command_missing"
-    command = Path(argv[0])
-    if command.is_absolute() or len(command.parts) > 1:
-        path = command if command.is_absolute() else resolve_path_from_root(str(command), root=root)
-        if path.exists():
-            return "configured", "configured"
-        return "missing", "liepin_opencli_command_missing"
-    if shutil.which(argv[0]):
-        return "configured", "configured"
-    return "missing", "liepin_opencli_command_missing"
 
 
 def _component(

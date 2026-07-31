@@ -20,6 +20,7 @@ from seektalent_runtime_control.executor import (
 )
 from seektalent_runtime_control.service import RuntimeControlService
 from seektalent_runtime_control.store import RuntimeControlStore
+from seektalent.wtscli_lifecycle_supervisor import WtsCliLifecycleSupervisor
 
 
 class ApplicationRuntimeFactory(Protocol):
@@ -28,6 +29,7 @@ class ApplicationRuntimeFactory(Protocol):
         settings: AppSettings,
         *,
         source_operation_executor: object | None = None,
+        wtscli_lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
     ) -> object: ...
 
 
@@ -69,6 +71,7 @@ def build_agent_service(
     settings: AppSettings,
     runtime_factory: ApplicationRuntimeFactory,
     source_context_provider: SourceContextProvider | None = None,
+    wtscli_lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
 ) -> ConversationAgentService:
     conversation_store = ConversationStore(settings.conversation_agent_path)
     conversation_store.initialize()
@@ -80,12 +83,21 @@ def build_agent_service(
         executor=requirement_executor,
     )
     command_service = RuntimeCommandService(store=runtime_store, requirement_extractor=requirement_executor)
+    service_supervisor = wtscli_lifecycle_supervisor
     def workflow_runtime_factory(
         *,
         source_operation_executor: object | None = None,
+        wtscli_lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
     ) -> object:
         if settings.liepin_worker_mode != "opencli":
             return runtime_factory(settings)
+        supervisor = wtscli_lifecycle_supervisor or service_supervisor
+        if supervisor is not None:
+            return runtime_factory(
+                settings,
+                source_operation_executor=source_operation_executor,
+                wtscli_lifecycle_supervisor=supervisor,
+            )
         return runtime_factory(
             settings,
             source_operation_executor=source_operation_executor,
@@ -97,6 +109,7 @@ def build_agent_service(
         runtime_factory=workflow_runtime_factory,
         command_service=command_service,
         source_context_provider=source_context_provider,
+        wtscli_lifecycle_supervisor=wtscli_lifecycle_supervisor,
     )
     detail_service = RuntimeDetailService(store=runtime_store)
     agent_prompt = PromptRegistry(settings.prompt_dir).load("conversation_agent")

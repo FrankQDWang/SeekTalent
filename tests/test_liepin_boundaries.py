@@ -233,7 +233,7 @@ OPENCLI_PYTHON_ALLOWLIST = {
     "src/seektalent/providers/liepin/liepin_opencli_policy.py",
     "src/seektalent/wtscli_verify_session_adapter.py",
     "src/seektalent/wtscli_verify_session_classification.py",
-    "src/seektalent/wtscli_connection_supervisor.py",
+    "src/seektalent/wtscli_lifecycle_supervisor.py",
     "src/seektalent/liepin_verify_session_gate.py",
     "src/seektalent/providers/liepin/liepin_site_adapter.py",
     "src/seektalent/providers/liepin/liepin_site_parsing.py",

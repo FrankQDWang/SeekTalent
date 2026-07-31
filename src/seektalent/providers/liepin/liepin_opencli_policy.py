@@ -13,7 +13,7 @@ from seektalent.opencli_browser.reason_codes import (
     OPENCLI_BRIDGE_INTEGRITY_FAILED,
     OPENCLI_BRIDGE_PROTOCOL_MISMATCH,
     OPENCLI_BRIDGE_WRONG_IMPLEMENTATION,
-    OPENCLI_COMMAND_MISSING,
+    OPENCLI_HELPER_MISSING,
     OPENCLI_DAEMON_NOT_RUNNING,
     OPENCLI_DAEMON_STALE,
     OPENCLI_EXTENSION_DISCONNECTED,
@@ -55,7 +55,7 @@ LIEPIN_SEARCH_TAB_SESSION = "st_liepin_search"
 LIEPIN_DETAIL_TAB_SESSION = "st_liepin_detail"
 
 OPENCLI_TO_LIEPIN_REASON = {
-    OPENCLI_COMMAND_MISSING: "liepin_opencli_command_missing",
+    OPENCLI_HELPER_MISSING: "liepin_opencli_helper_missing",
     OPENCLI_BRIDGE_INTEGRITY_FAILED: "liepin_opencli_bridge_integrity_failed",
     OPENCLI_BRIDGE_WRONG_IMPLEMENTATION: "liepin_opencli_bridge_wrong_implementation",
     OPENCLI_BRIDGE_BUILD_MISMATCH: "liepin_opencli_bridge_build_mismatch",

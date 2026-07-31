@@ -59,7 +59,7 @@ def test_project_declares_an_intel_compatible_cryptography_dependency() -> None:
 def test_load_browser_bridge_bundle_accepts_verified_seek_talent_fork(tmp_path: Path) -> None:
     bundle_dir = _browser_bridge_bundle(tmp_path / "bridge")
 
-    bundle = MODULE.load_browser_bridge_bundle(bundle_dir, opencli_version="0.1.0")
+    bundle = MODULE.load_browser_bridge_bundle(bundle_dir, wtscli_version="0.1.0")
 
     assert bundle.bridge_build_id == WTSCLI_BUILD_ID
     assert bundle.runtime_package.name == "wtscli-0.1.0.tgz"
@@ -71,7 +71,7 @@ def test_load_browser_bridge_bundle_rejects_tampered_runtime(tmp_path: Path) -> 
     (bundle_dir / "runtime" / "wtscli-0.1.0.tgz").write_bytes(b"tampered")
 
     with pytest.raises(RuntimeError, match="admission failed: integrity_failed"):
-        MODULE.load_browser_bridge_bundle(bundle_dir, opencli_version="0.1.0")
+        MODULE.load_browser_bridge_bundle(bundle_dir, wtscli_version="0.1.0")
 
 
 def test_load_browser_bridge_bundle_rejects_tampered_extension_tree(tmp_path: Path) -> None:
@@ -79,7 +79,7 @@ def test_load_browser_bridge_bundle_rejects_tampered_extension_tree(tmp_path: Pa
     (bundle_dir / "extension" / "unexpected.js").write_text("tampered", encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="admission failed: integrity_failed"):
-        MODULE.load_browser_bridge_bundle(bundle_dir, opencli_version="0.1.0")
+        MODULE.load_browser_bridge_bundle(bundle_dir, wtscli_version="0.1.0")
 
 
 def test_load_browser_bridge_bundle_requires_production_capabilities(tmp_path: Path) -> None:
@@ -90,7 +90,7 @@ def test_load_browser_bridge_bundle_requires_production_capabilities(tmp_path: P
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
     with pytest.raises(RuntimeError, match="admission failed: capability_missing"):
-        MODULE.load_browser_bridge_bundle(bundle_dir, opencli_version="0.1.0")
+        MODULE.load_browser_bridge_bundle(bundle_dir, wtscli_version="0.1.0")
 
 
 def test_offline_release_uses_pinned_fork_bundle_not_upstream_assets() -> None:
@@ -103,13 +103,13 @@ def test_offline_release_uses_pinned_fork_bundle_not_upstream_assets() -> None:
     assert "install_browser_bridge_bundle" in source
     assert "browser_bridge_runtime_sha256" in source
     assert "github.com/jackwener/OpenCLI/releases" not in source
-    assert "@jackwener/opencli@{opencli_version}" not in source
+    assert "@jackwener/opencli@" not in source
     assert "repository: FrankQDWang/wtscli" in workflow
     assert "WTSCLI_FORK_COMMIT" in workflow
     assert "uv sync --python 3.13 --locked --group dev" in workflow
     assert "uv run --python 3.13 --group dev python scripts/build_offline_macos_intel.py" in workflow
     assert "from seektalent.browser_bridge_manifest import WTSCLI_FORK_COMMIT" in workflow
-    assert "from seektalent.opencli_launcher import OPENCLI_PACKAGE" in workflow
+    assert "from seektalent.browser_bridge_manifest import WTSCLI_PACKAGE" in workflow
 
 
 def test_offline_release_builds_the_seek_talent_wheel_from_the_current_checkout(

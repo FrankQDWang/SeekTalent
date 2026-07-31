@@ -4,7 +4,6 @@ import json
 import logging
 import random
 import re
-import subprocess
 import time
 import uuid
 from collections.abc import Mapping, Sequence
@@ -35,25 +34,16 @@ from seektalent.opencli_browser.daemon_transport import (
 )
 from seektalent.opencli_browser.fault_isolation import isolated_call
 from seektalent.opencli_browser.reason_codes import (
-    OPENCLI_BOOTSTRAP_FAILED,
-    OPENCLI_COMMAND_MISSING,
     OPENCLI_DAEMON_NOT_RUNNING,
-    OPENCLI_DAEMON_STALE,
-    OPENCLI_ERROR_CODE_TO_REASON,
-    OPENCLI_EXTENSION_DISCONNECTED,
     OPENCLI_FORBIDDEN_COMMAND,
     OPENCLI_OWNED_TAB_MISSING,
     OPENCLI_PAGE_NOT_READY,
     OPENCLI_STATUS_UNAVAILABLE,
-    OPENCLI_TIMEOUT,
 )
 from seektalent.opencli_browser.lifecycle import OPENCLI_OWNED_TAB_IDLE_SECONDS
 from seektalent.opencli_browser.runtime import (
     ALLOWED_BROWSER_COMMANDS,
     FORBIDDEN_BROWSER_COMMANDS,
-    OpenCliCommandRunner,
-    SubprocessOpenCliCommandRunner,
-    strip_opencli_stdout_notice,
 )
 
 
@@ -74,12 +64,10 @@ class OpenCliBrowserAutomation:
         self,
         *,
         config: OpenCliBrowserConfig,
-        commands: OpenCliCommandRunner | None = None,
         daemon: OpenCliDaemonClient | None = None,
         timing_recorder: OpenCliBrowserTimingRecorder | None = None,
     ) -> None:
         self.config = config
-        self.commands = commands or SubprocessOpenCliCommandRunner()
         self._daemon = daemon
         self._daemon_page: str | None = None
         self._control_scope: BrowserControlScope | None = None
@@ -91,6 +79,17 @@ class OpenCliBrowserAutomation:
     @property
     def daemon_enabled(self) -> bool:
         return self._daemon is not None
+
+    def replace_daemon(self, daemon: OpenCliDaemonClient) -> None:
+        """Replace a dead daemon connection after the lifecycle owner recovers."""
+        old_daemon = self._daemon
+        self._daemon = daemon
+        self.finish_control_scope()
+        self._owned_tabs.clear()
+        self._retiring_tabs.clear()
+        self._owned_tab_allocation_counts.clear()
+        if old_daemon is not None and old_daemon is not daemon:
+            old_daemon.close()
 
     def activate_control_scope(self, control_key: str) -> BrowserControlScope:
         if self._daemon is None or not control_key.strip() or len(control_key) > 256:
@@ -380,34 +379,11 @@ class OpenCliBrowserAutomation:
         return self._owned_tabs[result.page]
 
     def status(self) -> OpenCliBrowserResult:
-        if self._daemon is not None:
-            try:
-                output = json.dumps(self._daemon.verify_bridge(), ensure_ascii=False, sort_keys=True)
-            except OpenCliBrowserError as exc:
-                return OpenCliBrowserResult(ok=False, action="status", safe_reason_code=exc.safe_reason_code)
-            return OpenCliBrowserResult(ok=True, action="status", private_output=output)
         try:
-            output = self._run(tuple(self.config.command) + ("daemon", "status"))
+            output = json.dumps(self._require_daemon().verify_bridge(), ensure_ascii=False, sort_keys=True)
         except OpenCliBrowserError as exc:
             return OpenCliBrowserResult(ok=False, action="status", safe_reason_code=exc.safe_reason_code)
-        reason = _opencli_status_reason(output)
-        if reason is not None:
-            return OpenCliBrowserResult(
-                ok=False,
-                action="status",
-                safe_reason_code=reason,
-                private_output=output,
-            )
         return OpenCliBrowserResult(ok=True, action="status", private_output=output)
-
-    def restart_daemon(self) -> OpenCliBrowserResult:
-        if self._daemon is not None:
-            self._daemon.close()
-        try:
-            output = self._run(tuple(self.config.command) + ("daemon", "restart"))
-        except OpenCliBrowserError as exc:
-            return OpenCliBrowserResult(ok=False, action="restart_daemon", safe_reason_code=exc.safe_reason_code)
-        return OpenCliBrowserResult(ok=True, action="restart_daemon", private_output=output)
 
     def get_url(self) -> OpenCliBrowserResult:
         output = self.run_browser_command("get", ("url",))
@@ -471,9 +447,7 @@ class OpenCliBrowserAutomation:
     def click_ref(self, ref: str) -> str:
         if not _is_safe_page_id(ref):
             raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
-        if self._daemon is not None:
-            return self._daemon_operation("click", {"target": ref}, label="click")
-        return self._run(tuple(self.config.command) + ("browser", self.config.session, "click", ref))
+        return self._daemon_operation("click", {"target": ref}, label="click")
 
     def find_css(self, selector: str, *, limit: int, text_max: int) -> str:
         if not selector.strip() or "\x00" in selector:
@@ -482,33 +456,16 @@ class OpenCliBrowserAutomation:
             raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
         if text_max < 1 or text_max > 10_000:
             raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
-        if self._daemon is not None:
-            return self._daemon_operation(
-                "find-css",
-                {"selector": selector, "limit": limit, "textMax": text_max},
-                label="find",
-            )
-        return self._run(
-            tuple(self.config.command)
-            + (
-                "browser",
-                self.config.session,
-                "find",
-                "--css",
-                selector,
-                "--limit",
-                str(limit),
-                "--text-max",
-                str(text_max),
-            )
+        return self._daemon_operation(
+            "find-css",
+            {"selector": selector, "limit": limit, "textMax": text_max},
+            label="find",
         )
 
     def readonly_eval(self, script: str) -> str:
         if not script.strip() or "\x00" in script:
             raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
-        if self._daemon is not None:
-            return self._daemon_operation("evaluate", {"code": script}, label="eval")
-        return self._run(tuple(self.config.command) + ("browser", self.config.session, "eval", script))
+        return self._daemon_operation("evaluate", {"code": script}, label="eval")
 
     def pace_before_action(self, action: str) -> None:
         if not self.config.pacing_enabled:
@@ -526,9 +483,7 @@ class OpenCliBrowserAutomation:
             raise OpenCliBrowserError(OPENCLI_FORBIDDEN_COMMAND)
         args_tuple = tuple(args)
         _validate_command_shape(command, args_tuple)
-        if self._daemon is not None:
-            return self._run_daemon_browser_command(command, args_tuple)
-        return self._run(tuple(self.config.command) + ("browser", self.config.session, command, *args_tuple))
+        return self._run_daemon_browser_command(command, args_tuple)
 
     def _run_daemon_browser_command(self, command: str, args: tuple[str, ...]) -> str:
         if command == "state":
@@ -761,10 +716,8 @@ class OpenCliBrowserAutomation:
         label: str,
         timeout_seconds: float | None = None,
     ) -> OpenCliDaemonResult:
-        daemon = self._daemon
-        if daemon is None:
-            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
-        argv = tuple(self.config.command) + ("browser", self.config.session, label)
+        daemon = self._require_daemon()
+        argv = ("daemon", label)
         started = time.perf_counter()
         ok = False
         safe_reason_code: str | None = None
@@ -787,56 +740,10 @@ class OpenCliBrowserAutomation:
                 safe_reason_code=safe_reason_code,
             )
 
-    def _run(self, argv: Sequence[str]) -> str:
-        started = time.perf_counter()
-        ok = False
-        safe_reason_code: str | None = None
-        try:
-            output = strip_opencli_stdout_notice(
-                self.commands.run(
-                    tuple(argv),
-                    timeout=self.config.timeout_seconds,
-                    env={"OPENCLI_WINDOW": self.config.window_mode},
-                )
-            )
-            ok = True
-            return output
-        except FileNotFoundError as exc:
-            safe_reason_code = OPENCLI_COMMAND_MISSING
-            raise OpenCliBrowserError(OPENCLI_COMMAND_MISSING) from exc
-        except subprocess.TimeoutExpired as exc:
-            safe_reason_code = OPENCLI_TIMEOUT
-            raise OpenCliBrowserError(OPENCLI_TIMEOUT) from exc
-        except subprocess.CalledProcessError as exc:
-            output = f"{getattr(exc, 'stdout', None) or getattr(exc, 'output', '') or ''}\n{exc.stderr or ''}"
-            if exc.returncode == 127 and any(
-                marker in output
-                for marker in (
-                    "SeekTalent WTSCLI bootstrap failed:",
-                    "SeekTalent OpenCLI bootstrap failed:",
-                )
-            ):
-                safe_reason_code = OPENCLI_BOOTSTRAP_FAILED
-                raise OpenCliBrowserError(OPENCLI_BOOTSTRAP_FAILED) from exc
-            if "Extension" in output and ("not connected" in output or "disconnected" in output):
-                safe_reason_code = OPENCLI_EXTENSION_DISCONNECTED
-                raise OpenCliBrowserError(OPENCLI_EXTENSION_DISCONNECTED) from exc
-            if "Daemon:" in output:
-                safe_reason_code = _opencli_status_reason(output) or OPENCLI_STATUS_UNAVAILABLE
-                raise OpenCliBrowserError(safe_reason_code) from exc
-            reason = _safe_reason_from_opencli_error_output(output)
-            if reason is not None:
-                safe_reason_code = reason
-                raise OpenCliBrowserError(reason) from exc
-            safe_reason_code = OPENCLI_STATUS_UNAVAILABLE
-            raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE) from exc
-        finally:
-            self._record_timing(
-                argv=tuple(argv),
-                duration_ms=(time.perf_counter() - started) * 1000,
-                ok=ok,
-                safe_reason_code=safe_reason_code,
-            )
+    def _require_daemon(self) -> OpenCliDaemonClient:
+        if self._daemon is None:
+            raise OpenCliBrowserError(OPENCLI_DAEMON_NOT_RUNNING)
+        return self._daemon
 
     def _record_timing(
         self,
@@ -878,10 +785,7 @@ class OpenCliBrowserAutomation:
         return None
 
     def _opencli_action(self, argv: tuple[str, ...]) -> tuple[str, ...]:
-        command_len = len(self.config.command)
-        if len(argv) <= command_len:
-            return ()
-        return argv[command_len:]
+        return argv
 
 
 def _validate_command_shape(command: str, args: tuple[str, ...]) -> None:
@@ -930,53 +834,10 @@ def _owned_tab_session(tab_kind: OpenCliTabKind, session: str | None) -> str:
     return resolved
 
 
-def _opencli_status_reason(output: str) -> str | None:
-    if "Daemon: running" in output:
-        if "Extension: connected" in output:
-            return None
-        if "Extension:" in output:
-            return OPENCLI_EXTENSION_DISCONNECTED
-        return OPENCLI_STATUS_UNAVAILABLE
-    if "Daemon: stale" in output:
-        return OPENCLI_DAEMON_STALE
-    if "Daemon: not running" in output:
-        return OPENCLI_DAEMON_NOT_RUNNING
-    if "Daemon:" in output:
-        return OPENCLI_DAEMON_NOT_RUNNING
-    return OPENCLI_STATUS_UNAVAILABLE
-
-
-def _safe_reason_from_opencli_error_output(output: str) -> str | None:
-    for candidate in (output.strip(), *output.splitlines()):
-        text = candidate.strip()
-        if not text:
-            continue
-        payload = _json_mapping_or_none(text)
-        if payload is None:
-            continue
-        error = payload.get("error")
-        error_payload = _string_key_mapping_or_none(error)
-        if error_payload is None:
-            continue
-        raw_code = str(error_payload.get("code") or "").strip().lower().replace("-", "_")
-        reason = OPENCLI_ERROR_CODE_TO_REASON.get(raw_code)
-        if reason is not None:
-            return reason
-    return None
-
-
 def _string_key_mapping_or_none(value: object) -> Mapping[str, object] | None:
     if not isinstance(value, Mapping):
         return None
     return {str(key): item for key, item in value.items()}
-
-
-def _json_mapping_or_none(text: str) -> Mapping[str, object] | None:
-    try:
-        payload, _end = json.JSONDecoder().raw_decode(text)
-    except json.JSONDecodeError:
-        return None
-    return _string_key_mapping_or_none(payload)
 
 
 def _is_role_button_command(args: tuple[str, ...]) -> bool:

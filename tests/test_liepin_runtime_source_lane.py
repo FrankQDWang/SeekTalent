@@ -2446,20 +2446,8 @@ def test_pi_failure_codes_preserve_opencli_safe_reason_codes() -> None:
         "liepin_opencli_target_not_found",
         "liepin_opencli_daemon_not_running",
         "liepin_opencli_daemon_stale",
-        "liepin_opencli_removed_config",
     ):
         assert runtime_reason_code_from_worker_failure_code(reason_code) == reason_code
-
-
-@pytest.mark.parametrize(
-    "reason_code",
-    ["liepin_opencli_removed_config"],
-)
-def test_opencli_configuration_failures_have_one_canonical_public_problem(reason_code: str) -> None:
-    assert (
-        LIEPIN_FAILURE_POLICIES[reason_code].public_problem_code
-        == "source_removed_cleanup_config"
-    )
 
 
 @pytest.mark.parametrize(

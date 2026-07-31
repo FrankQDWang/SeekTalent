@@ -466,26 +466,6 @@ def test_source_result_public_event_preserves_liepin_stale_reference_failure() -
     assert event["safeReasonCode"] == "source_browser_reference_stale"
 
 
-@pytest.mark.parametrize(
-    "reason_code",
-    ["liepin_opencli_removed_config"],
-)
-def test_source_result_public_event_maps_removed_cleanup_config(reason_code: str) -> None:
-    from seektalent.source_adapters import public_source_reason_code
-
-    event = make_runtime_public_event(
-        runtime_run_id="run-1",
-        stage="source_result",
-        event_seq=131,
-        round_no=1,
-        source_kind="liepin",
-        status="blocked",
-        safe_reason_code=public_source_reason_code(reason_code),
-    )
-
-    assert event["safeReasonCode"] == "source_removed_cleanup_config"
-
-
 def test_source_result_public_event_maps_liepin_results_readiness_to_timeout() -> None:
     from seektalent.source_adapters import public_source_reason_code
 

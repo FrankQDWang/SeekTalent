@@ -69,7 +69,6 @@ def test_liepin_site_adapter_does_not_own_opencli_runtime_boundaries() -> None:
 
     forbidden = (
         "subprocess.run",
-        "SubprocessOpenCliCommandRunner",
         "SubprocessCurrentChromeTabOpener",
         ".run_raw(",
         '"browser", self._config.session',

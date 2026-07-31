@@ -118,22 +118,21 @@ Run the UI API help:
 uv run seektalent-ui-api --help
 ```
 
-Start the local React workbench with the repo-local OpenCLI browser helper:
+Start the local React workbench with the repo-local WTSCLI browser bridge:
 
 ```bash
 scripts/start-dev-workbench.sh
 ```
 
-This launcher is the product development preset for the CTS + Liepin local Workbench. It installs React dependencies with pnpm when needed, exports `SEEKTALENT_LIEPIN_WORKER_MODE=opencli` and `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli`, points `SEEKTALENT_LIEPIN_OPENCLI_COMMAND` at the repo-local dependency, and then starts both the backend and React frontend. A plain low-level `seektalent-ui-api` command only reads its explicit configuration and does not silently enable Liepin when `SEEKTALENT_LIEPIN_WORKER_MODE=disabled`.
+This launcher is the product development preset for the CTS + Liepin local Workbench. It installs React dependencies with pnpm when needed, enables the WTSCLI-backed Liepin worker, and then starts both the backend and React frontend. A plain low-level `seektalent-ui-api` command only reads its explicit configuration and does not silently enable Liepin when `SEEKTALENT_LIEPIN_WORKER_MODE=disabled`.
 
-For local Liepin browser readiness, run the Workbench launcher and check the OpenCLI browser helper directly:
+For local Liepin browser readiness, run the Workbench launcher and inspect the Workbench health surface. The application owns and supervises the WTSCLI daemon for its lifetime; do not invoke a daemon CLI directly.
 
 ```bash
 scripts/start-dev-workbench.sh
-apps/web-react/node_modules/.bin/opencli daemon status
 ```
 
-Automated tests do not run live Liepin website e2e. Use targeted smoke checks only when a human operator has prepared a local Chrome/OpenCLI session.
+Automated tests do not run live Liepin website e2e. Use targeted smoke checks only when a human operator has prepared a local Chrome/WTSCLI session.
 
 Run frontend tests:
 
@@ -156,7 +155,7 @@ or long-running browser daemon:
 ```bash
 scripts/install-seektalent-staging.sh 0.7.49
 # In chrome://extensions, load this unpacked extension first:
-# ~/.seektalent-staging/home/.seektalent/chrome-extension/opencli
+# ~/.seektalent-staging/home/.seektalent/chrome-extension/wtscli
 ~/.seektalent-staging/bin/seektalent-staging --check
 ~/.seektalent-staging/bin/seektalent-staging
 ```
@@ -169,29 +168,34 @@ output mode remain `prod`.
 
 Staging state is rooted at `~/.seektalent-staging`; the launcher changes `HOME` to its nested isolated home before
 Python starts. It rejects Node paths under Domi. Load
-`~/.seektalent-staging/home/.seektalent/chrome-extension/opencli` through `chrome://extensions` before running live
-Liepin cases or `--check`. WTSCLI 0.1.0 and legacy OpenCLI still share loopback port `19825`; until WTSCLI transport isolation is
-complete, Domi and staging browser bridges must not run concurrently. The staging launcher verifies port ownership
-and refuses to restart a foreign bridge.
+`~/.seektalent-staging/home/.seektalent/chrome-extension/wtscli` through `chrome://extensions` before running live
+Liepin cases or `--check`. WTSCLI 0.1.0 uses isolated loopback port `19826`; legacy OpenCLI `19825` remains untouched.
+The staging launcher verifies exact WTSCLI ownership and refuses to restart a foreign bridge.
 
-## Domi Runtime Smoke
+## Exact Packaged Domi Host Launch
 
 ### Prepared-Machine Domi Workbench
 
-Use this path when the machine already has Domi installed, Chrome is logged in to Liepin, the OpenCLI Chrome extension is installed, and the operator can paste a Domi JWT into the current terminal. It runs the packaged Workbench through the generated Domi shim, which sets the Domi LLM provider and normalized Domi Node path before starting the server. Target-machine testing should use the release-tag script URL rather than requiring a source checkout.
+Use this path when the machine already has Domi installed, Chrome is logged in to Liepin, the WTSCLI Chrome extension is installed, and the operator can paste a Domi JWT into the current terminal. It runs the packaged Workbench through the generated Domi shim, which sets the Domi LLM provider and normalized Domi Node path before starting the server. Target-machine testing should use the release-tag script URL rather than requiring a source checkout.
 
 Windows PowerShell:
 
 ```powershell
 Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.49/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.49
-seektalent workbench
+$env:SEEKTALENT_DOMI_JWT = "<inject Domi JWT at launch; do not commit it>"
+$env:DOMI_PYTHON = "<Domi-provided Python executable>"
+$env:DOMI_NODE = "<Domi-provided Node executable>"
+& .\start-seektalent-domi.ps1
 ```
 
 macOS shell:
 
 ```bash
 source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.49/scripts/install-seektalent-domi.sh") 0.7.49
-seektalent workbench
+export SEEKTALENT_DOMI_JWT="<inject Domi JWT at launch; do not commit it>"
+export DOMI_PYTHON="/path/to/Domi-provided/python"
+export DOMI_NODE="/path/to/Domi-provided/node"
+scripts/start-seektalent-domi.sh
 ```
 
 This path does not read Domi Electron storage and does not install a Chrome extension. The installer writes only under `~/.seektalent`, installs the PyPI package with Domi Python, generates the `seektalent` shim, wires it to Domi Python plus Domi Node, and updates `PATH` only for the current terminal session.
@@ -206,38 +210,18 @@ When validating from a source checkout, use the checked-in scripts directly:
 source scripts/install-seektalent-domi.sh 0.7.49
 ```
 
-Use this smoke only for validating the packaged Workbench shape inside the Domi-provided runtime on a local Mac with Domi installed.
+The exact delivery archive contains the startup script, wheel, sdist-compatible install
+inputs, WTSCLI runtime, bridge manifest, and extension tree. The host supplies the
+JWT, Python, and Node at launch; no Domi app version or source checkout is used.
+The script starts only the installed SeekTalent package. Its production lifespan owns
+the supervised WTSCLI `19826`; legacy `19825` remains untouched.
 
-Required input:
-
-```bash
-export SEEKTALENT_DOMI_JWT="<domi jwt>"
-```
-
-Run:
-
-```bash
-scripts/smoke-domi-runtime.sh
-```
-
-Defaults:
-
-- Domi Python: `/Applications/Domi.app/Contents/Resources/extraResources/python/runtime/bin/python`
-- isolated install root: `~/.seektalent/domi-runtime`
-- Domi LLM proxy: `https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1`
-- Domi channel: `seek_talent`
-
-The smoke rebuilds the packaged Workbench frontend, builds the current repository wheel, installs it into the isolated Domi runtime venv, runs `seektalent doctor`, sends a Domi LLM proxy hello request, checks OpenCLI daemon status, and starts the packaged Workbench long enough to verify `/openapi.json`.
-
-It does not read Domi Electron storage by default and does not run a complete live Liepin recruiting workflow.
-
-For a foreground Workbench session that stays running until Ctrl+C, use:
-
-```bash
-scripts/start-domi-workbench.sh
-```
-
-The start script runs the same install/smoke setup first, then `exec`s the installed Domi-runtime `seektalent workbench` process in the foreground.
+For final acceptance, use `chrome:control-chrome` on the visible SeekTalent page:
+enter the exact title and complete JD from the fixed canary note, start the task,
+wait for extraction, click the real confirmation control once, and observe the
+visible terminal-success state with candidate output and a details flow. CLI/API/
+database evidence is diagnostic only. Stop immediately on unknown, failure, or
+`needs_attention` and reconcile before any further action.
 
 ## Mock CTS for development
 

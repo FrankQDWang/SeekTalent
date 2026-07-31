@@ -13,6 +13,7 @@ from seektalent.runtime.orchestrator import WorkflowRuntime
 from seektalent.source_adapters.query_policy import default_source_query_policies
 from seektalent.source_adapters.registry import build_default_source_registry, build_source_lane_request_runner
 from seektalent.source_adapters.round_adapters import default_source_first_page_expander_provider, default_source_round_adapter_provider
+from seektalent.wtscli_lifecycle_supervisor import WtsCliLifecycleSupervisor
 
 
 def build_runtime_composition(
@@ -23,11 +24,15 @@ def build_runtime_composition(
     judge_limiter: AsyncJudgeLimiter | None = None,
     eval_remote_logging: bool = True,
     liepin_cards_operation_executor: object | None = None,
+    wtscli_lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
 ) -> RuntimeComposition:
     return RuntimeComposition(
         settings=settings,
         source_registry=build_default_source_registry(settings),
-        source_lane_request_runner=build_source_lane_request_runner(settings),
+        source_lane_request_runner=build_source_lane_request_runner(
+            settings,
+            cards_operation_executor=liepin_cards_operation_executor,
+        ),
         source_round_adapter_provider=default_source_round_adapter_provider,
         source_first_page_expander_provider=default_source_first_page_expander_provider,
         source_query_policy_provider=lambda source_plan: default_source_query_policies(
@@ -41,6 +46,7 @@ def build_runtime_composition(
             liepin_source_operation_executor=(
                 liepin_cards_operation_executor
             ),
+            wtscli_lifecycle_supervisor=wtscli_lifecycle_supervisor,
         ),
         source_operation_executor=liepin_cards_operation_executor,
         judge_limiter=judge_limiter,
@@ -55,6 +61,7 @@ def build_source_enabled_runtime(
     judge_limiter: AsyncJudgeLimiter | None = None,
     eval_remote_logging: bool = True,
     liepin_cards_operation_executor: object | None = None,
+    wtscli_lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
 ) -> WorkflowRuntime:
     return build_workflow_runtime(
         build_runtime_composition(
@@ -63,6 +70,7 @@ def build_source_enabled_runtime(
             judge_limiter=judge_limiter,
             eval_remote_logging=eval_remote_logging,
             liepin_cards_operation_executor=liepin_cards_operation_executor,
+            wtscli_lifecycle_supervisor=wtscli_lifecycle_supervisor,
         )
     )
 
@@ -72,6 +80,7 @@ def build_provider_retrieval_service(
     *,
     provider_adapter_registry: ProviderAdapterRegistry | None = None,
     liepin_source_operation_executor: object | None = None,
+    wtscli_lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
 ) -> RetrievalService:
     registry = provider_adapter_registry or build_default_provider_adapter_registry()
     provider = registry.build_adapter(
@@ -81,6 +90,7 @@ def build_provider_retrieval_service(
             liepin_source_operation_executor=(
                 liepin_source_operation_executor
             ),
+            wtscli_lifecycle_supervisor=wtscli_lifecycle_supervisor,
         ),
     )
     return RetrievalService(provider=provider)

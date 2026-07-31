@@ -19,13 +19,18 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from seektalent.config import AppSettings, load_process_env
 from seektalent.dev_mode import DevModeStatus, build_dev_mode_env_diagnostics
-from seektalent.product_env import MANAGED_OPENCLI_COMMAND_MARKER
+from seektalent.wtscli_runtime import BootstrapError
 from seektalent.providers.liepin.runtime_context import (
     local_opencli_liepin_source_context,
 )
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
 from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.workbench_internal_secrets import ensure_workbench_internal_liepin_env
+from seektalent.wtscli_lifecycle_supervisor import (
+    WtsCliLifecycleError,
+    WtsCliLifecycleSupervisor,
+    build_wtscli_lifecycle_supervisor,
+)
 from seektalent_conversation_agent.factory import build_agent_service
 from seektalent_workbench_v2.agent_loop import BailianStrictWorkbenchV2AgentLoop
 from seektalent_workbench_v2.runtime_runner import WorkbenchV2RuntimeQueueRunner
@@ -85,6 +90,11 @@ def create_app(
         cleanup_runtime_artifacts(app_settings)
     app = FastAPI(title="SeekTalent UI API", lifespan=_lifespan)
     app.state.settings = app_settings
+    app.state.wtscli_lifecycle_supervisor = (
+        build_wtscli_lifecycle_supervisor(app_settings)
+        if app_settings.liepin_worker_mode == "opencli"
+        else None
+    )
     app.state.dev_mode_env_diagnostics = dev_mode_env_diagnostics
     app.state.workbench_graph_secret = secrets.token_urlsafe(32)
     app.state.workbench_store = WorkbenchStore(workbench_db_path(app_settings))
@@ -94,6 +104,7 @@ def create_app(
         settings=app_settings,
         runtime_factory=runtime_factory,
         source_context_provider=local_opencli_liepin_source_context,
+        wtscli_lifecycle_supervisor=app.state.wtscli_lifecycle_supervisor,
     )
     app.state.agent_conversation_store = app.state.agent_conversation_service.store
     runtime_control_store = app.state.agent_conversation_service.service_action_adapter.runtime_store
@@ -124,7 +135,11 @@ def create_app(
     app.state.workbench_v2_store.initialize()
     app.state.workbench_v2_requirement_extractor = build_workbench_v2_requirement_extractor(app_settings)
     def workbench_v2_runtime_factory() -> object:
-        return runtime_factory(app_settings)
+        return _runtime_factory_with_supervisor(
+            runtime_factory,
+            app_settings,
+            app.state.wtscli_lifecycle_supervisor,
+        )
 
     app.state.runtime_command_service = command_service
     app.state.workbench_v2_runtime_executor = runtime_executor
@@ -305,6 +320,10 @@ def create_app(
         )
         ready = (
             all(item["status"] == "ready" for item in component_payloads)
+            and (
+                app.state.wtscli_lifecycle_supervisor is None
+                or app.state.wtscli_lifecycle_supervisor.health_snapshot()["status"] == "ready"
+            )
             and not lane_expired
             and not lane_unresolved
             and not expired_executor_leases
@@ -314,6 +333,11 @@ def create_app(
             "schemaVersion": "seektalent.execution-readiness.v1",
             "status": "ready" if ready else "not_ready",
             "components": component_payloads,
+            "wtscli": (
+                None
+                if app.state.wtscli_lifecycle_supervisor is None
+                else app.state.wtscli_lifecycle_supervisor.health_snapshot()
+            ),
             "oldestBacklogAt": oldest_backlog_at,
             "backlogStale": backlog_stale,
             "expiredExecutorLeaseCount": len(
@@ -398,7 +422,21 @@ async def _lifespan(app: FastAPI):
     runner = getattr(app.state, "workflow_start_outbox_runner", None)
     extraction_runner = getattr(app.state, "requirement_extraction_outbox_runner", None)
     runtime_runner = getattr(app.state, "workbench_v2_runtime_runner", None)
+    wtscli_supervisor: WtsCliLifecycleSupervisor | None = getattr(
+        app.state,
+        "wtscli_lifecycle_supervisor",
+        None,
+    )
     try:
+        if wtscli_supervisor is not None:
+            try:
+                wtscli_supervisor.start()
+            except (BootstrapError, WtsCliLifecycleError) as exc:
+                wtscli_supervisor.record_startup_failure(exc)
+                logger.warning(
+                    "WTSCLI lifecycle supervisor is not ready: %s",
+                    type(exc).__name__,
+                )
         if runtime_runner is not None:
             runtime_runner.start()
         if runner is not None:
@@ -422,10 +460,31 @@ async def _lifespan(app: FastAPI):
             except (RuntimeError, ValueError, TypeError, OSError) as exc:
                 logger.exception("%s failed during application lifespan cleanup", name)
                 cleanup_errors.append(exc)
+        if wtscli_supervisor is not None:
+            try:
+                wtscli_supervisor.shutdown()
+            except (RuntimeError, ValueError, TypeError, OSError) as exc:
+                logger.exception("WTSCLI lifecycle supervisor cleanup failed")
+                cleanup_errors.append(exc)
         if cleanup_errors and body_error is None:
             if len(cleanup_errors) == 1:
                 raise cleanup_errors[0]
             raise ExceptionGroup("application lifespan cleanup failed", cleanup_errors)
+
+
+def _runtime_factory_with_supervisor(
+    runtime_factory: Callable[..., object],
+    settings: AppSettings,
+    supervisor: WtsCliLifecycleSupervisor | None,
+) -> object:
+    if supervisor is None:
+        return runtime_factory(settings)
+    if runtime_factory is not build_source_enabled_runtime:
+        return runtime_factory(settings)
+    return runtime_factory(
+        settings,
+        wtscli_lifecycle_supervisor=supervisor,
+    )
 
 
 def _install_custom_openapi(app: FastAPI) -> None:
@@ -499,7 +558,6 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
     )
     parser.add_argument("--liepin-browser-action-backend", choices=["disabled", "opencli"], default=None)
-    parser.add_argument("--liepin-opencli-command", default=None)
     return parser
 
 
@@ -515,19 +573,6 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc))
         return 2
-    try:
-        needs_opencli = (
-            args.liepin_worker_mode == "opencli"
-            or args.liepin_browser_action_backend == "opencli"
-        )
-        liepin_opencli_command = (
-            _managed_liepin_opencli_command_from_env(os.environ)
-            if prod_frontend and needs_opencli
-            else args.liepin_opencli_command
-        )
-    except ValueError as exc:
-        print(f"reason_code=liepin_opencli_config_invalid {exc}")
-        return 1
     dev_mode_env_diagnostics = None
     try:
         base_settings = AppSettings(_env_file=None) if prod_frontend else AppSettings()
@@ -536,7 +581,6 @@ def main(argv: list[str] | None = None) -> int:
             runtime_mode=args.runtime_mode,
             liepin_worker_mode=args.liepin_worker_mode,
             liepin_browser_action_backend=args.liepin_browser_action_backend,
-            liepin_opencli_command=liepin_opencli_command,
             liepin_opencli_session="" if prod_frontend else None,
             workbench_enabled=False if args.disable_workbench else None,
         )
@@ -549,7 +593,6 @@ def main(argv: list[str] | None = None) -> int:
             runtime_mode=args.runtime_mode,
             liepin_worker_mode=args.liepin_worker_mode,
             liepin_browser_action_backend=args.liepin_browser_action_backend,
-            liepin_opencli_command=liepin_opencli_command,
             liepin_opencli_session="" if prod_frontend else None,
             workbench_enabled=False if args.disable_workbench else None,
         )
@@ -576,14 +619,6 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         return 0
     return 0
-
-
-def _managed_liepin_opencli_command_from_env(env: Mapping[str, str]) -> str:
-    command = str(env.get("SEEKTALENT_LIEPIN_OPENCLI_COMMAND") or "").strip()
-    managed = str(env.get(MANAGED_OPENCLI_COMMAND_MARKER) or "").strip()
-    if command and managed == "1":
-        return command
-    raise ValueError("managed OpenCLI command was not prepared by seektalent workbench")
 
 
 def _can_recover_with_dev_mode_env_diagnostics(exc: ValidationError, env: Mapping[str, str]) -> bool:

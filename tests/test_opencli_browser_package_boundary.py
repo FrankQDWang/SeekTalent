@@ -112,11 +112,11 @@ def test_generic_opencli_browser_automation_does_not_launch_provider_cleanup_wor
 
 def test_opencli_browser_automation_uses_generic_reason_codes() -> None:
     from seektalent.opencli_browser.reason_codes import (
-        OPENCLI_COMMAND_MISSING,
+        OPENCLI_HELPER_MISSING,
         OPENCLI_STALE_REF,
         OPENCLI_TIMEOUT,
     )
 
-    assert OPENCLI_COMMAND_MISSING == "opencli_command_missing"
+    assert OPENCLI_HELPER_MISSING == "opencli_helper_missing"
     assert OPENCLI_TIMEOUT == "opencli_timeout"
     assert OPENCLI_STALE_REF == "opencli_stale_ref"

@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 
-from seektalent import browser_bridge_manifest, opencli_launcher
+from seektalent import browser_bridge_manifest, wtscli_runtime as wtscli_runtime
 from seektalent.opencli_browser.contracts import OpenCliBrowserError
 from seektalent.opencli_browser.daemon_transport import OpenCliDaemonClient
 from seektalent.opencli_browser.reason_codes import OPENCLI_FOREIGN_OWNER
@@ -701,20 +701,20 @@ def test_managed_launcher_derives_wts_package_entrypoint_and_state_env(
         install_root=install_root,
         node=Path(sys.executable),
     )
-    monkeypatch.setattr(opencli_launcher, "_verify_domi_node", lambda _node: None)
-    monkeypatch.setattr(opencli_launcher, "_probe_opencli_cli", lambda **_kwargs: None)
-    runtime = opencli_launcher.ensure_opencli_runtime(
+    monkeypatch.setattr(wtscli_runtime, "_verify_domi_node", lambda _node: None)
+    monkeypatch.setattr(wtscli_runtime, "_probe_wtscli_cli", lambda **_kwargs: None)
+    runtime = wtscli_runtime.ensure_wtscli_runtime(
         root=install_root / "wtscli-runtime",
         env={"SEEKTALENT_DOMI_NODE": sys.executable},
     )
 
-    assert runtime.opencli_main == installed.runtime_main
-    assert "/node_modules/wtscli/" in runtime.opencli_main.as_posix()
-    assert "@jackwener/opencli" not in runtime.opencli_main.as_posix()
+    assert runtime.wtscli_main == installed.runtime_main
+    assert "/node_modules/wtscli/" in runtime.wtscli_main.as_posix()
+    assert "@jackwener/opencli" not in runtime.wtscli_main.as_posix()
     monkeypatch.setenv("OPENCLI_CONFIG_DIR", "/legacy/opencli")
     monkeypatch.setenv("OPENCLI_DAEMON_PORT", "19825")
     monkeypatch.setenv("WTSCLI_CONFIG_DIR", "/ambient/wtscli")
-    env = opencli_launcher.opencli_subprocess_env(
+    env = wtscli_runtime.wtscli_subprocess_env(
         node_bin_dir=runtime.node_bin_dir,
         requirement=runtime.requirement,
     )
@@ -800,9 +800,9 @@ def test_launcher_rejects_post_install_wts_package_tree_tampering_before_spawn(
         install_root=install_root,
         node=Path(sys.executable),
     )
-    monkeypatch.setattr(opencli_launcher, "_verify_domi_node", lambda _node: None)
-    monkeypatch.setattr(opencli_launcher, "_probe_opencli_cli", lambda **_kwargs: None)
-    opencli_launcher.ensure_opencli_runtime(
+    monkeypatch.setattr(wtscli_runtime, "_verify_domi_node", lambda _node: None)
+    monkeypatch.setattr(wtscli_runtime, "_probe_wtscli_cli", lambda **_kwargs: None)
+    wtscli_runtime.ensure_wtscli_runtime(
         root=install_root / "wtscli-runtime",
         env={"SEEKTALENT_DOMI_NODE": sys.executable},
     )
@@ -826,7 +826,7 @@ def test_launcher_rejects_post_install_wts_package_tree_tampering_before_spawn(
         )
 
     monkeypatch.setattr(
-        opencli_launcher.subprocess,
+        wtscli_runtime.subprocess,
         "run",
         lambda *_args, **_kwargs: pytest.fail(
             "tampered WTS package bytes must be rejected before spawn"
@@ -834,10 +834,10 @@ def test_launcher_rejects_post_install_wts_package_tree_tampering_before_spawn(
     )
 
     with pytest.raises(
-        opencli_launcher.BootstrapError,
+        wtscli_runtime.BootstrapError,
         match="opencli_bridge_integrity_failed",
     ):
-        opencli_launcher.ensure_opencli_runtime(
+        wtscli_runtime.ensure_wtscli_runtime(
             root=install_root / "wtscli-runtime",
             env={"SEEKTALENT_DOMI_NODE": sys.executable},
         )

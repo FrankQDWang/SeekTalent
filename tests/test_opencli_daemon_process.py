@@ -6,14 +6,8 @@ import pytest
 
 from seektalent.opencli_browser import daemon_process
 from seektalent.opencli_browser.contracts import OpenCliBrowserError
-from seektalent.opencli_browser.reason_codes import (
-    OPENCLI_BRIDGE_BUILD_MISMATCH,
-    OPENCLI_DAEMON_NOT_RUNNING,
-    OPENCLI_EXTENSION_DISCONNECTED,
-    OPENCLI_FOREIGN_OWNER,
-    OPENCLI_STATUS_UNAVAILABLE,
-)
-from seektalent.opencli_launcher import OpenCliRuntime
+from seektalent.opencli_browser.reason_codes import OPENCLI_BRIDGE_INTEGRITY_FAILED
+from seektalent.wtscli_runtime import WtsCliRuntime
 from tests.browser_bridge_bundle_fixtures import (
     exact_browser_bridge_requirement,
     write_browser_bridge_bundle,
@@ -21,23 +15,19 @@ from tests.browser_bridge_bundle_fixtures import (
 
 
 class FakeDaemonClient:
-    def __init__(self, outcomes: list[str | None]) -> None:
-        self.outcomes = outcomes
+    def __init__(self) -> None:
         self.verify_calls: list[float] = []
         self.closed = False
 
     def verify_bridge(self, *, timeout_seconds: float) -> dict[str, object]:
         self.verify_calls.append(timeout_seconds)
-        outcome = self.outcomes.pop(0)
-        if outcome is not None:
-            raise OpenCliBrowserError(outcome)
         return {"ok": True}
 
     def close(self) -> None:
         self.closed = True
 
 
-def _runtime(tmp_path: Path) -> OpenCliRuntime:
+def _runtime(tmp_path: Path) -> WtsCliRuntime:
     bundle = tmp_path / "bundle"
     write_browser_bridge_bundle(bundle)
     manifest = bundle / "bridge-manifest.json"
@@ -47,199 +37,56 @@ def _runtime(tmp_path: Path) -> OpenCliRuntime:
     main.parent.mkdir(parents=True)
     node.write_text("node", encoding="utf-8")
     main.write_text("opencli", encoding="utf-8")
-    return OpenCliRuntime(
+    return WtsCliRuntime(
         node=node,
-        opencli_main=main,
+        wtscli_main=main,
         bridge_manifest=manifest,
         requirement=exact_browser_bridge_requirement(),
     )
 
 
-def _install_fake_client(
-    monkeypatch: pytest.MonkeyPatch,
-    client: FakeDaemonClient,
-) -> list[dict[str, object]]:
-    constructor_calls: list[dict[str, object]] = []
-
-    def build_client(**kwargs: object) -> FakeDaemonClient:
-        constructor_calls.append(kwargs)
-        return client
-
-    monkeypatch.setattr(daemon_process, "OpenCliDaemonClient", build_client)
-    return constructor_calls
-
-
-def test_connect_reuses_ready_daemon_without_restart(
+def test_read_only_connection_verifies_existing_daemon_without_repair(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    client = FakeDaemonClient([None])
-    calls = _install_fake_client(monkeypatch, client)
-    monkeypatch.setattr(
-        daemon_process,
-        "_restart_installed_daemon",
-        lambda _runtime: pytest.fail("ready daemon must not restart"),
-    )
+    client = FakeDaemonClient()
+    monkeypatch.setattr(daemon_process, "OpenCliDaemonClient", lambda **_kwargs: client)
 
-    connected = daemon_process.connect_installed_opencli_daemon(
-        _runtime(tmp_path), context_id="chrome-profile"
-    )
-
-    assert connected is client
-    assert calls[0]["context_id"] == "chrome-profile"
-    assert len(client.verify_calls) == 1
-
-
-def test_connect_waits_for_running_exact_daemon_extension_before_returning(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    client = FakeDaemonClient([OPENCLI_EXTENSION_DISCONNECTED, OPENCLI_EXTENSION_DISCONNECTED, None])
-    _install_fake_client(monkeypatch, client)
-    monkeypatch.setattr(
-        daemon_process,
-        "_restart_installed_daemon",
-        lambda _runtime: pytest.fail("extension setup errors must not restart the daemon"),
-    )
-
-    connected = daemon_process.connect_installed_opencli_daemon(
+    connected = daemon_process.connect_existing_opencli_daemon_read_only(
         _runtime(tmp_path),
+        context_id="chrome-profile",
         verify_timeout_seconds=0.5,
     )
 
     assert connected is client
-    assert len(client.verify_calls) == 3
+    assert client.verify_calls == [0.5]
+    assert client.closed is False
 
 
-def test_connect_times_out_with_exact_extension_reason_without_restart(
+def test_read_only_connection_closes_client_when_verification_fails(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
-    client = FakeDaemonClient([OPENCLI_EXTENSION_DISCONNECTED] * 20)
-    _install_fake_client(monkeypatch, client)
-    monkeypatch.setattr(
-        daemon_process,
-        "_restart_installed_daemon",
-        lambda _runtime: pytest.fail("extension recovery must not restart an exact running daemon"),
-    )
+    client = FakeDaemonClient()
 
-    with pytest.raises(OpenCliBrowserError) as captured:
-        daemon_process.connect_installed_opencli_daemon(
-            _runtime(tmp_path),
-            verify_timeout_seconds=0.05,
-        )
+    def fail_verify(*, timeout_seconds: float) -> dict[str, object]:
+        del timeout_seconds
+        raise OpenCliBrowserError("opencli_extension_disconnected")
 
-    assert captured.value.safe_reason_code == OPENCLI_EXTENSION_DISCONNECTED
+    client.verify_bridge = fail_verify  # type: ignore[method-assign]
+    monkeypatch.setattr(daemon_process, "OpenCliDaemonClient", lambda **_kwargs: client)
+
+    with pytest.raises(OpenCliBrowserError, match="opencli_extension_disconnected"):
+        daemon_process.connect_existing_opencli_daemon_read_only(_runtime(tmp_path))
+
     assert client.closed is True
 
 
-@pytest.mark.parametrize("reason", [OPENCLI_DAEMON_NOT_RUNNING, OPENCLI_BRIDGE_BUILD_MISMATCH])
-def test_connect_restarts_missing_or_stale_daemon_once(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    reason: str,
-) -> None:
-    client = FakeDaemonClient([reason, None])
-    _install_fake_client(monkeypatch, client)
-    restart_calls: list[tuple[OpenCliRuntime, float]] = []
-
-    def restart(runtime: OpenCliRuntime, *, timeout_seconds: float) -> None:
-        restart_calls.append((runtime, timeout_seconds))
-
-    monkeypatch.setattr(daemon_process, "_restart_installed_daemon", restart)
+def test_read_only_connection_requires_exact_installed_manifest(tmp_path: Path) -> None:
     runtime = _runtime(tmp_path)
-
-    connected = daemon_process.connect_installed_opencli_daemon(runtime)
-
-    assert connected is client
-    assert len(restart_calls) == 1
-    assert restart_calls[0][0] is runtime
-    assert 0 < restart_calls[0][1] <= daemon_process.OPENCLI_DAEMON_RESTART_TIMEOUT_SECONDS
-    assert len(client.verify_calls) == 2
-
-
-@pytest.mark.parametrize("reason", [OPENCLI_STATUS_UNAVAILABLE, OPENCLI_FOREIGN_OWNER])
-def test_connect_does_not_restart_unknown_or_foreign_status_failure(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-    reason: str,
-) -> None:
-    client = FakeDaemonClient([reason])
-    _install_fake_client(monkeypatch, client)
-    monkeypatch.setattr(
-        daemon_process,
-        "_restart_installed_daemon",
-        lambda _runtime: pytest.fail("unknown failures must not trigger recovery"),
-    )
+    runtime.bridge_manifest.unlink()
 
     with pytest.raises(OpenCliBrowserError) as captured:
-        daemon_process.connect_installed_opencli_daemon(_runtime(tmp_path))
+        daemon_process.connect_existing_opencli_daemon_read_only(runtime)
 
-    assert captured.value.safe_reason_code == reason
-    assert client.closed is True
-
-
-def test_restart_uses_installed_runtime_with_sanitized_bounded_subprocess(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    runtime = _runtime(tmp_path)
-    home = tmp_path / "home"
-    legacy_paths = (
-        home / ".opencli" / "sentinel",
-        home / ".seektalent" / "opencli-runtime" / "sentinel",
-        home / ".seektalent" / "chrome-extension" / "opencli" / "sentinel",
-    )
-    for sentinel in legacy_paths:
-        sentinel.parent.mkdir(parents=True, exist_ok=True)
-        sentinel.write_text("legacy-untouched", encoding="utf-8")
-    captured: dict[str, object] = {}
-
-    class Completed:
-        returncode = 0
-
-    def fake_run(argv: object, **kwargs: object) -> Completed:
-        captured["argv"] = argv
-        captured.update(kwargs)
-        return Completed()
-
-    monkeypatch.setenv("SEEKTALENT_DOMI_JWT", "secret")
-    monkeypatch.setenv("HOME", str(home))
-    monkeypatch.setenv("USERPROFILE", str(home))
-    monkeypatch.setenv("OPENCLI_CONFIG_DIR", str(home / ".opencli"))
-    monkeypatch.setenv("OPENCLI_DAEMON_PORT", "19825")
-    monkeypatch.setenv("node_path", str(home / "global-node-modules"))
-    monkeypatch.setenv("NODE_OPTIONS", "--require=global-injection.js")
-    monkeypatch.setattr(daemon_process.subprocess, "run", fake_run)
-
-    daemon_process._restart_installed_daemon(runtime)
-
-    assert captured["argv"] == (
-        str(runtime.node),
-        str(runtime.opencli_main),
-        "daemon",
-        "restart",
-    )
-    assert captured["timeout"] == daemon_process.OPENCLI_DAEMON_RESTART_TIMEOUT_SECONDS
-    assert "SEEKTALENT_DOMI_JWT" not in captured["env"]
-    assert not any(str(name).startswith("OPENCLI_") for name in captured["env"])
-    assert not any(
-        str(name).upper() in {"NODE_PATH", "NODE_OPTIONS"}
-        for name in captured["env"]
-    )
-    assert all(path.read_text(encoding="utf-8") == "legacy-untouched" for path in legacy_paths)
-
-
-def test_restart_failure_is_source_safe_daemon_error(
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path: Path,
-) -> None:
-    class Completed:
-        returncode = 1
-
-    monkeypatch.setattr(daemon_process.subprocess, "run", lambda *_args, **_kwargs: Completed())
-
-    with pytest.raises(OpenCliBrowserError) as captured:
-        daemon_process._restart_installed_daemon(_runtime(tmp_path))
-
-    assert captured.value.safe_reason_code == OPENCLI_DAEMON_NOT_RUNNING
+    assert captured.value.safe_reason_code == OPENCLI_BRIDGE_INTEGRITY_FAILED

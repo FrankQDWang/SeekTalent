@@ -2,13 +2,12 @@ from __future__ import annotations
 
 import json
 import os
-import shlex
 import sys
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
-from seektalent.config import DEFAULT_LIEPIN_OPENCLI_COMMAND
+from seektalent.config import AppSettings
 from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 from seektalent.opencli_browser.contracts import (
     OpenCliBrowserConfig,
@@ -25,11 +24,32 @@ from seektalent.providers.liepin.liepin_site_adapter import (
     LiepinOpenCliTimingRecorder,
     LiepinSiteAdapter,
 )
+from seektalent.wtscli_runtime import BootstrapError
+from seektalent.wtscli_lifecycle_supervisor import (
+    WtsCliLifecycleError,
+    WtsCliLifecycleSupervisor,
+)
 
 
-_REMOVED_CLEANUP_ENV_KEYS = (
-    "SEEKTALENT_LIEPIN_OPENCLI_IDLE_" + "CLOSE_SECONDS",
-    "SEEKTALENT_LIEPIN_OPENCLI_CLOSE_" + "BLANK_WINDOW",
+_ALLOWED_ACTIONS = frozenset(
+    {
+        "status",
+        "recover_connection",
+        "open_liepin_tab",
+        "state",
+        "get_url",
+        "find",
+        "fill",
+        "click",
+        "scroll",
+        "wait_time",
+        "apply_liepin_filters",
+        "extract_structured_liepin_cards",
+        "extract_visible_liepin_cards",
+        "open_liepin_detail",
+        "capture_liepin_detail_resume",
+        "finalize_liepin_resumes",
+    }
 )
 
 
@@ -43,11 +63,28 @@ def main() -> int:
     if not isinstance(payload, dict):
         _print(OpenCliBrowserResult(ok=False, action=action or "unknown", safe_reason_code="liepin_opencli_helper_invalid_input"))
         return 1
-    try:
-        runner = _runner_from_env()
-        result = _run_action(runner, action, payload)
-    except OpenCliBrowserError as exc:
-        result = OpenCliBrowserResult(ok=False, action=action or "unknown", safe_reason_code=exc.safe_reason_code)
+    if action not in _ALLOWED_ACTIONS:
+        result = OpenCliBrowserResult(
+            ok=False,
+            action=action or "unknown",
+            safe_reason_code="liepin_opencli_forbidden_command",
+        )
+    else:
+        try:
+            runner = _runner_from_env()
+            result = _run_action(runner, action, payload)
+        except (OpenCliBrowserError, WtsCliLifecycleError) as exc:
+            result = OpenCliBrowserResult(
+                ok=False,
+                action=action or "unknown",
+                safe_reason_code=exc.safe_reason_code,
+            )
+        except BootstrapError as exc:
+            result = OpenCliBrowserResult(
+                ok=False,
+                action=action or "unknown",
+                safe_reason_code=_bootstrap_reason(exc),
+            )
     if isinstance(result, OpenCliBrowserResult):
         _print(result)
         return 0 if result.ok else 1
@@ -56,8 +93,6 @@ def main() -> int:
 
 
 def _runner_from_env() -> LiepinSiteAdapter:
-    _reject_removed_cleanup_env()
-    command = tuple(shlex.split(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_COMMAND") or DEFAULT_LIEPIN_OPENCLI_COMMAND))
     window_mode = _env_window_mode(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_WINDOW_MODE"))
     allowed_hosts = _json_tuple(
         os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_ALLOWED_HOSTS_JSON"),
@@ -68,7 +103,6 @@ def _runner_from_env() -> LiepinSiteAdapter:
         default=LIEPIN_RECRUITER_SEARCH_URLS,
     )
     browser_config = OpenCliBrowserConfig(
-        command=command,
         session=os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_SESSION") or "seektalent-liepin",
         timeout_seconds=int(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS") or "900"),
         window_mode=window_mode,
@@ -92,11 +126,14 @@ def _runner_from_env() -> LiepinSiteAdapter:
         lease_dir=_optional_path(os.environ.get("SEEKTALENT_LIEPIN_OPENCLI_LEASE_DIR")),
         artifact_root=_optional_path(os.environ.get("SEEKTALENT_PI_ARTIFACT_ROOT")),
     )
+    supervisor = WtsCliLifecycleSupervisor.attach(AppSettings())
+    daemon = supervisor.connect_existing()
     return LiepinSiteAdapter(
         browser_config=browser_config,
         site_config=site_config,
         automation=OpenCliBrowserAutomation(
             config=browser_config,
+            daemon=daemon,
             timing_recorder=LiepinOpenCliTimingRecorder(
                 artifact_root=site_config.artifact_root,
                 writes_local_debug_artifacts=(
@@ -105,12 +142,17 @@ def _runner_from_env() -> LiepinSiteAdapter:
                 != "prod",
             ),
         ),
+        lifecycle_supervisor=supervisor,
     )
 
 
-def _reject_removed_cleanup_env() -> None:
-    if any(key in os.environ for key in _REMOVED_CLEANUP_ENV_KEYS):
-        raise OpenCliBrowserError("liepin_opencli_removed_config")
+def _bootstrap_reason(error: BootstrapError) -> str:
+    message = str(error)
+    if message.startswith(("domi_node_missing", "opencli_offline_runtime_missing")):
+        return "liepin_wtscli_bundle_missing"
+    if "build_mismatch" in message:
+        return "liepin_opencli_bridge_build_mismatch"
+    return "liepin_opencli_bootstrap_failed"
 
 
 def _run_action(runner: LiepinSiteAdapter, action: str, payload: dict[str, object]) -> OpenCliBrowserResult | dict[str, object]:

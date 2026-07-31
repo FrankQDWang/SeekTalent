@@ -28,6 +28,7 @@ from seektalent_runtime_control.models import (
 from seektalent_runtime_control.requirements import ApprovedRequirementRevision
 from seektalent_runtime_control.recovery_state import RecoveryStateAssembler
 from seektalent_runtime_control.store import RuntimeCheckpointLoadFailure, RuntimeControlStore
+from seektalent.wtscli_lifecycle_supervisor import WtsCliLifecycleSupervisor
 
 SourceContext = dict[str, str | int | bool | None]
 SourceContextProvider = Callable[[Sequence[str], AppSettings | None], SourceContext | None]
@@ -39,6 +40,7 @@ class RuntimeFactory(Protocol):
         self,
         *,
         source_operation_executor: object | None,
+        wtscli_lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
     ) -> object: ...
 
 
@@ -62,15 +64,17 @@ class WorkflowRuntimeExecutor:
         event_sink: RuntimeEventSink | None = None,
         command_service: RuntimeCommandService | None = None,
         source_context_provider: SourceContextProvider | None = None,
+        wtscli_lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
     ) -> None:
         if runtime_factory is None and settings is None:
             raise ValueError("settings is required when runtime_factory is not provided")
         self.store = store
         self.settings = settings
         self.runtime_factory: RuntimeFactory = runtime_factory or (
-            lambda *, source_operation_executor: _build_default_runtime(
+            lambda *, source_operation_executor, wtscli_lifecycle_supervisor=None: _build_default_runtime(
                 settings,
                 source_operation_executor=source_operation_executor,
+                wtscli_lifecycle_supervisor=wtscli_lifecycle_supervisor,
             )
         )
         self.runtime_run_id_factory = runtime_run_id_factory or (lambda: f"rtrun_{uuid4().hex}")
@@ -81,6 +85,7 @@ class WorkflowRuntimeExecutor:
         self.event_sink = event_sink or RuntimeControlEventSink(store)
         self.command_service = command_service
         self.source_context_provider = source_context_provider
+        self.wtscli_lifecycle_supervisor = wtscli_lifecycle_supervisor
 
     async def start_workflow(
         self,
@@ -264,6 +269,7 @@ class WorkflowRuntimeExecutor:
                 runtime_attempt_authority_ref=(
                     f"executor-lease://{run.runtime_run_id}/{attempt_no}"
                 ),
+                wtscli_lifecycle_supervisor=self.wtscli_lifecycle_supervisor,
             )
         resume_checkpoint = self._load_resume_checkpoint(
             runtime_run_id=run.runtime_run_id,
@@ -681,8 +687,13 @@ class WorkflowRuntimeExecutor:
         *,
         source_operation_executor: object | None,
     ) -> object:
+        if self.wtscli_lifecycle_supervisor is None:
+            return self.runtime_factory(
+                source_operation_executor=source_operation_executor,
+            )
         return self.runtime_factory(
             source_operation_executor=source_operation_executor,
+            wtscli_lifecycle_supervisor=self.wtscli_lifecycle_supervisor,
         )
 
     def _load_resume_checkpoint(
@@ -754,6 +765,7 @@ def _build_default_runtime(
     settings: AppSettings | None,
     *,
     source_operation_executor: object | None = None,
+    wtscli_lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
 ) -> object:
     if settings is None:
         raise ValueError("settings is required")
@@ -762,6 +774,7 @@ def _build_default_runtime(
     return build_source_enabled_runtime(
         settings,
         source_operation_executor=source_operation_executor,
+        wtscli_lifecycle_supervisor=wtscli_lifecycle_supervisor,
     )
 
 

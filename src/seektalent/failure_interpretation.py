@@ -96,10 +96,6 @@ PUBLIC_SOURCE_PROBLEMS = {
             "{source_label}检索组件未正确启动，请重新启动 SeekTalent 后重试。",
         ),
         _problem(
-            "source_removed_cleanup_config",
-            "检测到已移除的旧即时回收/cleanup 配置，请删除旧配置后重试；标签页正常回收仅由 60 秒空闲到期负责。",
-        ),
-        _problem(
             "source_browser_reference_stale",
             "{source_label}页面引用已失效，请刷新人才搜索页后重试。",
         ),
@@ -210,7 +206,12 @@ _LIEPIN_FAILURE_POLICY_ENTRIES = (
         legacy_lane_retryable_metadata=False,
     ),
     _policy(
-        "liepin_opencli_command_missing",
+        "liepin_wtscli_bundle_missing",
+        "source_browser_installation_invalid",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_opencli_helper_missing",
         "source_browser_installation_invalid",
         legacy_lane_retryable_metadata=False,
     ),
@@ -275,6 +276,11 @@ _LIEPIN_FAILURE_POLICY_ENTRIES = (
         legacy_lane_retryable_metadata=False,
     ),
     _policy("liepin_verify_session_gate_missing", "source_runtime_unavailable"),
+    _policy(
+        "wtscli_supervisor_not_started",
+        "source_runtime_unavailable",
+        legacy_lane_retryable_metadata=False,
+    ),
     _policy(
         "liepin_opencli_forbidden_command",
         "source_browser_policy_blocked",
@@ -346,11 +352,6 @@ _LIEPIN_FAILURE_POLICY_ENTRIES = (
     _policy(
         "liepin_opencli_config_invalid",
         "source_configuration_invalid",
-        legacy_lane_retryable_metadata=False,
-    ),
-    _policy(
-        "liepin_opencli_removed_config",
-        "source_removed_cleanup_config",
         legacy_lane_retryable_metadata=False,
     ),
     _policy("liepin_protected_artifact_root_missing", "source_configuration_invalid"),
@@ -517,17 +518,17 @@ _RECOVERY_GUIDANCE_ENTRIES = (
     LiepinRecoveryGuidance(
         failure_cause_code="liepin_opencli_daemon_not_running",
         reason="SeekTalent 自有的 WTSCLI runtime/daemon 当前不可用。",
-        action="请启动当前 SeekTalent 自有的 WTSCLI 服务。",
+        action="请重新打开当前 SeekTalent/Domi，由生命周期 supervisor 受控恢复。",
     ),
     LiepinRecoveryGuidance(
         failure_cause_code="liepin_opencli_daemon_stale",
         reason="当前 WTSCLI runtime/daemon 未返回有效的当前构建状态。",
-        action="请重新启动当前 SeekTalent 自有的 WTSCLI 服务。",
+        action="请退出并重新打开与当前安装包配对的 SeekTalent。",
     ),
     LiepinRecoveryGuidance(
         failure_cause_code="liepin_opencli_status_unavailable",
         reason="当前无法确认 WTSCLI runtime/daemon 的有效状态。",
-        action="请重新启动当前 SeekTalent 自有的 WTSCLI 服务。",
+        action="请重新打开当前 SeekTalent/Domi，由生命周期 supervisor 受控恢复。",
     ),
     LiepinRecoveryGuidance(
         failure_cause_code="liepin_opencli_bootstrap_failed",
@@ -535,7 +536,7 @@ _RECOVERY_GUIDANCE_ENTRIES = (
         action="请重新打开当前 SeekTalent 应用。",
     ),
     LiepinRecoveryGuidance(
-        failure_cause_code="liepin_opencli_command_missing",
+        failure_cause_code="liepin_wtscli_bundle_missing",
         reason="当前 SeekTalent 安装中缺少可用的 WTSCLI runtime。",
         action="请重新安装当前 SeekTalent 安装包。",
     ),

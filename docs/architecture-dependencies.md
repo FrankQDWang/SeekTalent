@@ -49,7 +49,7 @@ Use this map to orient AI coding sessions before moving code. Directory placemen
 | `src/seektalent/sources/` | Source adapter bridge between runtime/source contracts and provider-backed execution | concrete provider transport except through provider boundaries |
 | `src/seektalent/sources/cts/` | CTS source projection and source-specific planning glue | runtime orchestration or generic contract definitions |
 | `src/seektalent/sources/liepin/` | Liepin source-lane bridge, runtime Liepin context normalization, and Liepin smoke entrypoint | product failure interpretation, Playwright/browser server implementation, or Workbench login UI |
-| `src/seektalent/opencli_browser/` | Generic OpenCLI browser command/session automation, command-shape validation, subprocess execution, Chrome window helpers, and generic `opencli_*` internal reason codes | provider page semantics, Liepin URLs, product failure interpretation, source/runtime orchestration, or UI behavior |
+| `src/seektalent/opencli_browser/` | Generic WTSCLI browser-daemon transport, command-shape validation, Chrome window helpers, and generic `opencli_*` internal reason codes | provider page semantics, Liepin URLs, product failure interpretation, source/runtime orchestration, or UI behavior |
 | `src/seektalent/providers/` | Provider registry and provider-owned integration code | runtime DTO imports or Workbench response projection |
 | `src/seektalent/providers/liepin/` | Liepin provider transport, worker-compatible HTTP client, provider DTOs, mapping, filters, safety, detail grants, Liepin site adapter, Liepin site config, generic OpenCLI-to-Liepin failure-cause mapping, Liepin Chrome tab reuse fragments, and local drift classification | generic OpenCLI command/session automation, source-neutral runtime orchestration, product failure interpretation, cloud drift scheduling, or React UI |
 | `src/seektalent_ui/` | Local Workbench BFF/API, local actor ownership, persistence, source-connection routes, packaged Workbench static serving | provider adapters, runtime control internals, or remote user identity |
@@ -68,7 +68,7 @@ For AI-heavy work, prefer this document as the lookup table and keep `AGENTS.md`
 - `failure_interpretation.py` owns the stable translation from source failure causes to public problems, optional user actions, and recovery guidance.
 - `sources/liepin/runtime_lane.py` and `smoke_cli.py` own Liepin runtime bridge behavior; `sources/liepin/reason_codes.py` only preserves the former import path.
 - `sources/provider_card_lane.py` routes provider-backed card searches through the source-neutral retrieval service.
-- `opencli_browser/` owns generic OpenCLI command/session behavior and returns generic `opencli_*` internal reason codes.
+- `opencli_browser/` owns generic WTSCLI daemon command/session behavior and returns generic `opencli_*` internal reason codes for the compatibility surface.
 - `providers/liepin/liepin_opencli_policy.py` owns Liepin OpenCLI URL constants, Liepin Chrome tab reuse fragments, and generic OpenCLI-to-Liepin failure-cause mapping.
 - `providers/liepin/liepin_site_adapter.py` owns Liepin site config and Liepin page behavior over the generic OpenCLI automation port.
 - `providers/liepin/liepin_drift_smoke.py` owns local drift classification. Cloud scheduling is out of scope for the provider package.

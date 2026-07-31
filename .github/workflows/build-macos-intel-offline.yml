@@ -146,12 +146,12 @@ jobs:
           import yaml
           import seektalent
           from seektalent.browser_bridge_manifest import WTSCLI_FORK_COMMIT
-          from seektalent.opencli_launcher import OPENCLI_PACKAGE
+          from seektalent.browser_bridge_manifest import WTSCLI_PACKAGE
 
           assert cryptography.__version__ == "48.0.0", cryptography.__version__
           assert platform.machine() == "x86_64", platform.machine()
           assert sqlite3.sqlite_version
-          assert OPENCLI_PACKAGE == "wtscli", OPENCLI_PACKAGE
+          assert WTSCLI_PACKAGE == "wtscli", WTSCLI_PACKAGE
           assert WTSCLI_FORK_COMMIT == "b05374d5d1834cda297701f7dc7a8caf756cac3c"
           PY
           BASH

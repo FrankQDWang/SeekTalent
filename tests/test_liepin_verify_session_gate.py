@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +17,11 @@ from seektalent.providers.liepin.browser_environment import (
     BrowserBridgeEnvironmentStatus,
 )
 from seektalent.sources.liepin.reason_codes import public_source_problem_message
+from seektalent.source_port.verify_session_contract import (
+    VerifySessionRequestV1,
+    VerifySessionResultV1,
+)
+from seektalent.wtscli_verify_session_adapter import WtsCliCurrentProfileSnapshot
 from tests.browser_bridge_bundle_fixtures import exact_browser_bridge_requirement
 from tests.settings_factory import make_settings
 
@@ -86,7 +92,7 @@ def _install_bounded_runtime(
     daemon = _Daemon()
     probe_calls: list[dict[str, object]] = []
     connect_calls: list[tuple[object, float]] = []
-    monkeypatch.setattr(gate_module, "inspect_opencli_runtime", lambda: runtime)
+    monkeypatch.setattr(gate_module, "inspect_wtscli_runtime", lambda: runtime)
     monkeypatch.setattr(
         gate_module,
         "_check_environment",
@@ -158,6 +164,146 @@ def test_production_gate_has_no_public_mutating_prepare(
     assert connect_calls == []
     assert probe_calls == []
     assert daemon.closed is False
+
+
+def test_mutating_prepare_connects_daemon_before_full_environment_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = VerifySessionRequestV1.create(
+        run_id="run-prepare-order",
+        operation_id="verify-prepare-order",
+        attempt_no=1,
+        idempotency_key="verify-prepare-order-key",
+        correlation_id="verify-prepare-order-correlation",
+        accepted_requirement_revision_id="requirement-prepare-order",
+        runtime_attempt_fence_token="prepare-order-fence-" + "f" * 64,
+        profile_binding_generation=1,
+        browser_control_scope_id="browser-scope-prepare-order",
+        deadline_value=60_000,
+        expected_source_operation_ledger_revision=1,
+        expected_reconciliation_revision=0,
+        delivery_mode="initial",
+        dispatch_intent_id="dispatch-prepare-order",
+        dispatch_intent_revision=1,
+        source_operation_acceptance_ref="source-acceptance-prepare-order",
+        profile_binding_ref="profile-binding-prepare-order",
+        provider_account_ref="provider-account-prepare-order",
+        required_capabilities=("bridge", "extension", "profile_lock", "search_surface"),
+        user_interaction_policy="observe_only",
+        verify_search_surface=True,
+        component_receipt_refs=("receipt-prepare-order",),
+    )
+    snapshot = WtsCliCurrentProfileSnapshot(
+        runtime_attempt_fence_ref=request.identity.runtime_attempt_fence_ref,
+        profile_binding_ref=request.profile_binding_ref,
+        profile_binding_generation=request.identity.profile_binding_generation,
+        provider_account_ref=request.provider_account_ref,
+        provider_account_subject="liepin-opencli-local-browser-profile",
+        browser_control_scope_id=request.identity.browser_control_scope_id,
+    )
+    runtime = SimpleNamespace(
+        bridge_manifest=Path("/installed/.seektalent/browser-bridge/bridge-manifest.json"),
+        node=Path("/installed/node"),
+    )
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        gate_module,
+        "check_installed_browser_bridge_bundle",
+        lambda **kwargs: (
+            events.append("bundle"),
+            BrowserBridgeEnvironmentStatus(
+                ok=True,
+                liepin_enabled=False,
+                reason_code="wtscli_bundle_ready",
+                message="bundle",
+                action="continue",
+                extension_dir=Path("/installed/.seektalent/chrome-extension/wtscli"),
+                bridge_build_id="bridge-build",
+            ),
+        )[1],
+    )
+    monkeypatch.setattr(
+        gate_module,
+        "runtime_requirement",
+        lambda _runtime: (events.append("requirement"), exact_browser_bridge_requirement())[1],
+    )
+
+    class _PreparedDaemon:
+        def close(self) -> None:
+            events.append("close")
+
+    class _Supervisor:
+        def __init__(self) -> None:
+            self.runtime = runtime
+
+        def ensure_ready(self, *, timeout_seconds: float) -> None:
+            assert timeout_seconds > 0
+            events.append("ensure")
+
+        def connect_existing(self, *, verify_timeout_seconds: float) -> _PreparedDaemon:
+            assert verify_timeout_seconds > 0
+            events.append("connect")
+            return _PreparedDaemon()
+
+    def full_environment_probe(_runtime: object) -> BrowserBridgeEnvironmentStatus:
+        assert events[-1] == "connect"
+        events.append("environment")
+        return BrowserBridgeEnvironmentStatus(
+            ok=True,
+            liepin_enabled=True,
+            reason_code="wtscli_ready",
+            message="ready",
+            action="continue",
+            extension_dir=Path("/installed/.seektalent/chrome-extension/wtscli"),
+            bridge_build_id="bridge-build",
+        )
+
+    monkeypatch.setattr(gate_module, "_check_environment", full_environment_probe)
+    monkeypatch.setattr(
+        gate_module,
+        "create_wtscli_verify_session_effect",
+        lambda **_kwargs: (
+            events.append("effect"),
+            lambda _request, _deadline: VerifySessionResultV1.model_validate(
+                {
+                    "contract_version": "seektalent.source.verify-session.result/v1",
+                    "identity": request.identity,
+                    "process_readiness": "ready",
+                    "bridge_readiness": "ready",
+                    "extension_readiness": "ready",
+                    "profile_lock_readiness": "ready",
+                    "account_readiness": "ready",
+                    "search_surface_readiness": "ready",
+                    "risk_state": "clear",
+                    "session_readiness": "ready",
+                    "actual_profile_binding_ref": request.profile_binding_ref,
+                    "actual_provider_account_ref": request.provider_account_ref,
+                    "actual_profile_binding_generation": request.identity.profile_binding_generation,
+                    "safe_reason_code": None,
+                    "user_action": None,
+                    "component_receipt_refs": ("receipt-prepare-order",),
+                }
+            ),
+        )[1],
+    )
+
+    gate_module._prepare_session_mutating(
+        make_settings(liepin_opencli_timeout_seconds=11),
+        request=request,
+        lifecycle_supervisor=_Supervisor(),
+        current_profile_snapshot=snapshot,
+    )
+
+    assert events == [
+        "bundle",
+        "requirement",
+        "ensure",
+        "connect",
+        "environment",
+        "effect",
+        "close",
+    ]
 
 
 def test_production_gate_stops_before_verify_session_when_environment_is_not_ready(

@@ -26,7 +26,11 @@ def build_default_source_registry(settings: AppSettings) -> SourceRegistry:
     )
 
 
-def build_source_lane_request_runner(settings: AppSettings):
+def build_source_lane_request_runner(
+    settings: AppSettings,
+    *,
+    cards_operation_executor: object | None = None,
+):
     async def run_source_lane_request(
         request: RuntimeSourceLaneRequest,
         source_client: object | None,
@@ -35,6 +39,7 @@ def build_source_lane_request_runner(settings: AppSettings):
             settings=settings,
             request=request,
             worker_client=_liepin_worker_client(source_client),
+            cards_operation_executor=cards_operation_executor,
         )
 
     return run_source_lane_request
@@ -49,6 +54,7 @@ def _registered_cts_source(settings: AppSettings) -> RegisteredSource:
         retrieval_service = _build_provider_retrieval_service(
             settings,
             source_operation_executor=None,
+            wtscli_lifecycle_supervisor=None,
         )
         return await run_provider_card_lane(
             request=request,

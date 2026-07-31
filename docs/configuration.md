@@ -11,7 +11,7 @@ In this repository, `.env.example` and `src/seektalent/default.env` are intentio
 
 ## Minimal Setup
 
-For the default non-Domi Liepin/OpenCLI run, you need one direct provider key:
+For the default non-Domi Liepin/WTSCLI run, you need one direct provider key:
 
 ```dotenv
 SEEKTALENT_TEXT_LLM_API_KEY=your-text-llm-key
@@ -34,44 +34,40 @@ For non-Domi installed PyPI users and source checkout users, `seektalent init` w
 SEEKTALENT_TEXT_LLM_API_KEY=
 ```
 
-All other runtime, output, cleanup, source, OpenCLI, Liepin, and model settings use product defaults.
+All other runtime, output, cleanup, source, WTSCLI, Liepin, and model settings use product defaults.
 
-For installed PyPI users, `seektalent workbench` uses Domi Node to prepare the pinned OpenCLI CLI package under `~/.seektalent/opencli-runtime` when needed. It does not download a replacement Node runtime. The OpenCLI Chrome extension and Liepin login are still user-owned browser state; runtime source actions report stable `reason_code=...` diagnostics if either is unavailable.
+For installed PyPI users, `seektalent workbench` uses the installed WTSCLI runtime and its paired browser bridge. It does not download a replacement Node runtime. The WTSCLI Chrome extension and Liepin login are still user-owned browser state; runtime source actions report stable `reason_code=...` diagnostics if either is unavailable.
 
 ## Prepared-Machine Domi Workbench
 
-On a machine where Domi is already installed, Chrome is already logged in to Liepin, and the OpenCLI Chrome extension is installed and enabled, the prepared-machine contract is two commands after `SEEKTALENT_DOMI_JWT` is present in the current terminal. The install command loads the release script remotely, so the target machine does not need a SeekTalent source checkout.
+The separate Domi host supplies its Python, Node, and `SEEKTALENT_DOMI_JWT`. The exact delivery archive contains the install and startup scripts, so the target machine does not need a SeekTalent source checkout or a particular Domi app version.
 
 Windows PowerShell:
 
 ```powershell
 Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.25/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.25
-seektalent workbench
+$env:SEEKTALENT_DOMI_JWT = "<inject at launch; do not commit>"
+$env:DOMI_PYTHON = "<Domi-provided Python executable>"
+$env:DOMI_NODE = "<Domi-provided Node executable>"
+& .\start-seektalent-domi.ps1
 ```
 
-The Windows defaults are:
-
-```text
-%APPDATA%\Domi\runtime\python\bin\python.exe
-%APPDATA%\Domi\runtime\node\node.exe
-```
+There is no Domi path discovery fallback; `DOMI_PYTHON` and `DOMI_NODE` are required host inputs.
 
 macOS shell:
 
 ```bash
 source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.25/scripts/install-seektalent-domi.sh") 0.7.25
-seektalent workbench
+export SEEKTALENT_DOMI_JWT="<inject at launch; do not commit>"
+export DOMI_PYTHON="/path/to/Domi-provided/python"
+export DOMI_NODE="/path/to/Domi-provided/node"
+scripts/start-seektalent-domi.sh
 ```
 
-The macOS Domi Python default is:
 
-```text
-/Applications/Domi.app/Contents/Resources/extraResources/python/runtime/bin/python
-```
+The install script writes only under `~/.seektalent`, installs the exact PyPI package and WTSCLI runtime/extension pair with the supplied host runtimes, and leaves legacy OpenCLI `19825` untouched.
 
-If Domi Node is not present in one of SeekTalent's known Domi Node candidate paths on macOS, set `DOMI_NODE` or `SEEKTALENT_DOMI_NODE` to the Domi node executable before running the install script. The install script writes only under `~/.seektalent`: it installs the PyPI package into `~/.seektalent/python-prefix/<version>`, generates the `seektalent` command shim under `~/.seektalent/bin`, wires that shim to Domi Python plus Domi Node, refreshes the root-level `~/.seektalent/seektalent.*` Windows compatibility shims so existing WindowsApps launchers cannot point at stale prefixes, and updates `PATH` only for the current terminal session. It does not modify the Domi app/runtime, Chrome, or the OpenCLI Chrome extension.
-
-The generated shim sets `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi` and `SEEKTALENT_OPENCLI_NODE=<resolved Domi Node path>` through the package's Domi launcher before delegating to the Workbench. It fails before server launch if the Domi JWT or Domi Node path is missing.
+The generated shim sets `SEEKTALENT_TEXT_LLM_PROVIDER_LABEL=domi` and the supplied Domi Node path through the package's Domi launcher before delegating to the Workbench. It fails before server launch if the Domi JWT or Domi runtime paths are missing.
 
 ## Source Checkout Starter Env Snapshot
 
@@ -263,20 +259,19 @@ DB-group backup uses SQLite online backup copies plus a group manifest for the p
 
 ## Liepin Local Browser Retrieval
 
-Local Liepin retrieval uses deterministic OpenCLI browser actions by default in the packaged Workbench configuration.
+Local Liepin retrieval uses deterministic WTSCLI browser actions by default in the packaged Workbench configuration.
 
 | Setting | Meaning |
 | --- | --- |
-| `SEEKTALENT_LIEPIN_WORKER_MODE=opencli` | Use the deterministic OpenCLI Liepin retriever. |
-| `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli` | Enable the local browser action backend used by the OpenCLI retriever. |
-| `SEEKTALENT_LIEPIN_OPENCLI_COMMAND=apps/web-react/node_modules/.bin/opencli` | OpenCLI command resolved from the code root when relative. |
-| `SEEKTALENT_LIEPIN_OPENCLI_SESSION=seektalent-liepin` | Local OpenCLI browser session name. |
+| `SEEKTALENT_LIEPIN_WORKER_MODE=opencli` | Use the deterministic WTSCLI Liepin retriever. |
+| `SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND=opencli` | Enable the local WTSCLI browser action backend. |
+| `SEEKTALENT_LIEPIN_OPENCLI_SESSION=seektalent-liepin` | Local WTSCLI browser session name; the variable name is retained for compatibility. |
 | `SEEKTALENT_LIEPIN_DEFAULT_DAILY_DETAIL_BUDGET=20` | Daily detail-open budget. This is a safety cap, not a per-query target. |
 | `SEEKTALENT_LIEPIN_EXPLOIT_DETAIL_TARGET=2` | Maximum detail-backed resumes opened per exploit query. |
 | `SEEKTALENT_LIEPIN_EXPLORE_DETAIL_TARGET=1` | Maximum detail-backed resumes opened per explore query. |
-| `SEEKTALENT_LIEPIN_OPENCLI_MAX_CARDS_PER_TASK=10` | Maximum search cards scanned by one OpenCLI task before detail-open caps are applied. |
+| `SEEKTALENT_LIEPIN_OPENCLI_MAX_CARDS_PER_TASK=10` | Maximum search cards scanned by one WTSCLI task before detail-open caps are applied. |
 
-`opencli` is the local Liepin execution path. `external_http` remains available only for an explicitly supplied worker-compatible HTTP endpoint.
+`opencli` is the compatibility value for the local WTSCLI Liepin execution path. `external_http` remains available only for an explicitly supplied worker-compatible HTTP endpoint.
 
 Local drift smoke should be operator-triggered and low volume. Search/card probes are the default bounded checks. Filter probes and detail probes must remain opt-in because they interact with provider UI state, and detail probes open candidate detail pages and consume risk budget.
 

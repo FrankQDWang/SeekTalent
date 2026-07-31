@@ -738,6 +738,7 @@ def test_new_primitives_have_no_production_import_config_or_entrypoint() -> None
         if path.name
         not in {
             "installed_filesystem.py",
+            "installed_domi_release.py",
             "installed_release.py",
             "installed_slot.py",
             "owned_sidecar_process.py",

@@ -8,19 +8,18 @@ import time
 from seektalent.config import AppSettings
 from seektalent.opencli_browser.contracts import OpenCliBrowserError
 from seektalent.opencli_browser.daemon_process import (
-    connect_installed_opencli_daemon,
     connect_existing_opencli_daemon_read_only,
 )
-from seektalent.opencli_launcher import (
+from seektalent.wtscli_runtime import (
     BootstrapError,
-    ensure_opencli_runtime,
-    inspect_opencli_runtime,
+    inspect_wtscli_runtime,
     runtime_requirement,
 )
 from seektalent.providers.liepin.client import LiepinWorkerModeError
 from seektalent.providers.liepin.browser_environment import (
     BrowserBridgeEnvironmentStatus,
     check_browser_bridge_environment,
+    check_installed_browser_bridge_bundle,
 )
 from seektalent.failure_interpretation import public_source_problem_message
 from seektalent.wtscli_verify_session_classification import (
@@ -41,6 +40,10 @@ from seektalent.source_port.verify_session_contract import (
 )
 from seektalent.providers.liepin.liepin_opencli_policy import (
     LIEPIN_BROWSER_CONTROL_KEY,
+)
+from seektalent.wtscli_lifecycle_supervisor import (
+    WtsCliLifecycleError,
+    WtsCliLifecycleSupervisor,
 )
 
 
@@ -69,7 +72,7 @@ def create_production_liepin_verify_session_gate(
 
 def _observe_session(settings: AppSettings) -> None:
     started_at = time.monotonic()
-    runtime = inspect_opencli_runtime()
+    runtime = inspect_wtscli_runtime()
     environment_status = _check_environment(runtime)
     if not environment_status.ok:
         _raise_reason(_environment_reason(environment_status))
@@ -108,30 +111,45 @@ def _prepare_session_mutating(
     *,
     request: VerifySessionRequestV1,
     current_profile_snapshot: WtsCliCurrentProfileSnapshot,
+    lifecycle_supervisor: WtsCliLifecycleSupervisor | None,
+    on_effect_started=None,
+    on_effect_completed=None,
 ) -> None:
-    """Repair/start browser readiness; callers must hold durable authority."""
+    """Prepare browser readiness through the already-running lifecycle owner."""
     if type(request) is not VerifySessionRequestV1:
         raise TypeError("strict verify-session request required")
     if type(current_profile_snapshot) is not WtsCliCurrentProfileSnapshot:
         raise TypeError("strict current-profile snapshot required")
+    if lifecycle_supervisor is None:
+        raise WtsCliLifecycleError("wtscli_supervisor_not_started")
     started_at = time.monotonic()
-    runtime = ensure_opencli_runtime()
-    environment_status = _check_environment(runtime)
-    if not environment_status.ok:
-        _raise_reason(_environment_reason(environment_status))
+    runtime = lifecycle_supervisor.runtime
+    bridge_manifest = runtime.bridge_manifest
+    if bridge_manifest is None:
+        raise BootstrapError("opencli_bridge_integrity_failed: Missing installed WTSCLI manifest")
+    bundle_status = check_installed_browser_bridge_bundle(
+        install_root=bridge_manifest.parent.parent,
+    )
+    if not bundle_status.ok:
+        _raise_reason(_environment_reason(bundle_status))
     requirement = runtime_requirement(runtime)
     deadline_at = started_at + min(
         900.0,
         max(0.001, settings.liepin_opencli_timeout_seconds),
     )
-    daemon = connect_installed_opencli_daemon(
-        runtime,
-        verify_timeout_seconds=max(
+    lifecycle_supervisor.ensure_ready(
+        timeout_seconds=max(
             0.001,
             deadline_at - time.monotonic(),
-        ),
+        )
+    )
+    daemon = lifecycle_supervisor.connect_existing(
+        verify_timeout_seconds=max(0.001, deadline_at - time.monotonic()),
     )
     try:
+        environment_status = _check_environment(runtime)
+        if not environment_status.ok:
+            _raise_reason(_environment_reason(environment_status))
         effect = create_wtscli_verify_session_effect(
             daemon=daemon,
             bridge_requirement=requirement,
@@ -142,7 +160,11 @@ def _prepare_session_mutating(
             monotonic_clock=time.monotonic,
             poll_wait=time.sleep,
         )
+        if on_effect_started is not None:
+            on_effect_started()
         result = effect(request, deadline_at)
+        if on_effect_completed is not None:
+            on_effect_completed()
     finally:
         daemon.close()
     if isinstance(result, VerifySessionResultV1):
@@ -180,7 +202,7 @@ def _environment_reason(status: BrowserBridgeEnvironmentStatus) -> str:
         return _normalized_boundary_reason(status.bridge_failure_reason)
     aliases = {
         "liepin_host_tab_missing": "liepin_host_tab_missing",
-        "wtscli_bundle_missing": "liepin_opencli_command_missing",
+        "wtscli_bundle_missing": "liepin_wtscli_bundle_missing",
         "wtscli_bundle_corrupt": "liepin_opencli_bridge_integrity_failed",
         "wtscli_daemon_missing": "liepin_opencli_daemon_not_running",
         "wtscli_daemon_stale": "liepin_opencli_daemon_stale",
@@ -222,6 +244,11 @@ def _normalized_boundary_reason(reason: str) -> str:
         "opencli_extension_disconnected": "liepin_opencli_extension_disconnected",
         "opencli_status_unavailable": "liepin_opencli_status_unavailable",
         "opencli_timeout": "liepin_opencli_timeout",
+        "wtscli_supervisor_not_started": "liepin_opencli_daemon_not_running",
+        "wtscli_runtime_build_mismatch": "liepin_opencli_bridge_build_mismatch",
+        "wtscli_foreign_owner": "liepin_opencli_daemon_stale",
+        "wtscli_daemon_restart_budget_exhausted": "liepin_opencli_daemon_stale",
+        "wtscli_readiness_timeout": "liepin_opencli_timeout",
     }
     return aliases.get(code, "liepin_opencli_status_unavailable")
 

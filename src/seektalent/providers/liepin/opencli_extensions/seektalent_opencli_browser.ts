@@ -193,7 +193,7 @@ function runAction(action: string, payload: Record<string, unknown>): Promise<st
       stderr = (stderr + String(chunk)).slice(0, 4096);
     });
     child.on("error", () => {
-      finish(safeJson({ ok: false, action, safeReasonCode: "liepin_opencli_command_missing", counts: {} }));
+      finish(safeJson({ ok: false, action, safeReasonCode: "liepin_opencli_helper_missing", counts: {} }));
     });
     child.on("close", (code) => {
       if (stdout.trim()) {

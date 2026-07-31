@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from pydantic import ValidationError
 
@@ -27,15 +25,12 @@ def test_removed_local_worker_mode_is_rejected() -> None:
 def test_liepin_opencli_backend_defaults_to_ready_opencli(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("SEEKTALENT_LIEPIN_WORKER_MODE", raising=False)
     monkeypatch.delenv("SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND", raising=False)
-    monkeypatch.delenv("SEEKTALENT_LIEPIN_OPENCLI_COMMAND", raising=False)
 
     settings = AppSettings(_env_file=None)
 
     assert settings.provider_name == "liepin"
     assert settings.liepin_worker_mode == "opencli"
     assert settings.liepin_browser_action_backend == "opencli"
-    assert settings.liepin_opencli_command_argv[1:] == ("-m", "seektalent.opencli_launcher")
-    assert Path(settings.liepin_opencli_command_argv[0]).exists()
     assert settings.liepin_opencli_session == "seektalent-liepin"
     assert settings.liepin_opencli_window_mode == "background"
     assert settings.liepin_opencli_allowed_hosts == (
@@ -70,62 +65,6 @@ def test_default_liepin_detail_targets_are_three_and_two() -> None:
     settings = AppSettings(_env_file=None)
     assert settings.liepin_exploit_detail_target == 3
     assert settings.liepin_explore_detail_target == 2
-
-
-@pytest.mark.parametrize(
-    "env_key",
-    (
-        "SEEKTALENT_LIEPIN_OPENCLI_IDLE_" + "CLOSE_SECONDS",
-        "SEEKTALENT_LIEPIN_OPENCLI_CLOSE_" + "BLANK_WINDOW",
-    ),
-)
-def test_removed_liepin_opencli_cleanup_env_vars_are_rejected(
-    monkeypatch: pytest.MonkeyPatch,
-    env_key: str,
-) -> None:
-    monkeypatch.setenv(env_key, "1")
-
-    with pytest.raises(ValueError, match="removed Liepin OpenCLI cleanup config"):
-        AppSettings(_env_file=None)
-
-
-@pytest.mark.parametrize(
-    "env_key",
-    (
-        "SEEKTALENT_LIEPIN_OPENCLI_IDLE_" + "CLOSE_SECONDS",
-        "SEEKTALENT_LIEPIN_OPENCLI_CLOSE_" + "BLANK_WINDOW",
-    ),
-)
-def test_removed_liepin_opencli_cleanup_env_file_values_are_rejected(tmp_path: Path, env_key: str) -> None:
-    env_file = tmp_path / ".env"
-    env_file.write_text(f"{env_key}=1\n", encoding="utf-8")
-
-    with pytest.raises(ValueError, match="removed Liepin OpenCLI cleanup config"):
-        AppSettings(_env_file=env_file)
-
-
-@pytest.mark.parametrize(
-    "init_key",
-    (
-        "liepin_opencli_idle_" + "close_seconds",
-        "liepin_opencli_close_" + "blank_window",
-    ),
-)
-def test_removed_liepin_opencli_cleanup_init_kwargs_are_rejected(init_key: str) -> None:
-    with pytest.raises(ValueError, match="removed Liepin OpenCLI cleanup config"):
-        AppSettings(_env_file=None, **{init_key: 1})
-
-
-@pytest.mark.parametrize(
-    "init_key",
-    (
-        "SEEKTALENT_LIEPIN_OPENCLI_IDLE_" + "CLOSE_SECONDS",
-        "SEEKTALENT_LIEPIN_OPENCLI_CLOSE_" + "BLANK_WINDOW",
-    ),
-)
-def test_removed_liepin_opencli_cleanup_env_style_init_kwargs_are_rejected(init_key: str) -> None:
-    with pytest.raises(ValueError, match="removed Liepin OpenCLI cleanup config"):
-        AppSettings(_env_file=None, **{init_key: "1"})
 
 
 def test_liepin_detail_targets_are_small_opencli_task_targets() -> None:
@@ -190,42 +129,3 @@ def test_liepin_opencli_backend_rejects_empty_start_urls(monkeypatch: pytest.Mon
 
     with pytest.raises(ValueError, match="liepin_opencli_allowed_start_urls_json must not be empty"):
         AppSettings(_env_file=None)
-
-
-def test_liepin_opencli_command_resolves_from_code_root(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    workspace = tmp_path / "workspace"
-    binary = workspace / "apps/web-react/node_modules/.bin/opencli"
-    binary.parent.mkdir(parents=True)
-    binary.write_text("#!/bin/sh\n", encoding="utf-8")
-    monkeypatch.setenv("SEEKTALENT_CODE_ROOT", str(workspace))
-    monkeypatch.setenv("SEEKTALENT_LIEPIN_WORKER_MODE", "disabled")
-    monkeypatch.setenv("SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND", "opencli")
-    monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_COMMAND", "apps/web-react/node_modules/.bin/opencli")
-
-    settings = AppSettings(_env_file=None)
-
-    assert settings.liepin_opencli_command_argv == (str(binary),)
-
-
-def test_liepin_opencli_bare_command_uses_path_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SEEKTALENT_LIEPIN_WORKER_MODE", "opencli")
-    monkeypatch.setenv("SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND", "opencli")
-    monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_COMMAND", "opencli --profile default")
-
-    settings = AppSettings(_env_file=None)
-
-    assert settings.liepin_opencli_command_argv == ("opencli", "--profile", "default")
-
-
-def test_liepin_opencli_empty_command_uses_default_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.setenv("SEEKTALENT_LIEPIN_WORKER_MODE", "disabled")
-    monkeypatch.setenv("SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND", "disabled")
-    monkeypatch.setenv("SEEKTALENT_LIEPIN_OPENCLI_COMMAND", "")
-
-    settings = AppSettings(_env_file=None)
-
-    assert settings.liepin_opencli_command_argv[1:] == ("-m", "seektalent.opencli_launcher")
-    assert Path(settings.liepin_opencli_command_argv[0]).exists()

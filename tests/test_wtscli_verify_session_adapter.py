@@ -1323,7 +1323,7 @@ def test_adapter_module_has_one_durable_prepare_caller_without_old_readiness_sea
     ]
     assert composition_callers == []
     assert direct_probe_callers == []
-    assert "inspect_opencli_runtime" in readiness_gate
+    assert "inspect_wtscli_runtime" in readiness_gate
     assert "connect_existing_opencli_daemon_read_only" in readiness_gate
     assert "ensure_ready" not in live_search_branch
     assert "session_status" not in provider_adapter

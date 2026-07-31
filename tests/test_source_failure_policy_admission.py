@@ -230,17 +230,6 @@ def test_ambiguous_host_window_has_an_actionable_public_problem() -> None:
     assert "只保留一个猎聘窗口" in message
 
 
-def test_removed_cleanup_config_has_accurate_reclamation_guidance() -> None:
-    problem = public_source_problem_code("liepin_opencli_removed_config")
-    message = public_source_problem_message(problem, source_label="猎聘")
-
-    assert problem == "source_removed_cleanup_config"
-    assert message is not None
-    assert "旧" in message
-    assert "cleanup" in message
-    assert "60 秒" in message
-
-
 def test_config_invalid_does_not_use_version_mismatch_guidance() -> None:
     assert (
         public_source_problem_code("liepin_opencli_config_invalid")

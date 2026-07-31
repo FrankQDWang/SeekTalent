@@ -868,7 +868,7 @@ def test_partial_target_retains_private_continuation_with_actual_opened_count(tm
 
 def test_real_adapter_persists_continuation_only_under_protected_with_owner_mode(tmp_path: Path) -> None:
     adapter = LiepinSiteAdapter(
-        browser_config=OpenCliBrowserConfig(command=("opencli",), session="test", timeout_seconds=1),
+        browser_config=OpenCliBrowserConfig(session="test", timeout_seconds=1),
         site_config=LiepinOpenCliSiteConfig(
             allowed_hosts=("h.liepin.com",), allowed_start_urls=(), artifact_root=tmp_path
         ),

@@ -8,8 +8,6 @@ BACKEND_HOST="${SEEKTALENT_DEV_BACKEND_HOST:-127.0.0.1}"
 BACKEND_PORT="${SEEKTALENT_DEV_BACKEND_PORT:-8012}"
 FRONTEND_HOST="${SEEKTALENT_DEV_FRONTEND_HOST:-127.0.0.1}"
 FRONTEND_PORT="${SEEKTALENT_DEV_FRONTEND_PORT:-5178}"
-OPENCLI_CMD=(uv run python -m seektalent.opencli_launcher)
-OPENCLI_COMMAND_TEXT="uv run python -m seektalent.opencli_launcher"
 
 if [[ -z "${SEEKTALENT_WTSCLI_NODE:-}" && -z "${SEEKTALENT_DOMI_NODE:-}" && -z "${DOMI_NODE:-}" ]]; then
   SEEKTALENT_WTSCLI_NODE="$(command -v node || true)"
@@ -29,42 +27,6 @@ else
   echo "pnpm is required for the React workbench dev server." >&2
   exit 1
 fi
-
-if [[ ${SEEKTALENT_LIEPIN_OPENCLI_COMMAND+x} ]]; then
-  OPENCLI_COMMAND_TEXT="$SEEKTALENT_LIEPIN_OPENCLI_COMMAND"
-  opencli_cmd_parts="$(mktemp)"
-  if ! uv run python - "$OPENCLI_COMMAND_TEXT" >"$opencli_cmd_parts" <<'PY'
-import shlex
-import sys
-
-try:
-    parts = shlex.split(sys.argv[1])
-except ValueError as exc:
-    print(f"reason_code=liepin_opencli_command_invalid Invalid OpenCLI command: {exc}", file=sys.stderr)
-    raise SystemExit(1)
-
-if not parts:
-    print("reason_code=liepin_opencli_command_missing OpenCLI command is empty.", file=sys.stderr)
-    raise SystemExit(1)
-
-for part in parts:
-    sys.stdout.write(part)
-    sys.stdout.write("\0")
-PY
-  then
-    rm -f "$opencli_cmd_parts"
-    exit 1
-  fi
-  OPENCLI_CMD=()
-  while IFS= read -r -d '' part; do
-    OPENCLI_CMD+=("$part")
-  done <"$opencli_cmd_parts"
-  rm -f "$opencli_cmd_parts"
-fi
-
-opencli_cmd() {
-  "${OPENCLI_CMD[@]}" "$@"
-}
 
 if [[ ! -x "$VITE_BIN" ]]; then
   echo "Installing React workspace dependencies for the workbench dev server..." >&2
@@ -123,25 +85,6 @@ WORKSPACE_ROOT="${WORKSPACE_ROOT:-$ROOT}"
 CODE_ROOT="$(env_or_file SEEKTALENT_CODE_ROOT)"
 CODE_ROOT="${CODE_ROOT:-$ROOT}"
 
-opencli_extension_connected() {
-  opencli_cmd daemon status 2>/dev/null | grep -q "Extension: connected"
-}
-
-opencli_daemon_stale() {
-  opencli_cmd daemon status 2>/dev/null | grep -q "Daemon: stale"
-}
-
-wait_for_opencli_extension() {
-  local attempt
-  for attempt in {1..15}; do
-    if opencli_extension_connected; then
-      return 0
-    fi
-    sleep 1
-  done
-  return 1
-}
-
 wait_for_backend_ready() {
   local timeout="${SEEKTALENT_DEV_BACKEND_READY_TIMEOUT_SECONDS:-60}"
   uv run python - "$BACKEND_HOST" "$BACKEND_PORT" "$timeout" "$backend_pid" <<'PY'
@@ -177,28 +120,6 @@ while True:
 PY
 }
 
-OPENCLI_START_DAEMON="$(env_or_file SEEKTALENT_LIEPIN_OPENCLI_START_DAEMON)"
-if [[ "$OPENCLI_START_DAEMON" == "1" || "$OPENCLI_START_DAEMON" == "true" ]]; then
-  echo "Starting OpenCLI browser bridge daemon for Liepin local browser actions..." >&2
-  if ! opencli_cmd daemon restart >&2; then
-    echo "reason_code=liepin_opencli_daemon_not_running OpenCLI browser bridge daemon did not start; Liepin OpenCLI source will fail closed." >&2
-  elif ! wait_for_opencli_extension; then
-    echo "reason_code=liepin_opencli_extension_disconnected OpenCLI browser bridge extension is not connected; Liepin OpenCLI source will fail closed." >&2
-  fi
-elif opencli_daemon_stale; then
-  echo "reason_code=liepin_opencli_daemon_stale OpenCLI browser bridge daemon is stale; restarting daemon and waiting..." >&2
-  if ! opencli_cmd daemon restart >&2 || ! wait_for_opencli_extension; then
-    echo "reason_code=liepin_opencli_extension_disconnected OpenCLI browser bridge extension is not connected; Liepin OpenCLI source will fail closed." >&2
-  fi
-elif ! opencli_cmd daemon status >/dev/null 2>&1; then
-  echo "reason_code=liepin_opencli_daemon_not_running OpenCLI browser bridge daemon is not running; Liepin OpenCLI source will fail closed." >&2
-elif ! opencli_extension_connected; then
-  echo "OpenCLI browser bridge daemon is running but the extension is not connected; restarting daemon and waiting..." >&2
-  if ! opencli_cmd daemon restart >&2 || ! wait_for_opencli_extension; then
-    echo "reason_code=liepin_opencli_extension_disconnected OpenCLI browser bridge extension is not connected; Liepin OpenCLI source will fail closed." >&2
-  fi
-fi
-
 backend_pid=""
 cleanup() {
   if [[ -n "$backend_pid" ]]; then
@@ -213,7 +134,6 @@ env \
   SEEKTALENT_CODE_ROOT="$CODE_ROOT" \
   SEEKTALENT_LIEPIN_WORKER_MODE="opencli" \
   SEEKTALENT_LIEPIN_BROWSER_ACTION_BACKEND="opencli" \
-  SEEKTALENT_LIEPIN_OPENCLI_COMMAND="$OPENCLI_COMMAND_TEXT" \
   SEEKTALENT_LIEPIN_OPENCLI_WINDOW_MODE="${SEEKTALENT_LIEPIN_OPENCLI_WINDOW_MODE:-background}" \
   SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS="${SEEKTALENT_LIEPIN_OPENCLI_TIMEOUT_SECONDS:-900}" \
   SEEKTALENT_LIEPIN_OPENCLI_DETAIL_OPEN_TIMEOUT_SECONDS="${SEEKTALENT_LIEPIN_OPENCLI_DETAIL_OPEN_TIMEOUT_SECONDS:-90}" \

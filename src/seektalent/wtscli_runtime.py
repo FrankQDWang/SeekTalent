@@ -5,13 +5,13 @@ import os
 import subprocess
 import sys
 import tempfile
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, suppress
 from pathlib import Path, PurePosixPath
 
 from seektalent.browser_bridge_manifest import (
     WTSCLI_PACKAGE,
-    WTSCLI_VERSION,
+    WTSCLI_VERSION as _WTSCLI_VERSION,
     BrowserBridgeManifestError,
     BrowserBridgeRequirement,
     load_browser_bridge_requirement,
@@ -23,13 +23,10 @@ from seektalent.browser_bridge_runtime_receipt import (
 from seektalent.strict_json import StrictJsonError, strict_json_object_loads
 
 
-# These internal names remain stable for callers; their authority is the WTS
-# manifest, not the historical OpenCLI package or state layout.
-OPENCLI_PACKAGE = WTSCLI_PACKAGE
-OPENCLI_VERSION = WTSCLI_VERSION
 VERIFICATION_STAMP_SCHEMA_VERSION = "seektalent.wtscli_runtime_verification.v1"
 VERIFICATION_STAMP_FILENAME = ".seektalent-wtscli-verified.json"
 RUNTIME_ROOT = Path.home() / ".seektalent" / "wtscli-runtime"
+WTSCLI_VERSION = _WTSCLI_VERSION
 PROVIDER_SECRET_ENV_VARS = frozenset(
     {
         "SEEKTALENT_TEXT_LLM_API_KEY",
@@ -38,44 +35,25 @@ PROVIDER_SECRET_ENV_VARS = frozenset(
         "SEEKTALENT_DOMI_LLM_CHANNEL",
     }
 )
-EXPLICIT_OPENCLI_NODE_ENV = "SEEKTALENT_WTSCLI_NODE"
+EXPLICIT_WTSCLI_NODE_ENV = "SEEKTALENT_WTSCLI_NODE"
 DOMI_NODE_ENV_VARS = ("SEEKTALENT_DOMI_NODE", "DOMI_NODE")
-
-
-def main(argv: Sequence[str] | None = None) -> int:
-    args = list(sys.argv[1:] if argv is None else argv)
-    try:
-        runtime = ensure_opencli_runtime()
-    except BootstrapError as exc:
-        print(f"SeekTalent WTSCLI bootstrap failed: {exc}", file=sys.stderr)
-        return 127
-    env = opencli_subprocess_env(
-        node_bin_dir=runtime.node_bin_dir,
-        requirement=runtime_requirement(runtime),
-    )
-    completed = subprocess.run(
-        (str(runtime.node), str(runtime.opencli_main), *args),
-        env=env,
-        check=False,
-    )
-    return completed.returncode
 
 
 class BootstrapError(RuntimeError):
     pass
 
 
-class OpenCliRuntime:
+class WtsCliRuntime:
     def __init__(
         self,
         *,
         node: Path,
-        opencli_main: Path,
+        wtscli_main: Path,
         bridge_manifest: Path | None = None,
         requirement: BrowserBridgeRequirement | None = None,
     ) -> None:
         self.node = node
-        self.opencli_main = opencli_main
+        self.wtscli_main = wtscli_main
         self.bridge_manifest = bridge_manifest
         self.requirement = requirement
 
@@ -84,12 +62,12 @@ class OpenCliRuntime:
         return self.node.parent
 
 
-def ensure_opencli_runtime(
+def ensure_wtscli_runtime(
     *,
     root: Path | None = None,
-    opencli_version: str | None = None,
+    wtscli_version: str | None = None,
     env: Mapping[str, str] | None = None,
-) -> OpenCliRuntime:
+) -> WtsCliRuntime:
     runtime_root = (root or RUNTIME_ROOT).expanduser().absolute()
     external_node = _configured_node_from_env(env)
     if external_node is None:
@@ -111,17 +89,17 @@ def ensure_opencli_runtime(
         bridge_manifest = _bridge_manifest_path(runtime_root)
         _reject_runtime_symlink_components(runtime_root.parent, bridge_manifest)
         requirement = _load_bridge_requirement(bridge_manifest)
-        if opencli_version is not None and opencli_version != requirement.cli.version:
+        if wtscli_version is not None and wtscli_version != requirement.cli.version:
             raise BootstrapError(
                 "opencli_bridge_build_mismatch: Caller-selected WTSCLI versions are not supported"
             )
         node = _require_domi_node_file(external_node)
-        install_dir = _opencli_install_dir(runtime_root, requirement.cli.version)
-        package_dir = _opencli_package_dir(install_dir, requirement)
+        install_dir = _wtscli_install_dir(runtime_root, requirement.cli.version)
+        package_dir = _wtscli_package_dir(install_dir, requirement)
         _reject_runtime_symlink_components(runtime_root, package_dir)
         package_json = package_dir / "package.json"
         bridge_identity = package_dir / "bridge-identity.json"
-        opencli_main = _require_installed_opencli(
+        wtscli_main = _require_installed_wtscli(
             package_dir,
             requirement=requirement,
         )
@@ -139,40 +117,40 @@ def ensure_opencli_runtime(
         if not _verification_stamp_matches(
             stamp_path,
             node=node,
-            opencli_main=opencli_main,
+            wtscli_main=wtscli_main,
             package_json=package_json,
             bridge_identity=bridge_identity,
             bridge_manifest=bridge_manifest,
             requirement=requirement,
         ):
             _verify_domi_node(node)
-            _probe_opencli_cli(
+            _probe_wtscli_cli(
                 node=node,
-                opencli_main=opencli_main,
+                wtscli_main=wtscli_main,
                 requirement=requirement,
             )
             _write_verification_stamp(
                 stamp_path,
                 node=node,
-                opencli_main=opencli_main,
+                wtscli_main=wtscli_main,
                 package_json=package_json,
                 bridge_identity=bridge_identity,
                 bridge_manifest=bridge_manifest,
                 requirement=requirement,
             )
-    return OpenCliRuntime(
+    return WtsCliRuntime(
         node=node,
-        opencli_main=opencli_main,
+        wtscli_main=wtscli_main,
         bridge_manifest=bridge_manifest,
         requirement=requirement,
     )
 
 
-def inspect_opencli_runtime(
+def inspect_wtscli_runtime(
     *,
     root: Path | None = None,
     env: Mapping[str, str] | None = None,
-) -> OpenCliRuntime:
+) -> WtsCliRuntime:
     """Read installed runtime identity without locks, probes, repair, or writes."""
     runtime_root = (root or RUNTIME_ROOT).expanduser().absolute()
     external_node = _configured_node_from_env(env)
@@ -184,9 +162,9 @@ def inspect_opencli_runtime(
     bridge_manifest = _bridge_manifest_path(runtime_root)
     requirement = _load_bridge_requirement(bridge_manifest)
     node = _require_domi_node_file(external_node)
-    install_dir = _opencli_install_dir(runtime_root, requirement.cli.version)
-    package_dir = _opencli_package_dir(install_dir, requirement)
-    opencli_main = _require_installed_opencli(
+    install_dir = _wtscli_install_dir(runtime_root, requirement.cli.version)
+    package_dir = _wtscli_package_dir(install_dir, requirement)
+    wtscli_main = _require_installed_wtscli(
         package_dir,
         requirement=requirement,
     )
@@ -194,15 +172,15 @@ def inspect_opencli_runtime(
         package_dir / "bridge-identity.json",
         requirement,
     )
-    return OpenCliRuntime(
+    return WtsCliRuntime(
         node=node,
-        opencli_main=opencli_main,
+        wtscli_main=wtscli_main,
         bridge_manifest=bridge_manifest,
         requirement=requirement,
     )
 
 
-def runtime_requirement(runtime: OpenCliRuntime) -> BrowserBridgeRequirement:
+def runtime_requirement(runtime: WtsCliRuntime) -> BrowserBridgeRequirement:
     if runtime.requirement is not None:
         return runtime.requirement
     if runtime.bridge_manifest is None:
@@ -212,7 +190,7 @@ def runtime_requirement(runtime: OpenCliRuntime) -> BrowserBridgeRequirement:
 
 def _configured_node_from_env(env: Mapping[str, str] | None = None) -> Path | None:
     source_env = os.environ if env is None else env
-    for key in (EXPLICIT_OPENCLI_NODE_ENV, *DOMI_NODE_ENV_VARS):
+    for key in (EXPLICIT_WTSCLI_NODE_ENV, *DOMI_NODE_ENV_VARS):
         raw = source_env.get(key)
         if raw and raw.strip():
             return _resolve_node_env_path(raw)
@@ -265,7 +243,7 @@ def _probe_node_version(node: Path) -> None:
         raise BootstrapError(f"Node runtime returned an unexpected version: {node}")
 
 
-def _require_installed_opencli(
+def _require_installed_wtscli(
     package_dir: Path,
     *,
     requirement: BrowserBridgeRequirement,
@@ -321,11 +299,11 @@ def _package_path(package_dir: Path, value: str) -> Path:
     return candidate
 
 
-def _opencli_install_dir(runtime_root: Path, opencli_version: str) -> Path:
-    return runtime_root / WTSCLI_PACKAGE / opencli_version
+def _wtscli_install_dir(runtime_root: Path, wtscli_version: str) -> Path:
+    return runtime_root / WTSCLI_PACKAGE / wtscli_version
 
 
-def _opencli_package_dir(
+def _wtscli_package_dir(
     install_dir: Path,
     requirement: BrowserBridgeRequirement | None = None,
 ) -> Path:
@@ -333,25 +311,25 @@ def _opencli_package_dir(
     return install_dir / "node_modules" / package
 
 
-def _opencli_main_path(
+def _wtscli_main_path(
     install_dir: Path,
     requirement: BrowserBridgeRequirement | None = None,
 ) -> Path:
-    return _opencli_package_dir(install_dir, requirement) / "dist" / "src" / "main.js"
+    return _wtscli_package_dir(install_dir, requirement) / "dist" / "src" / "main.js"
 
 
-def _opencli_package_json_path(
+def _wtscli_package_json_path(
     install_dir: Path,
     requirement: BrowserBridgeRequirement | None = None,
 ) -> Path:
-    return _opencli_package_dir(install_dir, requirement) / "package.json"
+    return _wtscli_package_dir(install_dir, requirement) / "package.json"
 
 
-def _opencli_bridge_identity_path(
+def _wtscli_bridge_identity_path(
     install_dir: Path,
     requirement: BrowserBridgeRequirement | None = None,
 ) -> Path:
-    return _opencli_package_dir(install_dir, requirement) / "bridge-identity.json"
+    return _wtscli_package_dir(install_dir, requirement) / "bridge-identity.json"
 
 
 def _bridge_manifest_path(runtime_root: Path) -> Path:
@@ -405,16 +383,16 @@ def _verify_runtime_bridge_identity(
         )
 
 
-def _probe_opencli_cli(
+def _probe_wtscli_cli(
     *,
     node: Path,
-    opencli_main: Path,
+    wtscli_main: Path,
     requirement: BrowserBridgeRequirement,
 ) -> None:
     try:
         completed = subprocess.run(
-            (str(node), str(opencli_main), "--help"),
-            env=opencli_subprocess_env(
+            (str(node), str(wtscli_main), "--help"),
+            env=wtscli_subprocess_env(
                 node_bin_dir=node.parent,
                 requirement=requirement,
             ),
@@ -443,7 +421,7 @@ def _verification_stamp_matches(
     stamp_path: Path,
     *,
     node: Path,
-    opencli_main: Path,
+    wtscli_main: Path,
     package_json: Path,
     bridge_identity: Path,
     bridge_manifest: Path,
@@ -455,7 +433,7 @@ def _verification_stamp_matches(
         return False
     return data == _verification_payload(
         node=node,
-        opencli_main=opencli_main,
+        wtscli_main=wtscli_main,
         package_json=package_json,
         bridge_identity=bridge_identity,
         bridge_manifest=bridge_manifest,
@@ -467,7 +445,7 @@ def _write_verification_stamp(
     stamp_path: Path,
     *,
     node: Path,
-    opencli_main: Path,
+    wtscli_main: Path,
     package_json: Path,
     bridge_identity: Path,
     bridge_manifest: Path,
@@ -475,7 +453,7 @@ def _write_verification_stamp(
 ) -> None:
     payload = _verification_payload(
         node=node,
-        opencli_main=opencli_main,
+        wtscli_main=wtscli_main,
         package_json=package_json,
         bridge_identity=bridge_identity,
         bridge_manifest=bridge_manifest,
@@ -500,7 +478,7 @@ def _write_verification_stamp(
             if _verification_stamp_matches(
                 stamp_path,
                 node=node,
-                opencli_main=opencli_main,
+                wtscli_main=wtscli_main,
                 package_json=package_json,
                 bridge_identity=bridge_identity,
                 bridge_manifest=bridge_manifest,
@@ -516,7 +494,7 @@ def _write_verification_stamp(
 def _verification_payload(
     *,
     node: Path,
-    opencli_main: Path,
+    wtscli_main: Path,
     package_json: Path,
     bridge_identity: Path,
     bridge_manifest: Path,
@@ -529,7 +507,7 @@ def _verification_payload(
         "version": requirement.cli.version,
         "bridge_build_id": requirement.bridge_build_id,
         "node": _file_fingerprint(node),
-        "main": _file_fingerprint(opencli_main),
+        "main": _file_fingerprint(wtscli_main),
         "package_json": _file_fingerprint(package_json),
         "bridge_identity": _file_fingerprint(bridge_identity),
         "bridge_manifest": _file_fingerprint(bridge_manifest),
@@ -545,7 +523,7 @@ def _file_fingerprint(path: Path) -> dict[str, object]:
     }
 
 
-def opencli_subprocess_env(
+def wtscli_subprocess_env(
     *,
     node_bin_dir: Path,
     requirement: BrowserBridgeRequirement,
@@ -583,7 +561,3 @@ def _runtime_lock(runtime_root: Path) -> Iterator[None]:
 
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
         lock_file.close()
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

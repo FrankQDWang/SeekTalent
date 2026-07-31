@@ -175,8 +175,9 @@ depends_on = [
 [[modules]]
 path = "seektalent_workbench_v2"
 depends_on = [
-  "seektalent.candidate_quality",
-  "seektalent.failure_interpretation",
-  "seektalent.source_contracts",
-  "seektalent_runtime_control",
+    "seektalent.candidate_quality",
+    "seektalent.failure_interpretation",
+    "seektalent.requirements",
+    "seektalent.source_contracts",
+    "seektalent_runtime_control",
 ]

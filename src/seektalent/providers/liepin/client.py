@@ -37,6 +37,7 @@ from seektalent.providers.liepin.worker_contracts import decode_login_relay_inpu
 from seektalent.providers.liepin.worker_contracts import decode_login_relay_snapshot
 from seektalent.providers.liepin.worker_contracts import decode_session_status
 from seektalent.providers.liepin.worker_contracts import decode_worker_health
+from seektalent.wtscli_lifecycle_supervisor import WtsCliLifecycleError, WtsCliLifecycleSupervisor
 
 if TYPE_CHECKING:
     from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
@@ -387,6 +388,7 @@ def build_liepin_worker_client(
     settings: AppSettings,
     *,
     cards_operation_executor=None,
+    lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
 ) -> LiepinWorkerClient:
     if settings.liepin_worker_mode == "fake_fixture":
         return FakeLiepinWorkerClient(settings)
@@ -396,6 +398,7 @@ def build_liepin_worker_client(
         return build_liepin_opencli_worker_client(
             settings,
             cards_operation_executor=cards_operation_executor,
+            lifecycle_supervisor=lifecycle_supervisor,
         )
     raise LiepinWorkerModeError(
         "Liepin worker mode is disabled; no worker client can be built.",
@@ -407,9 +410,10 @@ def build_liepin_opencli_worker_client(
     settings: AppSettings,
     *,
     cards_operation_executor=None,
+    lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
 ) -> LiepinWorkerClient:
     from seektalent.opencli_browser.contracts import OpenCliBrowserError
-    from seektalent.opencli_launcher import BootstrapError
+    from seektalent.wtscli_runtime import BootstrapError
     from seektalent.providers.liepin.opencli_retriever import LiepinOpenCliResumeRetriever
     from seektalent.providers.liepin.opencli_worker_client import LiepinOpenCliWorkerClient
 
@@ -418,8 +422,9 @@ def build_liepin_opencli_worker_client(
             site = build_liepin_opencli_site_adapter(
                 settings,
                 cards_operation_executor=cards_operation_executor,
+                lifecycle_supervisor=lifecycle_supervisor,
             )
-        except (BootstrapError, OpenCliBrowserError) as exc:
+        except (BootstrapError, OpenCliBrowserError, WtsCliLifecycleError) as exc:
             raise _liepin_opencli_setup_error(exc) from exc
         return LiepinOpenCliResumeRetriever(
             runner=site
@@ -436,14 +441,11 @@ def build_liepin_opencli_site_adapter(
     settings: AppSettings,
     *,
     cards_operation_executor=None,
+    lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
 ):
     """Build the real installed-WTSCLI site adapter for its owning process."""
     from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
     from seektalent.opencli_browser.contracts import OpenCliBrowserConfig
-    from seektalent.opencli_browser.daemon_process import (
-        connect_installed_opencli_daemon,
-    )
-    from seektalent.opencli_launcher import ensure_opencli_runtime
     from seektalent.providers.liepin.liepin_site_adapter import (
         LiepinOpenCliSiteConfig,
         LiepinOpenCliTimingRecorder,
@@ -451,7 +453,6 @@ def build_liepin_opencli_site_adapter(
     )
 
     browser_config = OpenCliBrowserConfig(
-        command=settings.liepin_opencli_command_argv,
         session=settings.liepin_opencli_session,
         timeout_seconds=settings.liepin_opencli_timeout_seconds,
         window_mode=settings.liepin_opencli_window_mode,
@@ -467,8 +468,10 @@ def build_liepin_opencli_site_adapter(
         lease_dir=settings.project_root / ".seektalent" / "opencli_leases",
         artifact_root=settings.artifacts_path,
     )
-    runtime = ensure_opencli_runtime()
-    daemon = connect_installed_opencli_daemon(runtime)
+    if lifecycle_supervisor is None:
+        raise WtsCliLifecycleError("wtscli_supervisor_required")
+    supervisor = lifecycle_supervisor
+    daemon = supervisor.connect_existing()
     return LiepinSiteAdapter(
         browser_config=browser_config,
         site_config=site_config,
@@ -483,19 +486,20 @@ def build_liepin_opencli_site_adapter(
             ),
         ),
         cards_operation_executor=cards_operation_executor,
+        lifecycle_supervisor=supervisor,
     )
 
 
 def _liepin_opencli_setup_error(error: Exception) -> LiepinWorkerModeError:
     from seektalent.opencli_browser.contracts import OpenCliBrowserError
-    from seektalent.opencli_launcher import BootstrapError
+    from seektalent.wtscli_runtime import BootstrapError
 
     if isinstance(error, BootstrapError):
         message = str(error)
         if message.startswith(("domi_node_missing:", "opencli_offline_runtime_missing:")):
             return LiepinWorkerModeError(
                 "Liepin browser component is unavailable. Reinstall SeekTalent.",
-                code="liepin_opencli_command_missing",
+                code="liepin_wtscli_bundle_missing",
             )
         return LiepinWorkerModeError(
             "Liepin browser component failed integrity checks. Reinstall SeekTalent.",
@@ -509,6 +513,18 @@ def _liepin_opencli_setup_error(error: Exception) -> LiepinWorkerModeError:
             "opencli_status_unavailable": "liepin_opencli_status_unavailable",
         }
         code = reason_codes.get(error.safe_reason_code, "liepin_opencli_bootstrap_failed")
+        return LiepinWorkerModeError(
+            "Liepin browser bridge is unavailable.",
+            code=code,
+        )
+    if isinstance(error, WtsCliLifecycleError):
+        code = {
+            "wtscli_supervisor_not_started": "liepin_opencli_daemon_not_running",
+            "wtscli_runtime_build_mismatch": "liepin_opencli_bridge_build_mismatch",
+            "wtscli_foreign_owner": "liepin_opencli_daemon_stale",
+            "wtscli_daemon_restart_budget_exhausted": "liepin_opencli_daemon_stale",
+            "wtscli_readiness_timeout": "liepin_opencli_timeout",
+        }.get(error.safe_reason_code, "liepin_opencli_bootstrap_failed")
         return LiepinWorkerModeError(
             "Liepin browser bridge is unavailable.",
             code=code,

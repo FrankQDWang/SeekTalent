@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 
 import pytest
 
@@ -27,11 +27,6 @@ from seektalent.opencli_browser.reason_codes import (
 from seektalent.providers.liepin.liepin_opencli_policy import (
     liepin_broker_tab_session,
 )
-
-
-class NoSubprocessCommands:
-    def run(self, argv: Sequence[str], *, timeout: int, env: Mapping[str, str] | None = None) -> str:
-        raise AssertionError(f"unexpected subprocess command: {tuple(argv)}")
 
 
 class RecordingDaemon:
@@ -137,12 +132,10 @@ class RecordingDaemon:
 def automation(daemon: RecordingDaemon) -> OpenCliBrowserAutomation:
     return OpenCliBrowserAutomation(
         config=OpenCliBrowserConfig(
-            command=("seektalent-opencli",),
             session="seektalent-liepin",
             timeout_seconds=30,
             pacing_enabled=False,
         ),
-        commands=NoSubprocessCommands(),
         daemon=daemon,  # type: ignore[arg-type]
     )
 

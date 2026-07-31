@@ -163,7 +163,6 @@ def test_internal_reason_projects_consistently_through_all_user_surfaces(
     internal_reason: str,
     expected_public_problem: str,
 ) -> None:
-    from seektalent import cli
     from seektalent.progress import ProgressEvent
     from seektalent.runtime.public_events import make_runtime_public_event
     from seektalent.source_adapters import public_source_reason_code
@@ -219,7 +218,6 @@ def test_internal_reason_projects_consistently_through_all_user_surfaces(
     assert workbench_payload["safeReasonCode"] == expected_public_problem
     assert message in workbench_payload["summary"]
     assert source_runtime_warning_message(expected_public_problem) == message
-    assert cli._workbench_reason_message(internal_reason) == message
     assert _drop_broad_runtime_fields(
         {"safeReasonCode": internal_reason}
     ) == {"safeReasonCode": expected_public_problem}

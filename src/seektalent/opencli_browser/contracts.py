@@ -36,7 +36,6 @@ class OpenCliOwnedTab:
 
 @dataclass(frozen=True)
 class OpenCliBrowserConfig:
-    command: tuple[str, ...]
     session: str
     timeout_seconds: int
     window_mode: OpenCliWindowMode = "background"

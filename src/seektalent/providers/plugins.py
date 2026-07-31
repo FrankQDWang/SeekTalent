@@ -14,6 +14,7 @@ from seektalent.providers.liepin.client import (
     is_live_liepin_worker_mode,
 )
 from seektalent.providers.liepin.store import LiepinStore
+from seektalent.wtscli_lifecycle_supervisor import WtsCliLifecycleSupervisor
 
 
 @dataclass(frozen=True)
@@ -23,6 +24,7 @@ class ProviderAdapterBuildContext:
     liepin_store: LiepinStore | None = None
     liepin_connection_safety_resolver: ProviderConnectionSafetyResolver | None = None
     liepin_source_operation_executor: object | None = None
+    wtscli_lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +94,7 @@ def _build_liepin_provider_adapter(context: ProviderAdapterBuildContext) -> Prov
             cards_operation_executor=(
                 context.liepin_source_operation_executor
             ),
+            lifecycle_supervisor=context.wtscli_lifecycle_supervisor,
         ),
         store=store,
         connection_safety_resolver=context.liepin_connection_safety_resolver,
