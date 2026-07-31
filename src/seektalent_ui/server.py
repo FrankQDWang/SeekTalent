@@ -29,7 +29,10 @@ from seektalent.workbench_internal_secrets import ensure_workbench_internal_liep
 from seektalent_conversation_agent.factory import build_agent_service
 from seektalent_workbench_v2.agent_loop import BailianStrictWorkbenchV2AgentLoop
 from seektalent_workbench_v2.runtime_runner import WorkbenchV2RuntimeQueueRunner
-from seektalent_workbench_v2.runtime_service import WorkbenchV2RuntimeService
+from seektalent_workbench_v2.runtime_service import (
+    WorkbenchV2RuntimeService,
+    build_workbench_v2_requirement_extractor,
+)
 from seektalent_workbench_v2.service import WorkbenchV2Service
 from seektalent_workbench_v2.store import WorkbenchV2Store
 from seektalent_ui import (
@@ -119,6 +122,7 @@ def create_app(
         app_settings.resolve_workspace_path(".seektalent/workbench_v2.sqlite3")
     )
     app.state.workbench_v2_store.initialize()
+    app.state.workbench_v2_requirement_extractor = build_workbench_v2_requirement_extractor(app_settings)
     def workbench_v2_runtime_factory() -> object:
         return runtime_factory(app_settings)
 
@@ -133,6 +137,7 @@ def create_app(
         agent_loop=BailianStrictWorkbenchV2AgentLoop(settings=app_settings),
         runtime_service=WorkbenchV2RuntimeService(
             store=runtime_control_store,
+            requirement_extractor=app.state.workbench_v2_requirement_extractor,
             settings=app_settings,
             runtime_factory=workbench_v2_runtime_factory,
             executor=runtime_executor,

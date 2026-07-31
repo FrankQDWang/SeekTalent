@@ -30,6 +30,7 @@ from seektalent.sources.liepin.runtime_lane import (
     run_liepin_source_lane,
 )
 from seektalent.runtime.source_lanes import RuntimeSourceLaneRequest
+from seektalent_workbench_v2.runtime_service import WorkbenchV2RequirementExtractor
 from seektalent.source_contracts.detail_open_claims import (
     DetailOpenClaimLedger,
 )
@@ -119,6 +120,26 @@ def test_prod_composition_uses_one_runtime_execution_authority(
     assert runtime_service.command_service is adapter.command_service
     assert adapter.command_service.store is adapter.runtime_store
     assert app.state.workbench_job_runner is None
+
+
+def test_prod_workbench_v2_injects_standalone_requirement_extractor(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(
+        workspace_root=str(tmp_path),
+        runtime_mode="prod",
+        liepin_worker_mode="opencli",
+        liepin_browser_action_backend="opencli",
+        liepin_api_token="production-test-api-token",
+        liepin_account_binding_secret="production-test-binding-secret",
+        liepin_stream_token_secret="production-test-stream-secret",
+    )
+
+    app = create_app(settings=settings, runtime_factory=_NoopRuntime)
+
+    requirement_extractor = app.state.workbench_v2_requirement_extractor
+    assert isinstance(requirement_extractor, WorkbenchV2RequirementExtractor)
+    assert app.state.workbench_v2_service.runtime_service.requirement_extractor is requirement_extractor
 
 
 def test_prod_legacy_write_returns_410_without_database_mutation(

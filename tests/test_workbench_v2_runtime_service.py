@@ -27,7 +27,10 @@ from seektalent_runtime_control.requirements import draft_from_requirement_sheet
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_workbench_v2.agent_loop import WorkbenchV2RuntimeInput
 import seektalent_workbench_v2.runtime_service as runtime_service_module
-from seektalent_workbench_v2.runtime_service import WorkbenchV2RuntimeService
+from seektalent_workbench_v2.runtime_service import (
+    WorkbenchV2RequirementExtractor,
+    WorkbenchV2RuntimeService,
+)
 
 
 NOW = "2026-06-25T01:02:03.000004+00:00"
@@ -83,6 +86,42 @@ class RecordingJdRequirementExtractor:
             }
         )
         return self.sheet
+
+
+class AsyncRequirementExtractor:
+    def __init__(self, sheet: RequirementSheet) -> None:
+        self.sheet = sheet
+        self.calls: list[dict[str, object]] = []
+
+    async def extract_with_draft(
+        self,
+        *,
+        input_truth: object,
+        cache_scope: str | None,
+    ) -> tuple[object, RequirementSheet]:
+        self.calls.append({"input_truth": input_truth, "cache_scope": cache_scope})
+        return object(), self.sheet
+
+
+def test_workbench_v2_requirement_extractor_uses_standalone_extractor() -> None:
+    sheet = _requirement_sheet()
+    extractor = AsyncRequirementExtractor(sheet)
+    adapter = WorkbenchV2RequirementExtractor(extractor)  # type: ignore[arg-type]
+
+    result = adapter.extract_requirements(
+        job_title="AI 平台工程师",
+        jd_text="需要 Agent 系统经验",
+        notes="优先远程",
+        requirement_cache_scope="conversation-1",
+    )
+
+    assert result is sheet
+    assert len(extractor.calls) == 1
+    input_truth = extractor.calls[0]["input_truth"]
+    assert getattr(input_truth, "job_title") == "AI 平台工程师"
+    assert getattr(input_truth, "jd") == "需要 Agent 系统经验"
+    assert getattr(input_truth, "notes") == "优先远程"
+    assert extractor.calls[0]["cache_scope"] == "conversation-1"
 
 
 class CandidateFactStore:

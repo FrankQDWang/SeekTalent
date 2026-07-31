@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -13,6 +14,8 @@ from seektalent.config import AppSettings
 from seektalent.candidate_quality import is_recommendation_eligible
 from seektalent.failure_interpretation import public_source_problem_message
 from seektalent.models import RequirementSheet
+from seektalent.prompting import PromptRegistry
+from seektalent.requirements import RequirementExtractor, build_input_truth
 from seektalent.source_contracts import SourceWorkerError
 from seektalent_runtime_control.commands import RuntimeCommandService
 from seektalent_runtime_control.detail import RuntimeDetailService
@@ -74,6 +77,47 @@ class _RequirementExtractorWithJd(Protocol):
 class WorkbenchV2RequirementExtraction:
     draft: RequirementDraft
     requirement_sheet: RequirementSheet
+
+
+class WorkbenchV2RequirementExtractor:
+    """Adapt the standalone requirement extractor to the Workbench v2 boundary."""
+
+    def __init__(self, extractor: RequirementExtractor) -> None:
+        self.extractor = extractor
+
+    def extract_requirements(
+        self,
+        *,
+        job_title: str | None,
+        jd_text: str,
+        notes: str | None,
+        requirement_cache_scope: str | None = None,
+    ) -> RequirementSheet:
+        input_truth = build_input_truth(
+            job_title=job_title,
+            jd=jd_text,
+            notes=notes or "",
+        )
+        _, requirement_sheet = asyncio.run(
+            self.extractor.extract_with_draft(
+                input_truth=input_truth,
+                cache_scope=requirement_cache_scope,
+            )
+        )
+        return requirement_sheet
+
+
+def build_workbench_v2_requirement_extractor(settings: AppSettings) -> WorkbenchV2RequirementExtractor:
+    prompt_map = PromptRegistry(settings.prompt_dir).load_many(
+        ["requirements", "repair_requirements"]
+    )
+    return WorkbenchV2RequirementExtractor(
+        RequirementExtractor(
+            settings,
+            prompt_map["requirements"],
+            repair_prompt=prompt_map["repair_requirements"],
+        )
+    )
 
 
 WorkbenchV2RuntimeRecoveryOutcome = Literal[
