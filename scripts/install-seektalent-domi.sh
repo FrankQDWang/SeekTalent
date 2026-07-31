@@ -19,7 +19,17 @@ _seektalent_domi_install() {
   local domi_python="${DOMI_PYTHON:-}"
   local domi_node="${DOMI_NODE:-${SEEKTALENT_DOMI_NODE:-}}"
   local install_home="${SEEKTALENT_INSTALL_HOME:-${HOME}}"
-  local script_path="${BASH_SOURCE[0]}"
+  local script_path=""
+  if [[ -n "${BASH_SOURCE[0]:-}" ]]; then
+    script_path="${BASH_SOURCE[0]}"
+  elif [[ -n "${ZSH_VERSION:-}" ]]; then
+    script_path="${(%):-%x}"
+  else
+    _seektalent_domi_fail \
+      "domi_bootstrap_shell_unsupported" \
+      "The install script must be sourced from bash or zsh."
+    return 1
+  fi
   local script_dir="${script_path%/*}"
   if [[ "${script_dir}" == "${script_path}" ]]; then
     script_dir="."
@@ -28,10 +38,22 @@ _seektalent_domi_install() {
   local prepared_runtime_archive="${SEEKTALENT_WTSCLI_PREPARED_RUNTIME:-${script_dir}/wtscli-runtime.zip}"
   local admission_helper="${SEEKTALENT_BROWSER_BRIDGE_HELPER:-${script_dir}/install_staging_browser_bridge.py}"
   local delivery_manifest="${SEEKTALENT_DELIVERY_MANIFEST:-${script_dir}/delivery-manifest.json}"
-  local product_wheels=("${script_dir}"/seektalent-*.whl)
   local product_wheel=""
-  if [[ "${#product_wheels[@]}" -eq 1 && -f "${product_wheels[0]}" ]]; then
-    product_wheel="${product_wheels[0]}"
+  local product_wheel_count
+  product_wheel_count="$(
+    find "${script_dir}" -maxdepth 1 -type f -name 'seektalent-*.whl' \
+      -print | awk 'END { print NR + 0 }'
+  )"
+  if [[ "${product_wheel_count}" -eq 1 ]]; then
+    product_wheel="$(
+      find "${script_dir}" -maxdepth 1 -type f -name 'seektalent-*.whl' \
+        -print
+    )"
+  elif [[ "${product_wheel_count}" -gt 1 ]]; then
+    _seektalent_domi_fail \
+      "seektalent_wheel_ambiguous" \
+      "The delivery directory must contain exactly one SeekTalent wheel."
+    return 1
   fi
 
   if [[ -z "${domi_python}" ]]; then

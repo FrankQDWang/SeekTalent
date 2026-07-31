@@ -57,6 +57,74 @@ source {_shell_quote(POSIX_INSTALLER)} 0.7.49
     assert _snapshot(home) == before
 
 
+@pytest.mark.skipif(
+    os.name == "nt" or shutil.which("zsh") is None,
+    reason="zsh-sourced Domi delivery is a macOS product entrypoint",
+)
+def test_posix_delivery_resolves_adjacent_exact_wheel_when_sourced_from_zsh(
+    tmp_path: Path,
+) -> None:
+    delivery = tmp_path / "delivery"
+    delivery.mkdir()
+    installer = delivery / POSIX_INSTALLER.name
+    shutil.copy2(POSIX_INSTALLER, installer)
+    shutil.copy2(
+        ROOT / "scripts" / "install_staging_browser_bridge.py",
+        delivery / "install_staging_browser_bridge.py",
+    )
+    write_browser_bridge_bundle(delivery / "wtscli-browser-bridge")
+    with zipfile.ZipFile(delivery / "wtscli-runtime.zip", "w"):
+        pass
+    wheel = delivery / "seektalent-0.8.0rc1-py3-none-any.whl"
+    _write_admission_wheel(wheel)
+    (delivery / "delivery-manifest.json").write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "product_version": "0.8.0rc1",
+                "seektalent_wheel": wheel.name,
+                "seektalent_wheel_sha256": _sha256(wheel),
+            }
+        ),
+        encoding="utf-8",
+    )
+    log = tmp_path / "python-invocations.log"
+    python_wrapper = tmp_path / "domi-python"
+    python_wrapper.write_text(
+        f"""#!/usr/bin/env bash
+printf '%s\n' "$*" >> {_shell_quote(log)}
+if [[ "${{1:-}} ${{2:-}}" == "-m pip" ]]; then
+  exit 88
+fi
+exec {_shell_quote(sys.executable)} "$@"
+""",
+        encoding="utf-8",
+    )
+    python_wrapper.chmod(0o755)
+    unrelated_cwd = tmp_path / "unrelated-cwd"
+    unrelated_cwd.mkdir()
+    home = tmp_path / "home"
+    command = f"""
+export SEEKTALENT_INSTALL_HOME={_shell_quote(home)}
+export DOMI_PYTHON={_shell_quote(python_wrapper)}
+export DOMI_NODE={_shell_quote(sys.executable)}
+cd {_shell_quote(unrelated_cwd)}
+source {_shell_quote(installer)} 0.8.0rc1
+"""
+
+    completed = subprocess.run(
+        ("zsh", "-c", command),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "reason_code=seektalent_pypi_install_failed" in completed.stderr
+    assert "reason_code=wtscli_bundle_missing" not in completed.stderr
+    assert "-m pip install" in log.read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("mutation", ["legacy_identity", "tampered_runtime"])
 def test_bootstrap_rejects_invalid_bundle_before_target_mutation(
     tmp_path: Path,
