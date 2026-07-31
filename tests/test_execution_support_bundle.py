@@ -27,6 +27,7 @@ from seektalent.domi_bootstrap import (
 )
 from seektalent_runtime_control.models import RuntimeRunRecord, RuntimeRunSnapshot
 from seektalent_runtime_control.store import RuntimeControlStore
+from seektalent_ui.maintenance import main as maintenance_main
 from tests.settings_factory import make_settings
 from tests.browser_bridge_bundle_fixtures import (
     write_browser_bridge_bundle,
@@ -328,3 +329,52 @@ def test_support_bundle_does_not_chmod_callers_existing_directory(
     assert caller_directory.stat().st_mode & 0o777 == 0o755
     assert path.parent.parent == caller_directory
     assert path.parent.stat().st_mode & 0o777 == 0o700
+
+
+def test_support_bundle_cli_reads_runtime_db_from_requested_workspace(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    workspace = tmp_path / "controlled-workspace"
+    settings = make_settings(workspace_root=str(workspace))
+    store = RuntimeControlStore(settings.runtime_control_path)
+    store.initialize()
+    store.create_run(
+        RuntimeRunRecord(
+            runtime_run_id="runtime_cli_support",
+            approved_requirement_revision_id="approved_cli_support",
+            status="running",
+            current_stage="source_execution",
+            current_round=1,
+            source_ids=["liepin"],
+            created_at="2026-07-31T00:00:00.000000Z",
+            updated_at="2026-07-31T00:00:00.000000Z",
+        )
+    )
+    unrelated_cwd = tmp_path / "unrelated-cwd"
+    unrelated_cwd.mkdir()
+    monkeypatch.chdir(unrelated_cwd)
+    output_dir = tmp_path / "support-output"
+
+    exit_code = maintenance_main(
+        [
+            "support-bundle",
+            "--workspace-root",
+            str(workspace),
+            "--runtime-mode",
+            "dev",
+            "--runtime-run-id",
+            "runtime_cli_support",
+            "--output-dir",
+            str(output_dir),
+        ]
+    )
+
+    assert exit_code == 0
+    output = capsys.readouterr().out.strip()
+    payload = json.loads(Path(output.removeprefix("support_bundle: ")).read_text())
+    assert payload["runtimeControl"]["databaseAvailable"] is True
+    assert payload["runtimeControl"]["runs"][0]["runtime_run_id"] == (
+        "runtime_cli_support"
+    )

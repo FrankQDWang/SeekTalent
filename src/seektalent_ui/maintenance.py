@@ -845,7 +845,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         if args.command == "support-bundle":
             path = create_execution_support_bundle(
                 settings=AppSettings(
-                    project_root=args.workspace_root,
+                    _env_file=None,
+                    workspace_root=str(args.workspace_root),
                     runtime_mode=args.runtime_mode,
                     artifacts_dir=(
                         str(args.artifacts_dir)
