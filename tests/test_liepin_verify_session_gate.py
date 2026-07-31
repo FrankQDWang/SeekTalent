@@ -226,12 +226,11 @@ def test_production_gate_preserves_verified_protocol_mismatch(
     assert probe_calls == []
 
 
-def test_production_gate_has_no_source_port_or_runtime_control_side_effects() -> None:
+def test_production_observe_gate_has_no_runtime_control_side_effects() -> None:
     source = gate_module.__file__
     assert source is not None
     text = Path(source).read_text(encoding="utf-8")
 
-    assert "seektalent.source_port" not in text
     assert "seektalent_runtime_control" not in text
     assert "_register_source_port_endpoint" not in text
     assert "_InProcessEndpoint" not in text

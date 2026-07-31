@@ -1277,7 +1277,7 @@ def test_control_bearers_url_dom_and_stderr_never_escape_results_errors_repr_or_
         assert secret not in surfaces
 
 
-def test_adapter_module_has_one_direct_production_gate_without_old_readiness_seam() -> None:
+def test_adapter_module_has_one_durable_prepare_caller_without_old_readiness_seam() -> None:
     project_root = Path(__file__).parents[1]
     adapter_path = project_root / "src" / "seektalent" / "wtscli_verify_session_adapter.py"
     source = adapter_path.read_text(encoding="utf-8")
@@ -1304,8 +1304,11 @@ def test_adapter_module_has_one_direct_production_gate_without_old_readiness_sea
         1,
     )[1].split("        else:", 1)[0]
 
-    assert callers == []
-    assert factory_callers == []
+    expected_gate = [
+        "src/seektalent/liepin_verify_session_gate.py",
+    ]
+    assert callers == expected_gate
+    assert factory_callers == expected_gate
     composition_callers = [
         path.relative_to(project_root).as_posix()
         for path in (project_root / "src").rglob("*.py")
@@ -1322,9 +1325,6 @@ def test_adapter_module_has_one_direct_production_gate_without_old_readiness_sea
     assert direct_probe_callers == []
     assert "inspect_opencli_runtime" in readiness_gate
     assert "connect_existing_opencli_daemon_read_only" in readiness_gate
-    assert "ensure_opencli_runtime" not in readiness_gate
-    assert "connect_installed_opencli_daemon" not in readiness_gate
-    assert "restart" not in readiness_gate
     assert "ensure_ready" not in live_search_branch
     assert "session_status" not in provider_adapter
     assert "_require_ready_session" not in provider_adapter

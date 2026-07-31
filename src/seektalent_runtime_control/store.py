@@ -966,6 +966,7 @@ class RuntimeControlStore(
         *,
         dispatch_precondition: SourceDispatchMetadata | None = None,
         dispatch_ack: SourceDispatchMetadata | None = None,
+        expired_browser_lane_fencing_token: int | None = None,
     ) -> SourceOperationReconciliationRecord:
         """Commit a closed main-authored reconciliation when no executor owns the run."""
         validate_source_operation_reconciliation_decision(decision)
@@ -988,6 +989,14 @@ class RuntimeControlStore(
                     run_row["status"] != "resume_requested"
                     and not _needs_admission.needs_attention_evidence_reconciliation_matches(
                         conn, run_row=run_row, decision=decision
+                    )
+                    and not _expired_browser_lane_reconciliation_matches(
+                        conn,
+                        run_row=run_row,
+                        decision=decision,
+                        fencing_token=(
+                            expired_browser_lane_fencing_token
+                        ),
                     )
                 ):
                     raise RuntimeControlError("source_reconciliation_run_not_resumable")
@@ -6740,6 +6749,42 @@ def _require_source_reconciliation_transition(
             raise RuntimeControlError("source_reconciliation_transition_conflict")
     else:
         raise RuntimeControlError("source_reconciliation_decision_kind_invalid")
+
+
+def _expired_browser_lane_reconciliation_matches(
+    conn: sqlite3.Connection,
+    *,
+    run_row: sqlite3.Row,
+    decision: SourceOperationReconciliationDecision,
+    fencing_token: int | None,
+) -> bool:
+    if (
+        type(fencing_token) is not int
+        or fencing_token < 1
+        or run_row["status"] != "needs_attention"
+        or _needs_admission.run_has_active_executor_lease(
+            conn,
+            decision.runtime_run_id,
+        )
+    ):
+        return False
+    lane = conn.execute(
+        """
+        SELECT runtime_run_id, operation_id, fencing_token,
+               status, lease_expires_at
+        FROM runtime_control_browser_lanes
+        WHERE lane_key = 'liepin_browser'
+        """
+    ).fetchone()
+    return (
+        lane is not None
+        and lane["status"] == "active"
+        and int(lane["fencing_token"]) == fencing_token
+        and lane["runtime_run_id"] == decision.runtime_run_id
+        and lane["operation_id"] == decision.operation_id
+        and lane["lease_expires_at"] is not None
+        and lane["lease_expires_at"] <= decision.committed_at
+    )
 
 
 def _source_operation_pair(

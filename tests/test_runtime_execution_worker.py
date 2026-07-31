@@ -283,6 +283,66 @@ def test_worker_claims_real_store_run_and_executes_real_executor(tmp_path) -> No
     ]
 
 
+def test_unknown_worker_failure_persists_run_first_cause_without_terminal_retry(
+    tmp_path,
+) -> None:
+    store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    store.initialize()
+    approved = _approved_requirement()
+    store.save_approved_requirement(
+        approved,
+        idempotency_key="approved-unknown-worker",
+    )
+    queued = WorkflowRuntimeExecutor(
+        store=store,
+        runtime_factory=lambda *, source_operation_executor=None: (
+            _CallbackRuntime()
+        ),
+        runtime_run_id_factory=lambda: "runtime-run-unknown-worker",
+        now=lambda: _NOW,
+    ).enqueue_workflow_run(
+        conversation_id="agent-conv-unknown-worker",
+        workbench_session_id="session-unknown-worker",
+        approved_requirement=approved,
+        job_title="Backend Engineer",
+        jd_text="Build data products.",
+        notes=None,
+        source_ids=["cts"],
+    )
+
+    class UnknownExecutor:
+        async def execute_claimed_run(self, **_kwargs: object):
+            raise KeyError("PRIVATE_UNKNOWN_WORKER_CAUSE")
+
+    worker = RuntimeExecutionWorker(
+        store=store,
+        executor=UnknownExecutor(),
+        executor_id_factory=lambda: "worker-exec-unknown",
+        now=lambda: _NOW,
+        lease_seconds=30,
+    )
+
+    with pytest.raises(KeyError, match="PRIVATE_UNKNOWN"):
+        asyncio.run(
+            worker.run_once(runtime_run_id=queued.runtime_run_id)
+        )
+
+    run = store.get_run(queued.runtime_run_id)
+    failures = [
+        failure
+        for failure in store.list_execution_failures()
+        if failure.runtime_run_id == queued.runtime_run_id
+    ]
+    assert run.status == "starting"
+    assert len(store.list_active_executor_leases()) == 1
+    assert len(failures) == 1
+    assert failures[0].component == "runtime_worker"
+    assert failures[0].boundary == "execute_claimed_run"
+    assert failures[0].exception_type == "KeyError"
+    assert failures[0].safe_reason_code == "runtime_worker_failed"
+    assert "PRIVATE_UNKNOWN_WORKER_CAUSE" not in str(failures[0])
+
+
 def test_worker_preserves_executor_finalized_runtime_failure(tmp_path) -> None:
     store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
     store.initialize()

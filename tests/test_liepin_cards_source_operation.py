@@ -56,6 +56,9 @@ from seektalent.source_port.operation_dispatch import (
     OperationIdentityV1,
     RelativeMonotonicDeadlineV1,
 )
+from seektalent.source_port.verify_session_contract import (
+    VerifySessionRequestV1,
+)
 from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.browser_lane import LIEPIN_BROWSER_LANE
 from seektalent_runtime_control.store import RuntimeControlStore
@@ -149,6 +152,156 @@ def test_cards_operation_deadline_uses_browser_effect_budget(
     )
 
     assert identity.deadline.value == 120_000
+
+
+def test_prepare_readiness_is_durable_source_operation_under_browser_lane(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = _seed_running_store(tmp_path)
+    with store._connect() as connection:
+        connection.execute(
+            """
+            UPDATE runtime_control_executor_leases
+            SET lease_expires_at = '2099-01-01T00:00:00.000000Z'
+            WHERE runtime_run_id = 'runtime_run_1'
+            """
+        )
+    settings = AppSettings(
+        _env_file=None,
+        workspace_root=str(tmp_path),
+        runtime_control_path=str(store.path),
+    )
+    executor = LiepinCardsSourceOperationExecutor(
+        settings=settings,
+        store=store,
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-1",
+        attempt_no=1,
+        accepted_requirement_revision_id="approved-1",
+        runtime_attempt_authority_ref=(
+            "runtime_attempt_authority_ref_1"
+        ),
+    )
+    effects: list[object] = []
+    monkeypatch.setattr(
+        "seektalent.liepin_verify_session_gate"
+        "._prepare_session_mutating",
+        lambda _settings, *, request, current_profile_snapshot: (
+            effects.append((request, current_profile_snapshot))
+        ),
+    )
+
+    executor.prepare_readiness()
+
+    operation_ids = executor.checkpoint_operation_ids()
+    assert len(operation_ids) == 1
+    operation = store.get_source_operation(
+        "runtime_run_1",
+        operation_ids[0],
+    )
+    assert operation.operation_kind == "verify_session"
+    assert operation.operation_phase == "observed"
+    assert operation.dispatch_intent_ref is not None
+    assert operation.conclusive_observation_ref is not None
+    assert len(effects) == 1
+    request, snapshot = effects[0]
+    assert isinstance(request, VerifySessionRequestV1)
+    assert (
+        request.identity.runtime_attempt_fence_ref
+        == snapshot.runtime_attempt_fence_ref
+    )
+    assert (
+        operation.canonical_request_hash
+        == request.identity.request_hash
+    )
+    lane = store.get_browser_lane()
+    assert lane is not None
+    assert lane.status == "completed"
+
+    executor.prepare_readiness()
+    assert len(effects) == 1
+
+
+def test_prepare_readiness_unknown_effect_keeps_lane_fenced(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    store = _seed_running_store(tmp_path)
+    with store._connect() as connection:
+        connection.execute(
+            """
+            UPDATE runtime_control_executor_leases
+            SET lease_expires_at = '2099-01-01T00:00:00.000000Z'
+            WHERE runtime_run_id = 'runtime_run_1'
+            """
+        )
+    executor = LiepinCardsSourceOperationExecutor(
+        settings=AppSettings(
+            _env_file=None,
+            workspace_root=str(tmp_path),
+            runtime_control_path=str(store.path),
+        ),
+        store=store,
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-1",
+        attempt_no=1,
+        accepted_requirement_revision_id="approved-1",
+        runtime_attempt_authority_ref=(
+            "runtime_attempt_authority_ref_1"
+        ),
+    )
+    effects = 0
+
+    def fail_after_dispatch(
+        _settings,
+        *,
+        request,
+        current_profile_snapshot,
+    ) -> None:
+        nonlocal effects
+        del request, current_profile_snapshot
+        effects += 1
+        raise RuntimeError("simulated effect uncertainty")
+
+    monkeypatch.setattr(
+        "seektalent.liepin_verify_session_gate"
+        "._prepare_session_mutating",
+        fail_after_dispatch,
+    )
+
+    with pytest.raises(RuntimeError, match="effect uncertainty"):
+        executor.prepare_readiness()
+
+    operation_id = (
+        "prepare-"
+        + sha256(
+            b"runtime_run_1:prepare-readiness:1",
+        ).hexdigest()[:48]
+    )
+    operation = store.get_source_operation(
+        "runtime_run_1",
+        operation_id,
+    )
+    lane = store.get_browser_lane()
+    assert effects == 1
+    assert operation.source_operation_disposition == (
+        "reconciliation_unknown"
+    )
+    assert operation.retry_posture == "reconcile_first"
+    assert lane is not None
+    assert lane.status == "active"
+    assert (
+        lane.last_failure_code
+        == "liepin_prepare_reconciliation_unknown"
+    )
+
+    with pytest.raises(
+        RuntimeControlError,
+        match="liepin_prepare_readiness_reconcile_first",
+    ):
+        executor.prepare_readiness()
+    assert effects == 1
 
 
 def test_cards_safe_retry_reuses_operation_identity_and_durable_cas_epoch() -> None:

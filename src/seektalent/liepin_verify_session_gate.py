@@ -8,10 +8,12 @@ import time
 from seektalent.config import AppSettings
 from seektalent.opencli_browser.contracts import OpenCliBrowserError
 from seektalent.opencli_browser.daemon_process import (
+    connect_installed_opencli_daemon,
     connect_existing_opencli_daemon_read_only,
 )
 from seektalent.opencli_launcher import (
     BootstrapError,
+    ensure_opencli_runtime,
     inspect_opencli_runtime,
     runtime_requirement,
 )
@@ -25,6 +27,20 @@ from seektalent.wtscli_verify_session_classification import (
     WtsCliReadinessProbe,
     apply_bridge_status,
     safe_liepin_reason,
+)
+from seektalent.wtscli_verify_session_adapter import (
+    WtsCliCurrentProfileSnapshot,
+    create_wtscli_verify_session_effect,
+)
+from seektalent.source_port.authenticated_verify_session_frames import (
+    VerifySessionFailureV1,
+)
+from seektalent.source_port.verify_session_contract import (
+    VerifySessionRequestV1,
+    VerifySessionResultV1,
+)
+from seektalent.providers.liepin.liepin_opencli_policy import (
+    LIEPIN_BROWSER_CONTROL_KEY,
 )
 
 
@@ -85,6 +101,67 @@ def _observe_session(settings: AppSettings) -> None:
             _raise_reason(safe_liepin_reason(probe.safe_reason))
     finally:
         daemon.close()
+
+
+def _prepare_session_mutating(
+    settings: AppSettings,
+    *,
+    request: VerifySessionRequestV1,
+    current_profile_snapshot: WtsCliCurrentProfileSnapshot,
+) -> None:
+    """Repair/start browser readiness; callers must hold durable authority."""
+    if type(request) is not VerifySessionRequestV1:
+        raise TypeError("strict verify-session request required")
+    if type(current_profile_snapshot) is not WtsCliCurrentProfileSnapshot:
+        raise TypeError("strict current-profile snapshot required")
+    started_at = time.monotonic()
+    runtime = ensure_opencli_runtime()
+    environment_status = _check_environment(runtime)
+    if not environment_status.ok:
+        _raise_reason(_environment_reason(environment_status))
+    requirement = runtime_requirement(runtime)
+    deadline_at = started_at + min(
+        900.0,
+        max(0.001, settings.liepin_opencli_timeout_seconds),
+    )
+    daemon = connect_installed_opencli_daemon(
+        runtime,
+        verify_timeout_seconds=max(
+            0.001,
+            deadline_at - time.monotonic(),
+        ),
+    )
+    try:
+        effect = create_wtscli_verify_session_effect(
+            daemon=daemon,
+            bridge_requirement=requirement,
+            current_profile_snapshot=lambda: (
+                current_profile_snapshot
+            ),
+            control_key=LIEPIN_BROWSER_CONTROL_KEY,
+            monotonic_clock=time.monotonic,
+            poll_wait=time.sleep,
+        )
+        result = effect(request, deadline_at)
+    finally:
+        daemon.close()
+    if isinstance(result, VerifySessionResultV1):
+        if result.session_readiness == "ready":
+            return
+        _raise_reason(
+            _normalized_boundary_reason(
+                result.safe_reason_code
+                or "liepin_opencli_status_unavailable"
+            )
+        )
+    if isinstance(result, VerifySessionFailureV1):
+        aliases = {
+            "exchange_deadline_expired": "liepin_opencli_timeout",
+            "sidecar_not_ready": "liepin_opencli_status_unavailable",
+            "session_closed": "liepin_opencli_status_unavailable",
+        }
+        _raise_reason(aliases[result.failure_reason])
+    _raise_reason("liepin_opencli_status_unavailable")
 
 
 def _check_environment(runtime: object) -> BrowserBridgeEnvironmentStatus:

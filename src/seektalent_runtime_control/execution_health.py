@@ -21,15 +21,34 @@ class ExecutionComponentHealth:
 
 
 class ExecutionHealthTracker:
-    def __init__(self, name: str) -> None:
+    def __init__(
+        self,
+        name: str,
+        *,
+        initial: ExecutionComponentHealth | None = None,
+    ) -> None:
+        if initial is not None and initial.name != name:
+            raise ValueError("execution_health_component_mismatch")
         self.name = name
         self._lock = threading.Lock()
-        self._last_heartbeat_at: str | None = None
-        self._last_success_at: str | None = None
-        self._first_failure_at: str | None = None
-        self._first_failure_type: str | None = None
-        self._failure_count = 0
-        self._restart_count = 0
+        self._last_heartbeat_at = (
+            None if initial is None else initial.last_heartbeat_at
+        )
+        self._last_success_at = (
+            None if initial is None else initial.last_success_at
+        )
+        self._first_failure_at = (
+            None if initial is None else initial.first_failure_at
+        )
+        self._first_failure_type = (
+            None if initial is None else initial.first_failure_type
+        )
+        self._failure_count = (
+            0 if initial is None else initial.failure_count
+        )
+        self._restart_count = (
+            0 if initial is None else initial.restart_count
+        )
 
     def heartbeat(self) -> None:
         with self._lock:

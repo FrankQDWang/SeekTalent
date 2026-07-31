@@ -156,6 +156,31 @@ PY
     return 1
   fi
 
+  local rollback_root="${install_home}/.seektalent-rollbacks"
+  local rollback_dir
+  (umask 077 && mkdir -p "${rollback_root}") || {
+    rm -rf -- "${candidate_root}"
+    _seektalent_domi_fail "rollback_snapshot_failed" "Could not create the private rollback root."
+    return 1
+  }
+  rollback_dir="$(mktemp -d "${rollback_root}/${version}.XXXXXX")" || {
+    rm -rf -- "${candidate_root}"
+    _seektalent_domi_fail "rollback_snapshot_failed" "Could not create a unique rollback snapshot."
+    return 1
+  }
+  if [[ -d "${install_home}/.seektalent" ]]; then
+    cp -a "${install_home}/.seektalent" "${rollback_dir}/seektalent" || {
+      rm -rf -- "${candidate_root}"
+      _seektalent_domi_fail "rollback_snapshot_failed" "Could not preserve the existing SeekTalent install."
+      return 1
+    }
+  fi
+  (umask 077 && : > "${rollback_dir}/.available") || {
+    rm -rf -- "${candidate_root}"
+    _seektalent_domi_fail "rollback_snapshot_failed" "Could not seal the rollback snapshot."
+    return 1
+  }
+
   PYTHONPATH="${candidate_site_packages}${PYTHONPATH:+:${PYTHONPATH}}" \
     "${domi_python}" -m seektalent.domi_bootstrap \
       --package-version "${version}" \
@@ -171,6 +196,10 @@ PY
       --bin-dir "${bin_dir}" \
       --print-json || {
         rm -rf -- "${candidate_root}"
+        if [[ -x "${script_dir}/rollback-seektalent-domi.sh" ]]; then
+          SEEKTALENT_INSTALL_HOME="${install_home}" \
+            "${script_dir}/rollback-seektalent-domi.sh" "${rollback_dir}" >/dev/null
+        fi
         _seektalent_domi_fail "seektalent_domi_bootstrap_failed" "Failed to prepare the seektalent command shim."
         return 1
       }
@@ -186,6 +215,8 @@ PY
   echo "打开 chrome://extensions，启用“开发者模式”，选择“加载已解压的扩展程序”，并选择上面的唯一目录。"
   echo "升级后请在该页面点击 WTSCLI 的“重新加载”；若仍显示旧版本，请完全退出并重启 Chrome。"
   echo "检查：seektalent browser-check"
+  echo "Rollback snapshot: ${rollback_dir}"
+  echo "Rollback command: SEEKTALENT_INSTALL_HOME=\"${install_home}\" \"${script_dir}/rollback-seektalent-domi.sh\" \"${rollback_dir}\""
   return 0
 }
 

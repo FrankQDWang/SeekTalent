@@ -97,7 +97,16 @@ def _build_liepin_provider_adapter(context: ProviderAdapterBuildContext) -> Prov
         connection_safety_resolver=context.liepin_connection_safety_resolver,
         verify_session_gate=(
             create_production_liepin_verify_session_gate(settings)
-            if is_live_liepin_worker_mode(settings.liepin_worker_mode)
+            if settings.liepin_worker_mode == "opencli"
+            else None
+        ),
+        readiness_preparer=(
+            getattr(
+                context.liepin_source_operation_executor,
+                "prepare_readiness",
+                None,
+            )
+            if settings.liepin_worker_mode == "opencli"
             else None
         ),
     )

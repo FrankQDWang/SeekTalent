@@ -81,6 +81,11 @@ def build_delivery_bundle(
             ROOT / "scripts" / installer_name,
             package_root / installer_name,
         )
+        if platform_name != "windows-x64":
+            shutil.copy2(
+                ROOT / "scripts" / "rollback-seektalent-domi.sh",
+                package_root / "rollback-seektalent-domi.sh",
+            )
         shutil.copy2(seektalent_wheel, package_root / seektalent_wheel.name)
         with tempfile.TemporaryDirectory(
             prefix="seektalent-wtscli-prepared-",

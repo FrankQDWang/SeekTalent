@@ -91,7 +91,15 @@ async def run_liepin_first_page_expansion(*, settings: AppSettings,
         if cards_operation_executor is not None
         else build_liepin_worker_client(settings)
     )
-    provider = _build_provider(settings=settings, worker_client=client)
+    provider = _build_provider(
+        settings=settings,
+        worker_client=client,
+        readiness_preparer=getattr(
+            cards_operation_executor,
+            "prepare_readiness",
+            None,
+        ),
+    )
     try:
         result = await provider.handle_first_page_continuation_with_detail_open_claim_ledger(
             action=request.action,
@@ -205,6 +213,11 @@ async def run_liepin_source_lane(
         settings=settings,
         worker_client=client,
         worker_search_started_callback=mark_query_started,
+        readiness_preparer=getattr(
+            cards_operation_executor,
+            "prepare_readiness",
+            None,
+        ),
     )
     search_request = _card_search_request(
         request=request,
@@ -746,7 +759,15 @@ async def _run_detail_lane(
         settings,
         cards_operation_executor=cards_operation_executor,
     )
-    provider = _build_provider(settings=settings, worker_client=client)
+    provider = _build_provider(
+        settings=settings,
+        worker_client=client,
+        readiness_preparer=getattr(
+            cards_operation_executor,
+            "prepare_readiness",
+            None,
+        ),
+    )
     search_result = await provider.search(
         SearchRequest(
             query_terms=query_terms,
@@ -1404,6 +1425,7 @@ def _build_provider(
     settings: AppSettings,
     worker_client: LiepinWorkerClient,
     worker_search_started_callback: Callable[[], None] | None = None,
+    readiness_preparer: Callable[[], None] | None = None,
 ) -> LiepinProviderAdapter:
     from seektalent.liepin_verify_session_gate import (
         create_production_liepin_verify_session_gate,
@@ -1419,7 +1441,12 @@ def _build_provider(
         store=store,
         verify_session_gate=(
             create_production_liepin_verify_session_gate(settings)
-            if is_live_liepin_worker_mode(settings.liepin_worker_mode)
+            if settings.liepin_worker_mode == "opencli"
+            else None
+        ),
+        readiness_preparer=(
+            readiness_preparer
+            if settings.liepin_worker_mode == "opencli"
             else None
         ),
     )

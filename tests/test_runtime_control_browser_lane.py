@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import sqlite3
 import threading
+import time
 import pytest
 
 from seektalent.liepin_cards_source_operation import (
@@ -15,7 +16,11 @@ from seektalent.support_bundle import create_execution_support_bundle
 from seektalent.source_port.liepin_cards_contract import (
     LiepinCardsOperationRequestV1,
 )
+from seektalent.source_port.liepin_details_contract import (
+    LiepinDetailsOperationRequestV1,
+)
 from seektalent_runtime_control.browser_lane import (
+    BrowserLaneBusyError,
     BrowserLaneGuard,
     LIEPIN_BROWSER_LANE,
 )
@@ -438,6 +443,186 @@ def test_cards_effect_holds_and_releases_browser_lane(
     assert snapshot is not None
     assert snapshot.status == "completed"
     assert snapshot.lease_expires_at is None
+
+
+def test_cards_reconciliation_unknown_keeps_browser_lane_fenced(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = make_settings(workspace_root=str(tmp_path))
+    store = RuntimeControlStore(settings.runtime_control_path)
+    store.initialize()
+    executor = LiepinCardsSourceOperationExecutor(
+        settings=settings,
+        store=store,
+        runtime_run_id="rtrun-cards-unknown",
+        executor_id="executor-cards-unknown",
+        attempt_no=1,
+        accepted_requirement_revision_id="approved-cards-unknown",
+        runtime_attempt_authority_ref=(
+            "executor-lease://rtrun-cards-unknown/1"
+        ),
+    )
+    monkeypatch.setattr(
+        LiepinCardsSourceOperationExecutor,
+        "_execute_with_lane",
+        lambda *_args: (
+            {
+                "status": "failed",
+                "safe_reason_code": (
+                    "liepin_cards_reconciliation_unknown"
+                ),
+            },
+            {
+                "ok": False,
+                "safe_reason_code": (
+                    "liepin_cards_reconciliation_unknown"
+                ),
+            },
+        ),
+    )
+
+    executor._execute(  # noqa: SLF001
+        LiepinCardsOperationRequestV1(
+            contract_version=(
+                "seektalent.source.liepin-cards.request/v1"
+            ),
+            runtime_run_id="rtrun-cards-unknown",
+            source_lane_run_id="lane-cards-unknown",
+            query_instance_id="query-cards-unknown",
+            keyword_query="Python",
+            max_pages=1,
+            max_cards=10,
+            native_filters=None,
+        )
+    )
+
+    lane = store.get_browser_lane()
+    assert lane is not None
+    assert lane.status == "active"
+    assert lane.last_failure_code == (
+        "liepin_cards_reconciliation_unknown"
+    )
+    assert store.try_acquire_browser_lane(
+        lane_key=LIEPIN_BROWSER_LANE,
+        owner_id="owner-after-unknown",
+        owner_process_id=200,
+        process_boot_id="process-after-unknown",
+        runtime_run_id="rtrun-after-unknown",
+        operation_id="operation-after-unknown",
+        operation_kind="cards",
+        acquired_at="2099-01-01T00:00:01.000000Z",
+        lease_expires_at="2099-01-01T00:00:31.000000Z",
+    ) is None
+
+
+def test_details_reconciliation_unknown_keeps_browser_lane_fenced(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    settings = make_settings(workspace_root=str(tmp_path))
+    store = RuntimeControlStore(settings.runtime_control_path)
+    store.initialize()
+    executor = LiepinCardsSourceOperationExecutor(
+        settings=settings,
+        store=store,
+        runtime_run_id="rtrun-details-unknown",
+        executor_id="executor-details-unknown",
+        attempt_no=1,
+        accepted_requirement_revision_id="approved-details-unknown",
+        runtime_attempt_authority_ref=(
+            "executor-lease://rtrun-details-unknown/1"
+        ),
+    )
+    monkeypatch.setattr(
+        LiepinCardsSourceOperationExecutor,
+        "_execute_details_with_lane",
+        lambda *_args: (
+            {
+                "status": "failed",
+                "safe_reason_code": (
+                    "liepin_details_reconciliation_unknown"
+                ),
+            },
+            {
+                "ok": False,
+                "safe_reason_code": (
+                    "liepin_details_reconciliation_unknown"
+                ),
+            },
+        ),
+    )
+
+    executor._execute_details(  # noqa: SLF001
+        LiepinDetailsOperationRequestV1(
+            contract_version=(
+                "seektalent.source.liepin-details.request/v1"
+            ),
+            runtime_run_id="rtrun-details-unknown",
+            source_lane_run_id="lane-details-unknown",
+            query_instance_id="query-details-unknown",
+            card_ref="candidate-details-unknown",
+            rank=1,
+            open_mode="resolve_locator",
+            expected_provider_candidate_key_hash="a" * 64,
+        )
+    )
+
+    lane = store.get_browser_lane()
+    assert lane is not None
+    assert lane.status == "active"
+    assert lane.last_failure_code == (
+        "liepin_details_reconciliation_unknown"
+    )
+
+
+def test_default_production_lane_contention_yields_promptly(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(
+        workspace_root=str(tmp_path),
+        runtime_mode="prod",
+    )
+    store = RuntimeControlStore(settings.runtime_control_path)
+    store.initialize()
+    assert store.try_acquire_browser_lane(
+        lane_key=LIEPIN_BROWSER_LANE,
+        owner_id="owner-contention",
+        owner_process_id=100,
+        process_boot_id="process-contention",
+        runtime_run_id="rtrun-contention",
+        operation_id="operation-contention",
+        operation_kind="cards",
+        acquired_at="2026-07-30T00:00:00Z",
+        lease_expires_at="2099-01-01T00:00:00Z",
+    ) is not None
+    executor = LiepinCardsSourceOperationExecutor(
+        settings=settings,
+        store=store,
+        runtime_run_id="rtrun-waiting",
+        executor_id="executor-waiting",
+        attempt_no=1,
+        accepted_requirement_revision_id="approved-waiting",
+        runtime_attempt_authority_ref="authority-waiting",
+    )
+    request = LiepinCardsOperationRequestV1(
+        contract_version=(
+            "seektalent.source.liepin-cards.request/v1"
+        ),
+        runtime_run_id="rtrun-waiting",
+        source_lane_run_id="lane-waiting",
+        query_instance_id="query-waiting",
+        keyword_query="Python",
+        max_pages=1,
+        max_cards=10,
+        native_filters=None,
+    )
+
+    started = time.monotonic()
+    with pytest.raises(BrowserLaneBusyError):
+        executor._execute(request)  # noqa: SLF001
+
+    assert time.monotonic() - started < 1
 
 
 def test_runtime_control_schema_includes_browser_lane(

@@ -53,7 +53,23 @@ class _BaseOutboxRunner:
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
         self._thread: threading.Thread | None = None
-        self._health = ExecutionHealthTracker(self.event_type)
+        runtime_store = getattr(
+            getattr(service, "service_action_adapter", None),
+            "runtime_store",
+            None,
+        )
+        initial = (
+            runtime_store.get_component_health(self.event_type)
+            if runtime_store is not None
+            and callable(
+                getattr(runtime_store, "get_component_health", None)
+            )
+            else None
+        )
+        self._health = ExecutionHealthTracker(
+            self.event_type,
+            initial=initial,
+        )
 
     def start(self) -> None:
         with self._lock:
@@ -86,6 +102,7 @@ class _BaseOutboxRunner:
 
     def run_once(self) -> int:
         now = self.service.now()
+        reconciled = self._reconcile_waiting_items()
         reclaim_before = _format_time(_parse_time(now) - timedelta(seconds=CLAIM_TIMEOUT_SECONDS))
         candidates = self.service.outbox_store.list_claimable_items(
             event_type=self.event_type,
@@ -145,7 +162,40 @@ class _BaseOutboxRunner:
                 )
                 self._handle_processing_error(item.outbox_id, exc)
             processed += 1
-        return processed
+        return reconciled + processed
+
+    def _reconcile_waiting_items(self) -> int:
+        lister = getattr(
+            self.service.outbox_store,
+            "list_waiting_reconciliation_items",
+            None,
+        )
+        if not callable(lister):
+            return 0
+        resolved = 0
+        for item in lister(
+            event_type=self.event_type,
+            limit=self.batch_size,
+        ):
+            boundary = self._reconcile_effect_boundary(
+                item.outbox_id,
+                OutboxDispatchUnknownError(
+                    "outbox_reconciliation_poll"
+                ),
+            )
+            if boundary == "committed":
+                self.service.outbox_store.mark_done(
+                    item.outbox_id,
+                    updated_at=self.service.now(),
+                )
+                resolved += 1
+            elif boundary == "no_effect":
+                self.service.outbox_store.mark_pending_retry(
+                    item.outbox_id,
+                    updated_at=self.service.now(),
+                )
+                resolved += 1
+        return resolved
 
     def _run_loop(self) -> None:
         while not self._stop_event.is_set():

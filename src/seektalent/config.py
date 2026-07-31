@@ -529,6 +529,7 @@ class AppSettings(BaseSettings):
     liepin_opencli_max_pages_per_task: int = 1
     liepin_opencli_max_cards_per_task: int = 20
     liepin_opencli_timeout_seconds: int = 900
+    liepin_browser_lane_admission_timeout_seconds: float = 0.25
     liepin_opencli_detail_open_timeout_seconds: int = 90
     liepin_opencli_search_navigation_timeout_seconds: float = 10.0
     liepin_opencli_pacing_enabled: bool = True
@@ -805,6 +806,11 @@ class AppSettings(BaseSettings):
             raise ValueError("liepin_worker_startup_timeout_seconds must be > 0")
         if self.liepin_worker_timeout_seconds <= 0:
             raise ValueError("liepin_worker_timeout_seconds must be > 0")
+        if not 0 < self.liepin_browser_lane_admission_timeout_seconds <= 5:
+            raise ValueError(
+                "liepin_browser_lane_admission_timeout_seconds must be "
+                "between 0 and 5"
+            )
         if self.liepin_default_daily_detail_budget < 0:
             raise ValueError("liepin_default_daily_detail_budget must be >= 0")
         if not 1 <= self.liepin_exploit_detail_target <= 10:

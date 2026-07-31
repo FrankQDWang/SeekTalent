@@ -551,7 +551,9 @@ def test_raw_history_result_is_not_mutation_authority_and_cas_has_only_the_close
     for path in Path("src").rglob("*.py"):
         if ".commit_no_owner_source_reconciliation(" in path.read_text(encoding="utf-8"):
             production_callers.append(path.as_posix())
-    assert production_callers == []
+    assert production_callers == [
+        "src/seektalent/browser_lane_reconciliation.py",
+    ]
     runner = Path("src/seektalent_workbench_v2/runtime_runner.py").read_text(encoding="utf-8")
     assert "recover_start_timeouts(resume_recoverable=True)" in runner
     store_source = Path("src/seektalent_runtime_control/store.py").read_text(

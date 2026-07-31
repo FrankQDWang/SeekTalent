@@ -114,7 +114,7 @@ class RuntimeExecutionWorker:
                     raise RuntimeControlError("runtime_executor_heartbeat_failed", str(exc)) from exc
                 raise RuntimeControlError("runtime_executor_heartbeat_stopped")
             return await executor_task
-        except (RuntimeControlError, RuntimeError, ValueError, TypeError, OSError) as exc:
+        except Exception as exc:
             if executor_task is not None and not executor_task.done():
                 executor_task.cancel()
                 with suppress(asyncio.CancelledError):
@@ -146,12 +146,22 @@ class RuntimeExecutionWorker:
                         "worker failure persistence failed: %s",
                         type(persistence_error).__name__,
                     )
-            self._record_worker_failure(
-                runtime_run=claim.runtime_run,
-                lease=claim.lease,
-                reason_code=reason_code,
-                summary=reason_code,
-            )
+            if isinstance(
+                exc,
+                (
+                    RuntimeControlError,
+                    RuntimeError,
+                    ValueError,
+                    TypeError,
+                    OSError,
+                ),
+            ):
+                self._record_worker_failure(
+                    runtime_run=claim.runtime_run,
+                    lease=claim.lease,
+                    reason_code=reason_code,
+                    summary=reason_code,
+                )
             raise
         finally:
             stop_heartbeat.set()

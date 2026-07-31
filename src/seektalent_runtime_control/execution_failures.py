@@ -9,6 +9,9 @@ from hashlib import sha256
 from typing import Literal
 from uuid import uuid4
 
+from seektalent_runtime_control.execution_health import (
+    ExecutionComponentHealth,
+)
 
 EXECUTION_FAILURE_SCHEMA_STATEMENTS = (
     """
@@ -99,10 +102,22 @@ class ExecutionFailureStoreMixin:
                   alive = excluded.alive,
                   last_heartbeat_at = excluded.last_heartbeat_at,
                   last_success_at = excluded.last_success_at,
-                  first_failure_at = excluded.first_failure_at,
-                  first_failure_type = excluded.first_failure_type,
-                  failure_count = excluded.failure_count,
-                  restart_count = excluded.restart_count,
+                  first_failure_at = COALESCE(
+                    runtime_control_component_health.first_failure_at,
+                    excluded.first_failure_at
+                  ),
+                  first_failure_type = COALESCE(
+                    runtime_control_component_health.first_failure_type,
+                    excluded.first_failure_type
+                  ),
+                  failure_count = MAX(
+                    runtime_control_component_health.failure_count,
+                    excluded.failure_count
+                  ),
+                  restart_count = MAX(
+                    runtime_control_component_health.restart_count,
+                    excluded.restart_count
+                  ),
                   observed_at = excluded.observed_at
                 """,
                 (
@@ -117,6 +132,33 @@ class ExecutionFailureStoreMixin:
                     observed_at,
                 ),
             )
+
+    def get_component_health(
+        self,
+        component: str,
+    ) -> ExecutionComponentHealth | None:
+        if _SAFE.fullmatch(component) is None:
+            raise ValueError("component_health_name_invalid")
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM runtime_control_component_health
+                WHERE component = ?
+                """,
+                (component,),
+            ).fetchone()
+        if row is None:
+            return None
+        return ExecutionComponentHealth(
+            name=str(row["component"]),
+            alive=bool(row["alive"]),
+            last_heartbeat_at=row["last_heartbeat_at"],
+            last_success_at=row["last_success_at"],
+            first_failure_at=row["first_failure_at"],
+            first_failure_type=row["first_failure_type"],
+            failure_count=int(row["failure_count"]),
+            restart_count=int(row["restart_count"]),
+        )
 
     def record_execution_failure(
         self,

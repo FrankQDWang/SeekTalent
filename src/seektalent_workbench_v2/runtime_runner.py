@@ -9,6 +9,9 @@ from typing import cast
 from uuid import uuid4
 
 from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
+from seektalent.browser_lane_reconciliation import (
+    BrowserLaneReconciliationCoordinator,
+)
 from seektalent_runtime_control.execution_health import (
     ExecutionComponentHealth,
     ExecutionHealthTracker,
@@ -85,8 +88,14 @@ class WorkbenchV2RuntimeQueueRunner:
         self._stop_event = threading.Event()
         self._wake_event = threading.Event()
         self._thread: threading.Thread | None = None
-        self._health = ExecutionHealthTracker("runtime_runner")
+        self._health = ExecutionHealthTracker(
+            "runtime_runner",
+            initial=store.get_component_health("runtime_runner"),
+        )
         self._consecutive_failures = 0
+        self._browser_lane_reconciliation = (
+            BrowserLaneReconciliationCoordinator(store=store)
+        )
 
     def start(self) -> None:
         with self._lock:
@@ -170,6 +179,7 @@ class WorkbenchV2RuntimeQueueRunner:
                 recovery_failed = False
                 try:
                     recovery.recover_start_timeouts(resume_recoverable=True)
+                    self._browser_lane_reconciliation.run_once()
                 except Exception as exc:
                     recovery_failed = True
                     self._record_failure(exc, boundary="recovery")

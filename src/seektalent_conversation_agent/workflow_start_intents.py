@@ -722,6 +722,25 @@ class WorkbenchOutboxStore:
             limit=limit,
         )
 
+    def list_waiting_reconciliation_items(
+        self,
+        *,
+        event_type: str,
+        limit: int,
+    ) -> list[WorkbenchOutboxItem]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT * FROM wts_outbox
+                WHERE event_type = ?
+                  AND status = 'waiting_reconciliation'
+                ORDER BY updated_at ASC, outbox_id ASC
+                LIMIT ?
+                """,
+                (event_type, limit),
+            ).fetchall()
+        return [_outbox_from_row(row) for row in rows]
+
     def oldest_unfinished_created_at(self) -> str | None:
         with self._connect() as conn:
             row = conn.execute(
@@ -763,7 +782,10 @@ class WorkbenchOutboxStore:
                 """
                 UPDATE wts_outbox
                 SET status = 'done', updated_at = ?
-                WHERE outbox_id = ? AND status IN ('in_progress', 'done')
+                WHERE outbox_id = ?
+                  AND status IN (
+                    'in_progress', 'waiting_reconciliation', 'done'
+                  )
                 """,
                 (updated_at, outbox_id),
             )
@@ -775,7 +797,10 @@ class WorkbenchOutboxStore:
                 """
                 UPDATE wts_outbox
                 SET status = 'pending', updated_at = ?
-                WHERE outbox_id = ? AND status = 'in_progress'
+                WHERE outbox_id = ?
+                  AND status IN (
+                    'in_progress', 'waiting_reconciliation'
+                  )
                 """,
                 (updated_at, outbox_id),
             )

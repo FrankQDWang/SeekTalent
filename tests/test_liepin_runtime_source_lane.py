@@ -3196,8 +3196,14 @@ def test_liepin_runtime_lane_builds_live_store_for_opencli(monkeypatch, tmp_path
             worker_search_started_callback=None,
             store=None,
             verify_session_gate=None,
+            readiness_preparer=None,
         ):
-            del settings, worker_client, worker_search_started_callback
+            del (
+                settings,
+                worker_client,
+                worker_search_started_callback,
+                readiness_preparer,
+            )
             assert verify_session_gate is not None
             captured_stores.append(store)
 

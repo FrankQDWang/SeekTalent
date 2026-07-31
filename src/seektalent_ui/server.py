@@ -271,6 +271,11 @@ def create_app(
             )
             <= observed_at
         )
+        lane_unresolved = bool(
+            browser_lane is not None
+            and browser_lane.status == "active"
+            and browser_lane.last_failure_code is not None
+        )
         expired_executor_leases = [
             lease
             for lease in runtime_control_store.list_active_executor_leases()
@@ -296,6 +301,7 @@ def create_app(
         ready = (
             all(item["status"] == "ready" for item in component_payloads)
             and not lane_expired
+            and not lane_unresolved
             and not expired_executor_leases
             and not backlog_stale
         )

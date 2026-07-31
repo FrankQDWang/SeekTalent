@@ -1,16 +1,25 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
+import sys
 
-from seektalent.support_bundle import create_execution_support_bundle
+from seektalent.support_bundle import (
+    _execution_identity,
+    create_execution_support_bundle,
+)
+from seektalent.browser_bridge_install import (
+    install_browser_bridge_bundle,
+)
 from seektalent.browser_bridge_manifest import (
     WTSCLI_BUILD_ID,
     WTSCLI_EXTENSION_ID,
     WTSCLI_FORK_COMMIT,
     WTSCLI_VERSION,
+    load_browser_bridge_requirement,
 )
 from seektalent.domi_bootstrap import (
     INSTALL_RECEIPT_RELATIVE_PATH,
@@ -19,14 +28,15 @@ from seektalent.domi_bootstrap import (
 from seektalent_runtime_control.models import RuntimeRunRecord, RuntimeRunSnapshot
 from seektalent_runtime_control.store import RuntimeControlStore
 from tests.settings_factory import make_settings
+from tests.browser_bridge_bundle_fixtures import (
+    write_browser_bridge_bundle,
+)
 
 
 def test_support_bundle_is_allowlisted_local_and_private(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    import hashlib
-
     monkeypatch.setenv("SEEKTALENT_INSTALL_HOME", str(tmp_path))
     settings = make_settings(
         workspace_root=str(tmp_path),
@@ -211,6 +221,96 @@ def test_support_bundle_is_allowlisted_local_and_private(
         assert forbidden not in text
 
 
+def test_execution_identity_observes_installed_runtime_and_extension(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    bundle = tmp_path / "bundle"
+    write_browser_bridge_bundle(bundle)
+    installed = install_browser_bridge_bundle(
+        bundle_dir=bundle,
+        install_root=tmp_path / ".seektalent",
+        node=Path(sys.executable),
+    )
+    monkeypatch.setenv("SEEKTALENT_INSTALL_HOME", str(tmp_path))
+
+    identity = _execution_identity()
+    requirement = load_browser_bridge_requirement(
+        installed.manifest_path,
+    )
+
+    assert identity["installedAssets"] == {
+        "status": "verified",
+        "manifestVerified": True,
+        "runtimeVerified": True,
+        "extensionVerified": True,
+        "observed": {
+            "bridgeBuildId": WTSCLI_BUILD_ID,
+            "wtscliPackage": "wtscli",
+            "wtscliVersion": WTSCLI_VERSION,
+            "wtscliForkCommit": WTSCLI_FORK_COMMIT,
+            "extensionVersion": WTSCLI_VERSION,
+            "extensionIdSha256": hashlib.sha256(
+                WTSCLI_EXTENSION_ID.encode()
+            ).hexdigest(),
+            "extensionTreeSha256": (
+                requirement.extension.tree_sha256
+            ),
+            "runtimeArchiveSha256": (
+                requirement.cli.sha256
+            ),
+            "runtimeTreeSha256": (
+                json.loads(
+                    (
+                        installed.runtime_dir
+                        / ".seektalent-wtscli-package-receipt.json"
+                    ).read_text()
+                )["treeSha256"]
+            ),
+        },
+        "reasonCodes": [],
+    }
+
+    runtime_main = installed.runtime_main
+    runtime_main.unlink()
+    identity = _execution_identity()
+    assert identity["installedAssets"]["status"] == "mismatch"
+    assert (
+        "wtscli_runtime_integrity_mismatch"
+        in identity["installedAssets"]["reasonCodes"]
+    )
+
+
+def test_execution_identity_reports_deleted_and_stale_assets(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    bundle = tmp_path / "bundle"
+    write_browser_bridge_bundle(bundle)
+    installed = install_browser_bridge_bundle(
+        bundle_dir=bundle,
+        install_root=tmp_path / ".seektalent",
+        node=Path(sys.executable),
+    )
+    monkeypatch.setenv("SEEKTALENT_INSTALL_HOME", str(tmp_path))
+    installed.extension_dir.rename(
+        installed.extension_dir.with_name("wtscli-deleted")
+    )
+    identity = _execution_identity()
+    assert (
+        "wtscli_extension_missing"
+        in identity["installedAssets"]["reasonCodes"]
+    )
+
+    payload = json.loads(installed.manifest_path.read_text())
+    payload["forkCommit"] = "0" * 40
+    installed.manifest_path.write_text(json.dumps(payload))
+    identity = _execution_identity()
+    assert identity["installedAssets"]["manifestVerified"] is False
+    assert (
+        "browser_bridge_manifest_identity_mismatch"
+        in identity["installedAssets"]["reasonCodes"]
+    )
 def test_support_bundle_does_not_chmod_callers_existing_directory(
     tmp_path: Path,
 ) -> None:

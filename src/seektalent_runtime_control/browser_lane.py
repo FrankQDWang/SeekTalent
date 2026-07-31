@@ -10,6 +10,7 @@ import threading
 import time
 from dataclasses import dataclass
 from collections.abc import Callable
+from hashlib import sha256
 from typing import Literal, Protocol
 from uuid import uuid4
 
@@ -155,6 +156,16 @@ class BrowserLaneStore(Protocol):
         failure_code: str | None = None,
     ) -> BrowserLaneSnapshot: ...
 
+    def mark_browser_lane_unresolved(
+        self,
+        *,
+        lane_key: str,
+        owner_id: str,
+        fencing_token: int,
+        failure_code: str,
+        observed_at: str,
+    ) -> BrowserLaneSnapshot: ...
+
 
 class BrowserLaneGuard:
     """Hold one durable browser lane while a synchronous effect executes."""
@@ -195,6 +206,7 @@ class BrowserLaneGuard:
         self._heartbeat_stop = threading.Event()
         self._heartbeat_error: Exception | None = None
         self._heartbeat_thread: threading.Thread | None = None
+        self._unresolved_failure_code: str | None = None
 
     @property
     def lease(self) -> BrowserLaneLease:
@@ -228,6 +240,11 @@ class BrowserLaneGuard:
             if remaining <= 0:
                 raise BrowserLaneBusyError("liepin_browser_lane_busy")
             time.sleep(min(self._poll_interval_seconds, remaining))
+
+    def preserve_unresolved(self, failure_code: str) -> None:
+        if _SAFE_REASON.fullmatch(failure_code) is None:
+            raise ValueError("browser_lane_failure_code_invalid")
+        self._unresolved_failure_code = failure_code
 
     def __exit__(self, exc_type, exc, _traceback) -> None:
         self._heartbeat_stop.set()
@@ -268,7 +285,18 @@ class BrowserLaneGuard:
                 except Exception:
                     if exc is None:
                         raise
-        if self._heartbeat_error is None:
+        if (
+            self._heartbeat_error is None
+            and self._unresolved_failure_code is not None
+        ):
+            self._store.mark_browser_lane_unresolved(
+                lane_key=lease.lane_key,
+                owner_id=lease.owner_id,
+                fencing_token=lease.fencing_token,
+                failure_code=self._unresolved_failure_code,
+                observed_at=self._now(),
+            )
+        elif self._heartbeat_error is None:
             try:
                 self._store.release_browser_lane(
                     lane_key=lease.lane_key,
@@ -526,6 +554,44 @@ class BrowserLaneStoreMixin:
             ).fetchone()
         return _snapshot_from_row(row)
 
+    def mark_browser_lane_unresolved(
+        self,
+        *,
+        lane_key: str,
+        owner_id: str,
+        fencing_token: int,
+        failure_code: str,
+        observed_at: str,
+    ) -> BrowserLaneSnapshot:
+        if _SAFE_REASON.fullmatch(failure_code) is None:
+            raise ValueError("browser_lane_failure_code_invalid")
+        with self._connect() as connection, connection:
+            updated = connection.execute(
+                """
+                UPDATE runtime_control_browser_lanes
+                SET last_failure_code = ?, updated_at = ?
+                WHERE lane_key = ? AND owner_id = ?
+                  AND fencing_token = ? AND status = 'active'
+                """,
+                (
+                    failure_code,
+                    observed_at,
+                    lane_key,
+                    owner_id,
+                    fencing_token,
+                ),
+            )
+            if updated.rowcount != 1:
+                raise RuntimeControlError("liepin_browser_lane_lost")
+            row = connection.execute(
+                """
+                SELECT * FROM runtime_control_browser_lanes
+                WHERE lane_key = ?
+                """,
+                (lane_key,),
+            ).fetchone()
+        return _snapshot_from_row(row)
+
     def resolve_expired_browser_lane_after_reconciliation(
         self,
         *,
@@ -705,6 +771,156 @@ class BrowserLaneStoreMixin:
                 (lane_key,),
             ).fetchone()
         return None if row is None else _snapshot_from_row(row)
+
+    def reconcile_expired_browser_lane_from_durable_evidence(
+        self,
+        *,
+        observed_at: str,
+    ) -> Literal[
+        "not_applicable",
+        "released",
+        "needs_attention",
+    ]:
+        lane = self.get_browser_lane()
+        if (
+            lane is None
+            or lane.status != "active"
+            or lane.lease_expires_at is None
+            or lane.lease_expires_at > observed_at
+            or lane.runtime_run_id is None
+        ):
+            return "not_applicable"
+        with self._connect() as connection:
+            row = connection.execute(
+                """
+                SELECT * FROM runtime_control_source_reconciliations
+                WHERE runtime_run_id = ? AND operation_id = ?
+                ORDER BY committed_reconciliation_revision DESC
+                LIMIT 1
+                """,
+                (lane.runtime_run_id, lane.operation_id),
+            ).fetchone()
+            if row is None or row["decision_kind"] == "unresolved":
+                connection.execute(
+                    """
+                    UPDATE runtime_control_browser_lanes
+                    SET last_failure_code = ?, updated_at = ?
+                    WHERE lane_key = ? AND fencing_token = ?
+                      AND status = 'active'
+                    """,
+                    (
+                        "liepin_browser_lane_reconciliation_required",
+                        observed_at,
+                        lane.lane_key,
+                        lane.fencing_token,
+                    ),
+                )
+                connection.commit()
+                return "needs_attention"
+            outcome: Literal["no_effect", "terminal_observed"]
+            if row["decision_kind"] == "no_dispatch_proved":
+                outcome = "no_effect"
+            elif row["decision_kind"] == "conclusive_observation":
+                outcome = "terminal_observed"
+            else:
+                return "needs_attention"
+            history_conclusion = row["history_conclusion"]
+            evidence_ref = str(row["history_result_ref"])
+            evidence_digest = str(row["history_result_digest"])
+        released = self.resolve_expired_browser_lane_after_reconciliation(
+            fencing_token=lane.fencing_token,
+            runtime_run_id=lane.runtime_run_id,
+            operation_id=lane.operation_id,
+            outcome=outcome,
+            history_conclusion=history_conclusion,
+            evidence_ref=evidence_ref,
+            evidence_digest=evidence_digest,
+            resolved_at=observed_at,
+        )
+        return "released" if released else "needs_attention"
+
+    def resolve_browser_lane_from_conclusive_observation(
+        self,
+        *,
+        runtime_run_id: str,
+        operation_id: str,
+        resolved_at: str,
+    ) -> bool:
+        """Release the exact active fence after its operation is observed."""
+        with self._connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            lane = connection.execute(
+                """
+                SELECT * FROM runtime_control_browser_lanes
+                WHERE lane_key = 'liepin_browser'
+                """
+            ).fetchone()
+            operation = connection.execute(
+                """
+                SELECT * FROM runtime_control_source_operations
+                WHERE runtime_run_id = ? AND operation_id = ?
+                """,
+                (runtime_run_id, operation_id),
+            ).fetchone()
+            if (
+                lane is None
+                or lane["status"] != "active"
+                or lane["runtime_run_id"] != runtime_run_id
+                or lane["operation_id"] != operation_id
+                or operation is None
+                or operation["operation_phase"]
+                not in {"observed", "main_committed"}
+                or operation["conclusive_observation_ref"] is None
+                or operation["source_operation_disposition"]
+                == "reconciliation_unknown"
+            ):
+                connection.rollback()
+                return False
+            evidence_ref = str(
+                operation["conclusive_observation_ref"]
+            )
+            evidence_digest = sha256(
+                evidence_ref.encode()
+            ).hexdigest()
+            connection.execute(
+                """
+                INSERT INTO runtime_control_browser_lane_resolutions (
+                  resolution_id, lane_key, fencing_token, runtime_run_id,
+                  operation_id, outcome, history_conclusion, evidence_ref,
+                  evidence_digest, resolved_at
+                )
+                VALUES (?, 'liepin_browser', ?, ?, ?,
+                        'terminal_observed', 'observed_result',
+                        ?, ?, ?)
+                """,
+                (
+                    f"lane-resolution-{uuid4().hex}",
+                    int(lane["fencing_token"]),
+                    runtime_run_id,
+                    operation_id,
+                    evidence_ref,
+                    evidence_digest,
+                    resolved_at,
+                ),
+            )
+            connection.execute(
+                """
+                UPDATE runtime_control_browser_lanes
+                SET status = 'failed', lease_expires_at = NULL,
+                    released_at = ?,
+                    last_failure_code = 'liepin_browser_lane_reconciled',
+                    updated_at = ?
+                WHERE lane_key = 'liepin_browser'
+                  AND fencing_token = ? AND status = 'active'
+                """,
+                (
+                    resolved_at,
+                    resolved_at,
+                    int(lane["fencing_token"]),
+                ),
+            )
+            connection.commit()
+        return True
 
 
 def create_browser_lane_schema(connection) -> None:

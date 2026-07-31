@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -155,6 +156,7 @@ class LiepinProviderAdapter:
         store: LiepinStore | None = None,
         connection_safety_resolver: ProviderConnectionSafetyResolver | None = None,
         verify_session_gate: LiepinVerifySessionGate | None = None,
+        readiness_preparer: Callable[[], None] | None = None,
     ) -> None:
         self.settings = settings
         self.worker_client = worker_client
@@ -162,9 +164,28 @@ class LiepinProviderAdapter:
         self.worker_search_started_callback = worker_search_started_callback
         self.store = store
         self.verify_session_gate = verify_session_gate
+        self.readiness_preparer = readiness_preparer
         self.connection_safety_resolver = connection_safety_resolver or (
             LiepinStoreConnectionSafetyResolver(store) if store is not None else None
         )
+
+    async def _ensure_live_session_ready(self) -> None:
+        if self.verify_session_gate is None:
+            raise LiepinWorkerModeError(
+                "猎聘会话校验未接通，请重新启动 SeekTalent 后重试。",
+                code="liepin_verify_session_gate_missing",
+            )
+        try:
+            await self.verify_session_gate.verify()
+            return
+        except LiepinWorkerModeError:
+            if (
+                self.settings.liepin_worker_mode != "opencli"
+                or self.readiness_preparer is None
+            ):
+                raise
+        await asyncio.to_thread(self.readiness_preparer)
+        await self.verify_session_gate.verify()
 
     def describe_capabilities(self) -> ProviderCapabilities:
         return ProviderCapabilities(
@@ -224,13 +245,13 @@ class LiepinProviderAdapter:
             return await handler(action=action, continuation=continuation,
                 detail_open_claim_ledger=detail_open_claim_ledger,
                 logical_round_no=logical_round_no, query_instance_id=query_instance_id)
-        if is_live_liepin_worker_mode(self.settings.liepin_worker_mode):
+        if self.settings.liepin_worker_mode == "opencli":
             if self.verify_session_gate is None:
                 raise LiepinWorkerModeError(
                     "猎聘会话校验未接通，请重新启动 SeekTalent 后重试。",
                     code="liepin_verify_session_gate_missing",
                 )
-            await self.verify_session_gate.verify()
+            await self._ensure_live_session_ready()
         result: ProviderFirstPageExpansionResult | None = None
         primary_error: ProviderSearchError | LiepinWorkerModeError | None = None
         deleted: ProviderFirstPageExpansionResult | None = None
@@ -287,12 +308,16 @@ class LiepinProviderAdapter:
                 ),
                 requested_transport=_requested_transport_from_request(request),
             )
-            if self.verify_session_gate is None:
+            if (
+                self.settings.liepin_worker_mode == "opencli"
+                and self.verify_session_gate is None
+            ):
                 raise LiepinWorkerModeError(
                     "猎聘会话校验未接通，请重新启动 SeekTalent 后重试。",
                     code="liepin_verify_session_gate_missing",
                 )
-            await self.verify_session_gate.verify()
+            if self.settings.liepin_worker_mode == "opencli":
+                await self._ensure_live_session_ready()
         else:
             await self.worker_client.ensure_ready(on_event=self.worker_event_callback)
         if (

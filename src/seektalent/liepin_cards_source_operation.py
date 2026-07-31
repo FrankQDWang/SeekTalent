@@ -84,8 +84,17 @@ from seektalent.source_port.operation_dispatch import (
     OutboxRedeliveryV1,
     RelativeMonotonicDeadlineV1,
 )
+from seektalent.source_port.verify_session_contract import (
+    VerifySessionRequestV1,
+)
+from seektalent.wtscli_verify_session_classification import (
+    WtsCliCurrentProfileSnapshot,
+)
 from seektalent_runtime_control.store import RuntimeControlStore
-from seektalent_runtime_control.errors import RuntimeControlLookupError
+from seektalent_runtime_control.errors import (
+    RuntimeControlError,
+    RuntimeControlLookupError,
+)
 from seektalent_runtime_control.browser_lane import BrowserLaneGuard
 
 
@@ -221,6 +230,226 @@ class LiepinCardsSourceOperationExecutor:
         if existing != query_instance_id:
             raise RuntimeError("liepin_cards_lane_identity_conflict")
 
+    def prepare_readiness(self) -> None:
+        """Run readiness repair under the same durable Source authority."""
+        from seektalent.liepin_verify_session_gate import (
+            _prepare_session_mutating,
+        )
+
+        digest = sha256(
+            (
+                f"{self._runtime_run_id}:prepare-readiness:"
+                f"{self._attempt_no}"
+            ).encode()
+        ).hexdigest()
+        operation_id = f"prepare-{digest[:48]}"
+        dispatch_intent_id = f"dispatch-{digest[:48]}"
+        browser_control_scope_id = f"browser-scope-{digest[:48]}"
+        profile_binding_ref = f"profile-binding-{digest[:48]}"
+        provider_account_ref = f"provider-account-{digest[:48]}"
+        raw_runtime_fence = (
+            "prepare-readiness-fence-"
+            + sha256(
+                (
+                    f"{self._runtime_run_id}:{self._executor_id}:"
+                    f"{self._attempt_no}:"
+                    f"{self._runtime_attempt_authority_ref}"
+                ).encode()
+            ).hexdigest()
+        )
+        request = VerifySessionRequestV1.create(
+            run_id=self._runtime_run_id,
+            operation_id=operation_id,
+            attempt_no=self._attempt_no,
+            idempotency_key=f"prepare-{digest[:48]}",
+            correlation_id=f"prepare-correlation-{digest[:40]}",
+            accepted_requirement_revision_id=(
+                self._accepted_requirement_revision_id
+            ),
+            runtime_attempt_fence_token=raw_runtime_fence,
+            profile_binding_generation=self._profile_binding_generation,
+            browser_control_scope_id=browser_control_scope_id,
+            deadline_value=min(
+                900_000,
+                max(
+                    1,
+                    int(
+                        self._settings
+                        .liepin_opencli_timeout_seconds
+                        * 1000
+                    ),
+                ),
+            ),
+            expected_source_operation_ledger_revision=1,
+            expected_reconciliation_revision=0,
+            delivery_mode="initial",
+            dispatch_intent_id=dispatch_intent_id,
+            dispatch_intent_revision=1,
+            source_operation_acceptance_ref=(
+                f"source-acceptance://{operation_id}"
+            ),
+            profile_binding_ref=profile_binding_ref,
+            provider_account_ref=provider_account_ref,
+            required_capabilities=(
+                "account",
+                "bridge",
+                "extension",
+                "process",
+                "profile_lock",
+                "risk_state",
+                "search_surface",
+            ),
+            user_interaction_policy="headed_user_action_allowed",
+            verify_search_surface=True,
+        )
+        request_hash = request.identity.request_hash
+        try:
+            current = self._store.get_source_operation(
+                self._runtime_run_id,
+                operation_id,
+            )
+        except RuntimeControlLookupError:
+            current = None
+        if current is not None:
+            if current.operation_phase == "main_committed":
+                return
+            if (
+                current.operation_phase == "observed"
+                and current.conclusive_observation_ref is not None
+            ):
+                self._pending_checkpoint_operation_ids.add(operation_id)
+                return
+            raise RuntimeControlError(
+                "liepin_prepare_readiness_reconcile_first"
+            )
+        dispatch_intent_ref = f"source-dispatch://{operation_id}/1"
+        dispatch_digest = (
+            request.delivery.authorization.dispatch_intent_digest
+        )
+        accepted = self._store.accept_source_operation(
+            runtime_run_id=self._runtime_run_id,
+            operation_id=operation_id,
+            source_id="liepin",
+            operation_kind="verify_session",
+            canonical_request_hash=request_hash,
+            idempotency_key=f"prepare-{digest[:48]}",
+            accepted_requirement_revision_id=(
+                self._accepted_requirement_revision_id
+            ),
+            runtime_attempt_no=self._attempt_no,
+            runtime_attempt_authority_ref=(
+                self._runtime_attempt_authority_ref
+            ),
+            runtime_attempt_fence_ref=(
+                request.identity.runtime_attempt_fence_ref
+            ),
+            profile_binding_generation=self._profile_binding_generation,
+            browser_control_scope_id=browser_control_scope_id,
+            controller_fence_ref=None,
+            outbox_id=f"outbox-{digest[:48]}",
+            dispatch_intent_id=dispatch_intent_id,
+            dispatch_intent_revision=1,
+            dispatch_intent_digest=dispatch_digest,
+            dispatch_authorization_ordinal=1,
+            source_operation_acceptance_ref=(
+                f"source-acceptance://{operation_id}"
+            ),
+            expected_ledger_revision=1,
+            expected_reconciliation_revision=0,
+        )
+        guard = BrowserLaneGuard(
+            store=self._store,
+            runtime_run_id=self._runtime_run_id,
+            operation_id=operation_id,
+            operation_kind="prepare_readiness",
+            now=_now,
+            plus_seconds=_plus_seconds,
+            wait_timeout_seconds=(
+                self._settings
+                .liepin_browser_lane_admission_timeout_seconds
+            ),
+            on_lease_lost=self._fence_active_sidecar,
+        )
+        with guard:
+            self._store.record_source_dispatch_ack(
+                runtime_run_id=self._runtime_run_id,
+                operation_id=operation_id,
+                outbox_id=accepted.dispatch.outbox_id,
+                canonical_request_hash=request_hash,
+                dispatch_intent_id=dispatch_intent_id,
+                dispatch_intent_revision=1,
+                dispatch_intent_digest=dispatch_digest,
+                dispatch_authorization_ordinal=1,
+                expected_outbox_revision=1,
+                accepted_sidecar_generation=1,
+                accepted_sidecar_journal_revision=1,
+                ack_ref=f"source-ack://{operation_id}/1",
+                ack_kind="new_logical_operation",
+                acknowledged_at=_now(),
+            )
+            try:
+                _prepare_session_mutating(
+                    self._settings,
+                    request=request,
+                    current_profile_snapshot=(
+                        WtsCliCurrentProfileSnapshot(
+                            runtime_attempt_fence_ref=(
+                                request.identity
+                                .runtime_attempt_fence_ref
+                            ),
+                            profile_binding_ref=profile_binding_ref,
+                            profile_binding_generation=(
+                                self._profile_binding_generation
+                            ),
+                            provider_account_ref=(
+                                provider_account_ref
+                            ),
+                            provider_account_subject=(
+                                "liepin-opencli-local-browser-profile"
+                            ),
+                            browser_control_scope_id=(
+                                browser_control_scope_id
+                            ),
+                        )
+                    ),
+                )
+            except Exception:
+                history_digest = sha256(
+                    f"{operation_id}:history-unavailable".encode()
+                ).hexdigest()
+                self._store.record_owned_source_reconciliation_unknown(
+                    runtime_run_id=self._runtime_run_id,
+                    operation_id=operation_id,
+                    executor_id=self._executor_id,
+                    attempt_no=self._attempt_no,
+                    expected_ledger_revision=1,
+                    expected_reconciliation_revision=0,
+                    history_result_ref=f"sha256:{history_digest}",
+                    history_result_digest=history_digest,
+                    history_outcome="history_unavailable",
+                    history_conclusion=None,
+                    dispatch_intent_ref=dispatch_intent_ref,
+                    committed_at=_now(),
+                )
+                guard.preserve_unresolved(
+                    "liepin_prepare_reconciliation_unknown"
+                )
+                raise
+            self._store.record_owned_source_operation_observation(
+                runtime_run_id=self._runtime_run_id,
+                operation_id=operation_id,
+                executor_id=self._executor_id,
+                attempt_no=self._attempt_no,
+                expected_ledger_revision=1,
+                dispatch_intent_ref=dispatch_intent_ref,
+                conclusive_observation_ref=(
+                    f"source-observation://{operation_id}/completed"
+                ),
+                source_operation_disposition="completed",
+                observed_at=_now(),
+            )
+            self._pending_checkpoint_operation_ids.add(operation_id)
+
     def __call__(
         self,
         *,
@@ -310,21 +539,35 @@ class LiepinCardsSourceOperationExecutor:
         replayed = self._replay_committed_cards(request, operation_id)
         if replayed is not None:
             return replayed
-        with BrowserLaneGuard(
+        if self._operation_is_reconciliation_unknown(operation_id):
+            result = self._execute_with_lane(request)
+            if not _source_result_is_reconciliation_unknown(result):
+                self._store.resolve_browser_lane_from_conclusive_observation(
+                    runtime_run_id=self._runtime_run_id,
+                    operation_id=operation_id,
+                    resolved_at=_now(),
+                )
+            return result
+        guard = BrowserLaneGuard(
             store=self._store,
             runtime_run_id=self._runtime_run_id,
             operation_id=operation_id,
             operation_kind="cards",
             now=_now,
             plus_seconds=_plus_seconds,
-            wait_timeout_seconds=max(
-                0.001,
-                self._settings.liepin_opencli_timeout_seconds,
+            wait_timeout_seconds=(
+                self._settings.liepin_browser_lane_admission_timeout_seconds
             ),
             on_lease_lost=self._fence_active_sidecar,
-        ):
+        )
+        with guard:
             try:
-                return self._execute_with_lane(request)
+                result = self._execute_with_lane(request)
+                if _source_result_is_reconciliation_unknown(result):
+                    guard.preserve_unresolved(
+                        "liepin_cards_reconciliation_unknown"
+                    )
+                return result
             finally:
                 self.close()
 
@@ -568,21 +811,35 @@ class LiepinCardsSourceOperationExecutor:
         )
         if replayed is not None:
             return replayed
-        with BrowserLaneGuard(
+        if self._operation_is_reconciliation_unknown(operation_id):
+            result = self._execute_details_with_lane(request)
+            if not _source_result_is_reconciliation_unknown(result):
+                self._store.resolve_browser_lane_from_conclusive_observation(
+                    runtime_run_id=self._runtime_run_id,
+                    operation_id=operation_id,
+                    resolved_at=_now(),
+                )
+            return result
+        guard = BrowserLaneGuard(
             store=self._store,
             runtime_run_id=self._runtime_run_id,
             operation_id=operation_id,
             operation_kind="details",
             now=_now,
             plus_seconds=_plus_seconds,
-            wait_timeout_seconds=max(
-                0.001,
-                self._settings.liepin_opencli_timeout_seconds,
+            wait_timeout_seconds=(
+                self._settings.liepin_browser_lane_admission_timeout_seconds
             ),
             on_lease_lost=self._fence_active_sidecar,
-        ):
+        )
+        with guard:
             try:
-                return self._execute_details_with_lane(request)
+                result = self._execute_details_with_lane(request)
+                if _source_result_is_reconciliation_unknown(result):
+                    guard.preserve_unresolved(
+                        "liepin_details_reconciliation_unknown"
+                    )
+                return result
             finally:
                 self.close()
 
@@ -595,8 +852,8 @@ class LiepinCardsSourceOperationExecutor:
         except RuntimeControlLookupError:
             return None
         if (
-            operation.operation_phase != "main_committed"
-            or operation.main_commit_ref is None
+            operation.operation_phase
+            not in {"observed", "main_committed"}
             or operation.conclusive_observation_ref is None
             or operation.canonical_request_hash
             != canonical_liepin_cards_request_hash(request)
@@ -623,6 +880,23 @@ class LiepinCardsSourceOperationExecutor:
         )
         return _workflow_result(request, artifact, observation)
 
+    def _operation_is_reconciliation_unknown(
+        self,
+        operation_id: str,
+    ) -> bool:
+        try:
+            operation = self._store.get_source_operation(
+                self._runtime_run_id,
+                operation_id,
+            )
+        except RuntimeControlLookupError:
+            return False
+        return (
+            operation.source_operation_disposition
+            == "reconciliation_unknown"
+            or operation.retry_posture == "reconcile_first"
+        )
+
     def _replay_committed_details(self, request, operation_id):
         try:
             operation = self._store.get_source_operation(
@@ -633,8 +907,8 @@ class LiepinCardsSourceOperationExecutor:
             return None
         request_hash = canonical_liepin_details_request_hash(request)
         if (
-            operation.operation_phase != "main_committed"
-            or operation.main_commit_ref is None
+            operation.operation_phase
+            not in {"observed", "main_committed"}
             or operation.conclusive_observation_ref is None
             or operation.canonical_request_hash != request_hash
         ):
@@ -1680,6 +1954,18 @@ def _unknown_result():
             "counts": {},
             "observation": {},
         },
+    )
+
+
+def _source_result_is_reconciliation_unknown(
+    result: tuple[dict[str, object], dict[str, object]],
+) -> bool:
+    return any(
+        isinstance(value, str)
+        and value.endswith("_reconciliation_unknown")
+        for payload in result
+        for key, value in payload.items()
+        if key == "safe_reason_code"
     )
 
 

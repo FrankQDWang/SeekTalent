@@ -4,12 +4,17 @@ from types import SimpleNamespace
 import sqlite3
 import threading
 
+from seektalent_runtime_control.store import RuntimeControlStore
+from seektalent_workbench_v2.runtime_runner import (
+    WorkbenchV2RuntimeQueueRunner,
+)
 from seektalent_ui.workflow_start_outbox_runner import (
     OutboxDispatchUnknownError,
     RequirementExtractionOutboxRunner,
     RetryableOutboxError,
     WorkflowStartOutboxRunner,
 )
+from tests.settings_factory import make_settings
 
 
 class _OutboxStore:
@@ -23,6 +28,12 @@ class _OutboxStore:
     def list_claimable_items(self, **_kwargs: object) -> list[SimpleNamespace]:
         items, self.items = self.items, []
         return items
+
+    def list_waiting_reconciliation_items(
+        self,
+        **_kwargs: object,
+    ) -> list[SimpleNamespace]:
+        return []
 
     def get(self, _outbox_id: str) -> SimpleNamespace:
         return SimpleNamespace(
@@ -53,6 +64,19 @@ class _OutboxStore:
 
     def mark_done(self, outbox_id: str, **_kwargs: object) -> None:
         self.done.append(outbox_id)
+
+
+class _WaitingOutboxStore(_OutboxStore):
+    def __init__(self, waiting_items: list[SimpleNamespace]) -> None:
+        super().__init__([])
+        self.waiting_items = waiting_items
+
+    def list_waiting_reconciliation_items(
+        self,
+        **_kwargs: object,
+    ) -> list[SimpleNamespace]:
+        items, self.waiting_items = self.waiting_items, []
+        return items
 
 
 class _Service:
@@ -257,3 +281,132 @@ def test_committed_downstream_run_is_reused_after_local_outbox_failure() -> None
         ("aggregate-1", "runtime-committed")
     ]
     assert store.pending_retries == []
+
+
+def test_component_first_cause_and_counts_survive_fresh_tracker_persist(
+    tmp_path,
+) -> None:
+    settings = make_settings(workspace_root=str(tmp_path))
+    store = RuntimeControlStore(settings.runtime_control_path)
+    store.initialize()
+    store.record_component_health(
+        component="runtime_runner",
+        alive=False,
+        last_heartbeat_at="2026-07-30T00:00:01.000000Z",
+        last_success_at=None,
+        first_failure_at="2026-07-30T00:00:01.000000Z",
+        first_failure_type="KeyError",
+        failure_count=1,
+        restart_count=4,
+        observed_at="2026-07-30T00:00:01.000000Z",
+    )
+
+    store.record_component_health(
+        component="runtime_runner",
+        alive=True,
+        last_heartbeat_at="2026-07-30T00:00:02.000000Z",
+        last_success_at=None,
+        first_failure_at=None,
+        first_failure_type=None,
+        failure_count=0,
+        restart_count=0,
+        observed_at="2026-07-30T00:00:02.000000Z",
+    )
+
+    health = store.get_component_health("runtime_runner")
+    assert health is not None
+    assert health.first_failure_type == "KeyError"
+    assert health.failure_count == 1
+    assert health.restart_count == 4
+
+
+def test_all_production_runners_hydrate_durable_component_health(
+    tmp_path,
+) -> None:
+    settings = make_settings(workspace_root=str(tmp_path))
+    store = RuntimeControlStore(settings.runtime_control_path)
+    store.initialize()
+    names = (
+        "runtime_runner",
+        "workflow_start_requested",
+        "requirement_extraction_requested",
+    )
+    for name in names:
+        store.record_component_health(
+            component=name,
+            alive=False,
+            last_heartbeat_at="2026-07-30T00:00:01Z",
+            last_success_at=None,
+            first_failure_at="2026-07-30T00:00:01Z",
+            first_failure_type="KeyError",
+            failure_count=3,
+            restart_count=4,
+            observed_at="2026-07-30T00:00:01Z",
+        )
+    service = _BoundaryAwareService(
+        _OutboxStore([]),
+        run=None,
+    )
+    service.service_action_adapter.runtime_store = store
+    runners = (
+        WorkbenchV2RuntimeQueueRunner(
+            store=store,
+            executor=SimpleNamespace(),  # type: ignore[arg-type]
+        ),
+        WorkflowStartOutboxRunner(
+            service=service,  # type: ignore[arg-type]
+        ),
+        RequirementExtractionOutboxRunner(
+            service=service,  # type: ignore[arg-type]
+        ),
+    )
+
+    for runner in runners:
+        snapshot = runner.health_snapshot()
+        assert snapshot.first_failure_type == "KeyError"
+        assert snapshot.failure_count == 3
+        assert snapshot.restart_count == 4
+        runner._health.restarted()  # noqa: SLF001
+        runner._persist_health(alive=True)  # noqa: SLF001
+
+    for name in names:
+        persisted = store.get_component_health(name)
+        assert persisted is not None
+        assert persisted.first_failure_type == "KeyError"
+        assert persisted.failure_count == 3
+        assert persisted.restart_count == 5
+
+
+def test_waiting_workflow_outbox_converges_from_durable_downstream_truth() -> None:
+    waiting = SimpleNamespace(
+        outbox_id="outbox-waiting",
+        aggregate_id="aggregate-1",
+        status="waiting_reconciliation",
+        attempt_count=1,
+        updated_at="2026-07-30T00:00:00Z",
+    )
+    no_effect_store = _WaitingOutboxStore([waiting])
+    no_effect_runner = WorkflowStartOutboxRunner(
+        service=_BoundaryAwareService(  # type: ignore[arg-type]
+            no_effect_store,
+            run=None,
+        )
+    )
+
+    assert no_effect_runner.run_once() == 1
+    assert no_effect_store.pending_retries == ["outbox-waiting"]
+    assert no_effect_store.done == []
+
+    committed_store = _WaitingOutboxStore([waiting])
+    committed_service = _BoundaryAwareService(
+        committed_store,
+        run=SimpleNamespace(runtime_run_id="runtime-committed"),
+    )
+    committed_runner = WorkflowStartOutboxRunner(
+        service=committed_service,  # type: ignore[arg-type]
+    )
+
+    assert committed_runner.run_once() == 1
+    assert committed_store.pending_retries == []
+    assert committed_store.done == ["outbox-waiting"]
+    assert committed_service.links == ["runtime-committed"]

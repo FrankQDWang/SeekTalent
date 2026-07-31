@@ -14,10 +14,18 @@ from uuid import uuid4
 
 from seektalent.config import AppSettings
 from seektalent.browser_bridge_manifest import (
+    BrowserBridgeExtensionFile,
+    BrowserBridgeManifestError,
     WTSCLI_BUILD_ID,
     WTSCLI_EXTENSION_ID,
     WTSCLI_FORK_COMMIT,
     WTSCLI_VERSION,
+    load_browser_bridge_requirement,
+)
+from seektalent.browser_bridge_runtime_receipt import (
+    WTSCLI_PACKAGE_ARCHIVE_FILENAME,
+    runtime_package_receipt,
+    verify_installed_runtime_package,
 )
 from seektalent.domi_bootstrap import (
     INSTALL_RECEIPT_RELATIVE_PATH,
@@ -442,7 +450,121 @@ def _execution_identity() -> dict[str, object]:
         "receiptAvailable": receipt is not None,
         "receiptReasonCode": receipt_reason,
         "receipt": receipt,
+        "installedAssets": _installed_asset_identity(install_root),
     }
+
+
+def _installed_asset_identity(
+    install_root: Path,
+) -> dict[str, object]:
+    asset_root = install_root / ".seektalent"
+    manifest_path = (
+        asset_root / "browser-bridge" / "bridge-manifest.json"
+    )
+    reasons: list[str] = []
+    try:
+        requirement = load_browser_bridge_requirement(manifest_path)
+    except (BrowserBridgeManifestError, OSError):
+        requirement = None
+        reasons.append(
+            "browser_bridge_manifest_missing"
+            if not manifest_path.is_file()
+            else "browser_bridge_manifest_identity_mismatch"
+        )
+    runtime_verified = False
+    extension_verified = False
+    observed: dict[str, object] | None = None
+    if requirement is not None:
+        observed = {
+            "bridgeBuildId": requirement.bridge_build_id,
+            "wtscliPackage": requirement.cli.package,
+            "wtscliVersion": requirement.cli.version,
+            "wtscliForkCommit": requirement.fork_commit,
+            "extensionVersion": requirement.extension.version,
+            "extensionIdSha256": hashlib.sha256(
+                requirement.extension.id.encode()
+            ).hexdigest(),
+            "extensionTreeSha256": (
+                requirement.extension.tree_sha256
+            ),
+            "runtimeArchiveSha256": None,
+            "runtimeTreeSha256": None,
+        }
+        runtime_dir = (
+            asset_root
+            / f"{requirement.cli.package}-runtime"
+            / requirement.cli.package
+            / requirement.cli.version
+        )
+        try:
+            verify_installed_runtime_package(
+                runtime_dir,
+                requirement=requirement,
+            )
+            runtime_receipt = runtime_package_receipt(
+                runtime_dir / WTSCLI_PACKAGE_ARCHIVE_FILENAME,
+                requirement=requirement,
+            )
+            observed["runtimeArchiveSha256"] = (
+                runtime_receipt.source_sha256
+            )
+            observed["runtimeTreeSha256"] = (
+                runtime_receipt.tree_sha256
+            )
+            runtime_verified = True
+        except (BrowserBridgeManifestError, OSError):
+            reasons.append(
+                "wtscli_runtime_missing"
+                if not runtime_dir.is_dir()
+                else "wtscli_runtime_integrity_mismatch"
+            )
+        extension_dir = (
+            asset_root
+            / "chrome-extension"
+            / requirement.cli.package
+        )
+        try:
+            actual_files = _support_extension_files(extension_dir)
+            if actual_files != requirement.extension.files:
+                raise BrowserBridgeManifestError("integrity_failed")
+            extension_verified = True
+        except (BrowserBridgeManifestError, OSError):
+            reasons.append(
+                "wtscli_extension_missing"
+                if not extension_dir.is_dir()
+                else "wtscli_extension_integrity_mismatch"
+            )
+    return {
+        "status": "verified" if not reasons else "mismatch",
+        "manifestVerified": requirement is not None,
+        "runtimeVerified": runtime_verified,
+        "extensionVerified": extension_verified,
+        "observed": observed,
+        "reasonCodes": reasons,
+    }
+
+
+def _support_extension_files(
+    extension_dir: Path,
+) -> tuple[BrowserBridgeExtensionFile, ...]:
+    if extension_dir.is_symlink() or not extension_dir.is_dir():
+        raise BrowserBridgeManifestError("integrity_failed")
+    files: list[BrowserBridgeExtensionFile] = []
+    for candidate in extension_dir.rglob("*"):
+        if candidate.is_symlink():
+            raise BrowserBridgeManifestError("integrity_failed")
+        if not candidate.is_file():
+            continue
+        files.append(
+            BrowserBridgeExtensionFile(
+                path=candidate.relative_to(extension_dir).as_posix(),
+                size=candidate.stat().st_size,
+                sha256=hashlib.sha256(
+                    candidate.read_bytes()
+                ).hexdigest(),
+            )
+        )
+    return tuple(sorted(files, key=lambda item: item.path))
 
 
 def _receipt_matches_expected_identity(

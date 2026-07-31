@@ -10,6 +10,10 @@ import pytest
 from fastapi.testclient import TestClient
 
 from seektalent.config import AppSettings
+from seektalent.source_port.command_journal import (
+    AcceptedCommand,
+    create_command_journal,
+)
 from seektalent_conversation_agent.factory import build_agent_service
 from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
 from seektalent_runtime_control.executor import _event
@@ -74,6 +78,17 @@ class _ProductionTopologyRuntime:
         raise AssertionError(
             "after_finalization_commit must not rebuild or replay runtime"
         )
+
+
+@pytest.fixture(autouse=True)
+def _isolated_production_home(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(
+        "SEEKTALENT_INSTALL_HOME",
+        str(tmp_path / "installed-home"),
+    )
 
 
 def test_prod_composition_uses_one_runtime_execution_authority(
@@ -271,6 +286,357 @@ def test_execution_plane_readiness_reports_expired_browser_lane(
         "lastFailureCode": None,
         "expired": True,
     }
+
+
+def test_execution_plane_readiness_rejects_unresolved_browser_effect(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(
+        workspace_root=str(tmp_path),
+        runtime_mode="prod",
+        liepin_worker_mode="disabled",
+        liepin_browser_action_backend="disabled",
+        liepin_api_token="production-test-api-token",
+        liepin_account_binding_secret="production-test-binding-secret",
+        liepin_stream_token_secret="production-test-stream-secret",
+    )
+    app = create_app(settings=settings, runtime_factory=_NoopRuntime)
+    store = app.state.runtime_control_store
+    lease = store.try_acquire_browser_lane(
+        lane_key=LIEPIN_BROWSER_LANE,
+        owner_id="readiness-unresolved-owner",
+        owner_process_id=1,
+        process_boot_id="readiness-unresolved-process",
+        runtime_run_id=None,
+        operation_id="readiness-unresolved-operation",
+        operation_kind="prepare_readiness",
+        acquired_at="2026-07-30T00:00:00Z",
+        lease_expires_at="2099-07-30T00:00:01Z",
+    )
+    assert lease is not None
+    store.mark_browser_lane_unresolved(
+        lane_key=LIEPIN_BROWSER_LANE,
+        owner_id=lease.owner_id,
+        fencing_token=lease.fencing_token,
+        failure_code="liepin_prepare_reconciliation_unknown",
+        observed_at="2026-07-30T00:00:01Z",
+    )
+
+    with TestClient(
+        app,
+        base_url="http://localhost",
+        client=("127.0.0.1", 50000),
+    ) as client:
+        response = client.get("/api/health/execution-ready")
+
+    assert response.status_code == 503
+    assert response.json()["browserLane"]["lastFailureCode"] == (
+        "liepin_prepare_reconciliation_unknown"
+    )
+
+
+def test_prod_runner_reconciles_expired_lane_from_conclusive_evidence(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(
+        workspace_root=str(tmp_path),
+        runtime_control_path=str(
+            tmp_path / "runtime-control.sqlite3"
+        ),
+        runtime_mode="prod",
+        liepin_worker_mode="disabled",
+        liepin_browser_action_backend="disabled",
+        liepin_api_token="production-test-api-token",
+        liepin_account_binding_secret="production-test-binding-secret",
+        liepin_stream_token_secret="production-test-stream-secret",
+    )
+    app = create_app(settings=settings, runtime_factory=_NoopRuntime)
+    store = app.state.runtime_control_store
+    store.create_run(
+        RuntimeRunRecord(
+            runtime_run_id="rtrun-orphan-reconcile",
+            run_intent_id="intent-orphan-reconcile",
+            start_idempotency_key="start-orphan-reconcile",
+            run_kind="primary",
+            approved_requirement_revision_id="approved-orphan",
+            status="completed",
+            current_stage="finalized",
+            source_ids=["liepin"],
+            created_at="2026-07-30T00:00:00Z",
+            updated_at="2026-07-30T00:00:00Z",
+            completed_at="2026-07-30T00:00:00Z",
+        )
+    )
+    lease = store.try_acquire_browser_lane(
+        lane_key=LIEPIN_BROWSER_LANE,
+        owner_id="orphan-owner",
+        owner_process_id=123,
+        process_boot_id="orphan-process",
+        runtime_run_id="rtrun-orphan-reconcile",
+        operation_id="operation-orphan-reconcile",
+        operation_kind="cards",
+        acquired_at="2026-07-30T00:00:00Z",
+        lease_expires_at="2026-07-30T00:00:01Z",
+    )
+    assert lease is not None
+    with store._connect() as connection:
+        connection.execute(
+            """
+            INSERT INTO runtime_control_source_operations (
+              runtime_run_id, operation_id, source_id, operation_kind,
+              canonical_request_hash, idempotency_key,
+              accepted_requirement_revision_id, runtime_attempt_no,
+              runtime_attempt_authority_ref, operation_phase,
+              dispatch_intent_ref, conclusive_observation_ref,
+              source_operation_disposition, retry_posture,
+              reconciliation_revision, main_commit_ref, ledger_revision
+            )
+            VALUES (?, ?, 'liepin', 'cards', ?, ?, ?, 1, ?,
+                    'reconciled', ?, ?, 'completed', 'no_retry',
+                    1, NULL, 2)
+            """,
+            (
+                "rtrun-orphan-reconcile",
+                "operation-orphan-reconcile",
+                "a" * 64,
+                "idempotency-orphan",
+                "approved-orphan",
+                "authority-orphan",
+                "dispatch://operation-orphan-reconcile",
+                "artifact://operation-orphan-reconcile/" + "c" * 64,
+            ),
+        )
+        connection.execute(
+            """
+            INSERT INTO runtime_control_source_reconciliations (
+              reconciliation_id, runtime_run_id, operation_id, source_id,
+              operation_kind, canonical_request_hash, idempotency_key,
+              accepted_requirement_revision_id, runtime_attempt_no,
+              runtime_attempt_authority_ref, history_result_ref,
+              history_result_digest, history_outcome, history_conclusion,
+              decision_kind, dispatch_intent_ref,
+              conclusive_observation_ref, source_operation_disposition,
+              retry_posture, expected_ledger_revision,
+              expected_reconciliation_revision, committed_at,
+              committed_operation_phase, committed_ledger_revision,
+              committed_reconciliation_revision
+            )
+            VALUES (
+              'reconciliation-orphan', 'rtrun-orphan-reconcile',
+              'operation-orphan-reconcile', 'liepin', 'cards', ?, ?,
+              'approved-orphan', 1, 'authority-orphan',
+              ?, ?, 'matched', 'observed_result',
+              'conclusive_observation',
+              'dispatch://operation-orphan-reconcile',
+              ?, 'completed', 'no_retry',
+              1, 0, '2026-07-30T00:00:02Z',
+              'reconciled', 2, 1
+            )
+            """,
+            (
+                "a" * 64,
+                "idempotency-orphan",
+                "sha256:" + "b" * 64,
+                "b" * 64,
+                "artifact://operation-orphan-reconcile/" + "c" * 64,
+            ),
+        )
+
+    with TestClient(
+        app,
+        base_url="http://localhost",
+        client=("127.0.0.1", 50000),
+    ):
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline:
+            lane = store.get_browser_lane()
+            if lane is not None and lane.status != "active":
+                break
+            time.sleep(0.01)
+
+    lane = store.get_browser_lane()
+    assert lane is not None
+    assert lane.status == "failed"
+    assert lane.last_failure_code == "liepin_browser_lane_reconciled"
+
+
+def test_prod_runner_reads_sidecar_history_to_reconcile_crashed_owner(
+    tmp_path: Path,
+) -> None:
+    settings = make_settings(
+        workspace_root=str(tmp_path),
+        runtime_control_path=str(
+            tmp_path / "runtime-control.sqlite3"
+        ),
+        runtime_mode="prod",
+        liepin_worker_mode="disabled",
+        liepin_browser_action_backend="disabled",
+        liepin_api_token="production-test-api-token",
+        liepin_account_binding_secret="production-test-binding-secret",
+        liepin_stream_token_secret="production-test-stream-secret",
+    )
+    app = create_app(settings=settings, runtime_factory=_NoopRuntime)
+    store = app.state.runtime_control_store
+    run_id = "rtrun-orphan-sidecar-history"
+    operation_id = "operation-orphan-sidecar-history"
+    request_hash = "a" * 64
+    dispatch_digest = "b" * 64
+    runtime_fence = "c" * 64
+    result_hash = "d" * 64
+    store.create_run(
+        RuntimeRunRecord(
+            runtime_run_id=run_id,
+            run_intent_id="intent-orphan-sidecar-history",
+            start_idempotency_key="start-orphan-sidecar-history",
+            run_kind="primary",
+            approved_requirement_revision_id="approved-orphan",
+            status="running",
+            current_stage="runtime",
+            source_ids=["liepin"],
+            created_at="2026-07-30T00:00:00Z",
+            updated_at="2026-07-30T00:00:00Z",
+        )
+    )
+    executor_lease = store.acquire_executor_lease(
+        runtime_run_id=run_id,
+        executor_id="orphan-sidecar-executor",
+        acquired_at="2026-07-30T00:00:00Z",
+        lease_expires_at="2026-07-30T00:10:00Z",
+    )
+    accepted = store.accept_source_operation(
+        runtime_run_id=run_id,
+        operation_id=operation_id,
+        source_id="liepin",
+        operation_kind="cards",
+        canonical_request_hash=request_hash,
+        idempotency_key="cards-orphan-sidecar-history",
+        accepted_requirement_revision_id="approved-orphan",
+        runtime_attempt_no=executor_lease.attempt_no,
+        runtime_attempt_authority_ref="authority-orphan-sidecar",
+        runtime_attempt_fence_ref=runtime_fence,
+        profile_binding_generation=1,
+        browser_control_scope_id=None,
+        controller_fence_ref=None,
+        outbox_id="outbox-orphan-sidecar-history",
+        dispatch_intent_id="intent-orphan-sidecar-history",
+        dispatch_intent_revision=1,
+        dispatch_intent_digest=dispatch_digest,
+        dispatch_authorization_ordinal=1,
+        source_operation_acceptance_ref=(
+            "source-acceptance://orphan-sidecar-history"
+        ),
+        expected_ledger_revision=1,
+        expected_reconciliation_revision=0,
+    )
+    store.record_source_dispatch_ack(
+        runtime_run_id=run_id,
+        operation_id=operation_id,
+        outbox_id=accepted.dispatch.outbox_id,
+        canonical_request_hash=request_hash,
+        dispatch_intent_id=accepted.dispatch.dispatch_intent_id,
+        dispatch_intent_revision=1,
+        dispatch_intent_digest=dispatch_digest,
+        dispatch_authorization_ordinal=1,
+        expected_outbox_revision=1,
+        accepted_sidecar_generation=1,
+        accepted_sidecar_journal_revision=1,
+        ack_ref="sha256:" + "e" * 64,
+        ack_kind="new_logical_operation",
+        acknowledged_at="2026-07-30T00:00:01Z",
+    )
+    lane = store.try_acquire_browser_lane(
+        lane_key=LIEPIN_BROWSER_LANE,
+        owner_id="orphan-sidecar-owner",
+        owner_process_id=123,
+        process_boot_id="orphan-sidecar-process",
+        runtime_run_id=run_id,
+        operation_id=operation_id,
+        operation_kind="cards",
+        acquired_at="2026-07-30T00:00:00Z",
+        lease_expires_at="2026-07-30T00:10:00Z",
+    )
+    assert lane is not None
+
+    journal = create_command_journal(
+        store.path.parent
+        / "source-port"
+        / "liepin-cards-journal.sqlite3"
+    )
+    session = journal.start()
+    accepted_receipt = session.record_accepted(
+        AcceptedCommand(
+            run_id=run_id,
+            operation_id=operation_id,
+            source="liepin",
+            operation_kind="cards",
+            idempotency_key="cards-orphan-sidecar-history",
+            request_hash=request_hash,
+            attempt_no=1,
+            accepted_requirement_revision_id="approved-orphan",
+            runtime_attempt_fence_ref=runtime_fence,
+            authorized_dispatch_intent_id=(
+                "intent-orphan-sidecar-history"
+            ),
+            authorized_dispatch_intent_revision=1,
+            authorized_dispatch_intent_digest=dispatch_digest,
+            profile_binding_generation=1,
+            browser_control_scope_id=None,
+            controller_fence_ref=None,
+        )
+    )
+    dispatch_receipt = session.record_dispatch_intent(
+        run_id=run_id,
+        operation_id=operation_id,
+        expected_head_journal_revision=accepted_receipt.revision,
+        durable_dispatch_intent_ref=(
+            "dispatch://orphan-sidecar-history"
+        ),
+    )
+    session.record_observed_result(
+        run_id=run_id,
+        operation_id=operation_id,
+        expected_head_journal_revision=dispatch_receipt.revision,
+        result_ref="artifact://orphan-sidecar-history",
+        result_hash=result_hash,
+    )
+    session.close()
+    journal.close()
+
+    with TestClient(
+        app,
+        base_url="http://localhost",
+        client=("127.0.0.1", 50000),
+    ):
+        deadline = time.monotonic() + 3
+        while time.monotonic() < deadline:
+            lane_snapshot = store.get_browser_lane()
+            operation = store.get_source_operation(
+                run_id,
+                operation_id,
+            )
+            if (
+                lane_snapshot is not None
+                and lane_snapshot.status != "active"
+                and operation.conclusive_observation_ref
+                == "artifact://orphan-sidecar-history"
+            ):
+                break
+            time.sleep(0.01)
+
+    lane_snapshot = store.get_browser_lane()
+    operation = store.get_source_operation(run_id, operation_id)
+    assert lane_snapshot is not None
+    assert lane_snapshot.status == "failed"
+    assert (
+        lane_snapshot.last_failure_code
+        == "liepin_browser_lane_reconciled"
+    )
+    assert operation.operation_phase == "reconciled"
+    assert operation.source_operation_disposition == "completed"
+    assert (
+        operation.conclusive_observation_ref
+        == "artifact://orphan-sidecar-history"
+    )
 
 
 def test_execution_plane_readiness_reports_expired_executor_lease(

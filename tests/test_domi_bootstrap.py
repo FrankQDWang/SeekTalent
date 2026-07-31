@@ -333,6 +333,51 @@ def test_install_scripts_delegate_to_package_bootstrap() -> None:
     assert "-m seektalent.domi_bootstrap" in mac_script
     assert "--python-path" in mac_script
     assert "export PATH=" in mac_script
+    assert 'mktemp -d "${rollback_root}/${version}.XXXXXX"' in mac_script
+    assert "rollback-seektalent-domi.sh" in mac_script
+
+
+def test_posix_rollback_is_single_use_and_preserves_snapshot(
+    tmp_path: Path,
+) -> None:
+    home = tmp_path / "home"
+    current = home / ".seektalent"
+    current.mkdir(parents=True)
+    (current / "identity").write_text("old")
+    rollback = home / ".seektalent-rollbacks" / "0.8.0rc1.test"
+    rollback.mkdir(parents=True)
+    (rollback / "seektalent").mkdir()
+    (rollback / "seektalent" / "identity").write_text("old")
+    (rollback / ".available").write_text("")
+    (current / "identity").write_text("new")
+
+    script = Path("scripts/rollback-seektalent-domi.sh").resolve()
+    first = subprocess.run(
+        [str(script), str(rollback)],
+        env={
+            **os.environ,
+            "SEEKTALENT_INSTALL_HOME": str(home),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    second = subprocess.run(
+        [str(script), str(rollback)],
+        env={
+            **os.environ,
+            "SEEKTALENT_INSTALL_HOME": str(home),
+        },
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert first.returncode == 0
+    assert (current / "identity").read_text() == "old"
+    assert (rollback / ".used").is_file()
+    assert second.returncode == 1
+    assert "rollback_snapshot_unavailable" in second.stderr
 
 
 def test_posix_install_script_preserves_sourced_shell_state(tmp_path: Path) -> None:
