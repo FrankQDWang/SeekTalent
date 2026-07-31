@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from pathlib import Path
 import sqlite3
 import threading
 import time
@@ -97,6 +98,24 @@ class _ObservedStore:
 
     def __getattr__(self, name: str):
         return getattr(self.store, name)
+
+
+class _RunnerStoreStub:
+    path = Path("/private/tmp/seektalent-runner-test.sqlite3")
+
+    def get_component_health(self, component: str) -> None:
+        assert component == "runtime_runner"
+        return None
+
+    def record_component_health(self, **kwargs: object) -> None:
+        del kwargs
+
+    def reconcile_expired_browser_lane_from_durable_evidence(
+        self,
+        **kwargs: object,
+    ) -> str:
+        del kwargs
+        return "not_applicable"
 
 
 class _LifecycleRecorder:
@@ -510,7 +529,7 @@ def test_recovery_operational_error_waits_then_poller_processes_task(
     monkeypatch.setattr(runtime_runner_module, "RuntimeRecoveryService", _OperationalErrorRecovery)
     monkeypatch.setattr(runtime_runner_module, "RuntimeExecutionWorker", _ProcessingWorker)
     runner = WorkbenchV2RuntimeQueueRunner(
-        store=object(),  # type: ignore[arg-type]
+        store=_RunnerStoreStub(),  # type: ignore[arg-type]
         executor=object(),  # type: ignore[arg-type]
         poll_interval_seconds=60,
         monotonic=iter((0.0, 1.0)).__next__,
@@ -558,7 +577,7 @@ def test_periodic_recovery_enables_strict_recoverable_resume(
     monkeypatch.setattr(runtime_runner_module, "RuntimeRecoveryService", _RecordingRecoveryService)
     monkeypatch.setattr(runtime_runner_module, "RuntimeExecutionWorker", _BusyWorker)
     runner = WorkbenchV2RuntimeQueueRunner(
-        store=object(),  # type: ignore[arg-type]
+        store=_RunnerStoreStub(),  # type: ignore[arg-type]
         executor=object(),  # type: ignore[arg-type]
         poll_interval_seconds=60,
         recovery_interval_seconds=5,
@@ -866,7 +885,7 @@ def _create_unaccepted_run(
 
 def _fake_runner() -> WorkbenchV2RuntimeQueueRunner:
     return WorkbenchV2RuntimeQueueRunner(
-        store=object(),  # type: ignore[arg-type]
+        store=_RunnerStoreStub(),  # type: ignore[arg-type]
         executor=object(),  # type: ignore[arg-type]
         poll_interval_seconds=60,
     )

@@ -698,6 +698,7 @@ def test_source_port_contract_has_neutral_import_closure_and_no_business_caller(
     # classification helpers and runtime-control admission mapping.
     assert sorted(source_port_callers) == sorted(
         [
+            "src/seektalent/browser_lane_reconciliation.py",
             "src/seektalent_runtime_control/needs_attention_admission.py",
             "src/seektalent_runtime_control/user_action_mapping.py",
             "src/seektalent_runtime_control/safe_retry_turnover.py",
@@ -705,6 +706,7 @@ def test_source_port_contract_has_neutral_import_closure_and_no_business_caller(
             "src/seektalent/sidecar_readiness.py",
             "src/seektalent/wtscli_verify_session_classification.py",
             "src/seektalent/liepin_cards_source_operation.py",
+            "src/seektalent/liepin_verify_session_gate.py",
             "src/seektalent/liepin_cards_sidecar.py",
             "src/seektalent/sidecar_child_session.py",
             "src/seektalent/sidecar_bootstrap.py",

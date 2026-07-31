@@ -829,6 +829,7 @@ def test_verify_contract_and_dispatch_kernel_keep_reviewed_callers_only() -> Non
             callers.append(path.relative_to(PROJECT_ROOT).as_posix())
     assert set(callers) == {
         "src/seektalent/liepin_cards_source_operation.py",
+        "src/seektalent/liepin_verify_session_gate.py",
         "src/seektalent/source_port/authenticated_liepin_cards_frames.py",
         "src/seektalent/source_port/authenticated_liepin_details_frames.py",
         "src/seektalent/source_port/authenticated_liepin_source_frames.py",
@@ -861,7 +862,9 @@ def test_sidecar_history_writer_accepts_only_main_authorized_safe_retry_epochs()
         for path in (PROJECT_ROOT / "src").rglob("*.py")
         if path != CONTRACT_PATH and "VerifySessionRequestV1.create(" in path.read_text(encoding="utf-8")
     ]
-    assert production_callers == []
+    assert production_callers == [
+        "src/seektalent/liepin_cards_source_operation.py",
+    ]
     safe_retry_callers = []
     for path in (PROJECT_ROOT / "src").rglob("*.py"):
         if path in {

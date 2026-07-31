@@ -721,6 +721,7 @@ def test_source_port_frame_kernel_has_no_project_side_effect_dependency_or_busin
         "src/seektalent/liepin_cards_source_operation.py",
         "src/seektalent/liepin_cards_sidecar.py",
         "src/seektalent/sidecar_child_session.py",
+        "src/seektalent/browser_lane_reconciliation.py",
         "src/seektalent/source_port/authenticated_source_port_session.py",
         "src/seektalent/source_port/sidecar_transport.py",
     ]

@@ -949,7 +949,8 @@ def test_frame_modules_keep_one_source_port_core_and_no_production_caller() -> N
         if "authenticated_verify_session_frames" in path.read_text(encoding="utf-8"):
             callers.append(path.relative_to(PROJECT_ROOT).as_posix())
     assert set(callers) == {
+        "src/seektalent/liepin_verify_session_gate.py",
         "src/seektalent/source_port/authenticated_source_port_session.py",
         "src/seektalent_runtime_control/needs_attention_admission.py",
         "src/seektalent_runtime_control/needs_attention_store.py",
-        }
+    }
