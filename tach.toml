@@ -139,16 +139,6 @@ depends_on = [
 ]
 
 [[modules]]
-path = "seektalent_conversation_agent"
-depends_on = [
-  "seektalent_runtime_control",
-]
-
-[[modules]]
-path = "seektalent_agent_memory"
-depends_on = []
-
-[[modules]]
 path = "seektalent.sources"
 depends_on = [
   "seektalent.core",
@@ -162,8 +152,6 @@ path = "seektalent_ui"
 depends_on = [
   "seektalent.candidate_quality",
   "seektalent.failure_interpretation",
-  "seektalent_agent_memory",
-  "seektalent_conversation_agent",
   "seektalent_runtime_control",
   "seektalent_workbench_v2",
   "seektalent.providers",

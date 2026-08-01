@@ -12,7 +12,7 @@ from seektalent_ui.resources import (
     package_frontend_fallback_file,
 )
 from seektalent_ui.server import create_app
-from seektalent_ui.workbench_paths import agent_workbench_stream_db_path, liepin_db_path, workbench_db_path
+from seektalent_ui.workbench_paths import liepin_db_path, workbench_db_path
 from tests.settings_factory import make_settings
 
 
@@ -94,7 +94,6 @@ def test_prod_workbench_databases_use_user_data_root(tmp_path: Path, monkeypatch
     )
 
     assert workbench_db_path(settings) == home / ".seektalent" / "workbench.sqlite3"
-    assert agent_workbench_stream_db_path(settings) == home / ".seektalent" / "agent_workbench_stream.sqlite3"
     assert liepin_db_path(settings) == home / ".seektalent" / "liepin_connector.sqlite3"
 
 
@@ -109,7 +108,6 @@ def test_dev_workbench_databases_use_workspace_root(tmp_path: Path, monkeypatch)
     )
 
     assert workbench_db_path(settings) == workspace / ".seektalent" / "workbench.sqlite3"
-    assert agent_workbench_stream_db_path(settings) == workspace / ".seektalent" / "agent_workbench_stream.sqlite3"
     assert liepin_db_path(settings) == workspace / ".seektalent" / "liepin_connector.sqlite3"
 
 

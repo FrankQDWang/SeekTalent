@@ -275,18 +275,9 @@ def _storage_roots(settings: AppSettings) -> tuple[LocalStorageRootSeed, ...]:
     liepin_session_store = settings.resolve_workspace_path(settings.liepin_session_store_dir)
     return (
         LocalStorageRootSeed("runtime_control_db", settings.runtime_control_path, "product_db", True, True),
-        LocalStorageRootSeed("conversation_agent_db", settings.conversation_agent_path, "product_db", True, True),
-        LocalStorageRootSeed("agent_memory_db", settings.agent_memory_path, "advisory_memory", True, True),
         LocalStorageRootSeed(
             "workbench_db",
             workspace_root / ".seektalent" / "workbench.sqlite3",
-            "product_projection_db",
-            True,
-            True,
-        ),
-        LocalStorageRootSeed(
-            "workbench_stream_db",
-            workspace_root / ".seektalent" / "agent_workbench_stream.sqlite3",
             "product_projection_db",
             True,
             True,
@@ -305,7 +296,6 @@ def _storage_roots(settings: AppSettings) -> tuple[LocalStorageRootSeed, ...]:
         LocalStorageRootSeed("artifacts_root", settings.artifacts_path, "artifact_debug", False, False),
         LocalStorageRootSeed("llm_cache", settings.llm_cache_path, "cache", False, False),
         LocalStorageRootSeed("backup_root", _backup_root(settings), "backup", False, False),
-        LocalStorageRootSeed("agent_memory_workspace", settings.agent_memory_workspace_path, "advisory_memory", True, False),
     )
 
 

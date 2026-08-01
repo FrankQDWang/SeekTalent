@@ -405,7 +405,7 @@ class _WtsCliVerifySessionEffect:
             return -1.0
         return deadline_at - float(now)
 
-def create_wtscli_verify_session_effect(
+def run_wtscli_verify_session_effect(
     *,
     daemon: _WtsCliDaemon,
     bridge_requirement: BrowserBridgeRequirement,
@@ -661,6 +661,6 @@ def _valid_deadline(value: object) -> bool:
 
 __all__ = [
     "WtsCliCurrentProfileSnapshot",
-    "create_wtscli_verify_session_effect",
+    "run_wtscli_verify_session_effect",
     "probe_wtscli_liepin_session",
 ]

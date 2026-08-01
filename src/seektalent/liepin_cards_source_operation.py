@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import secrets
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -216,6 +217,7 @@ class LiepinCardsSourceOperationExecutor:
         self._wtscli_lifecycle_supervisor = wtscli_lifecycle_supervisor
         root = settings.runtime_control_path.parent / "source-port"
         self._journal_path = root / "liepin-cards-journal.sqlite3"
+        self._verify_session_journal_path = root / "liepin-verify-session-journal.sqlite3"
         self._artifact_root = root / "liepin-cards-results"
         self._details_artifact_root = root / "liepin-details-results"
         self._lane_queries: dict[str, str] = {}
@@ -376,6 +378,13 @@ class LiepinCardsSourceOperationExecutor:
             on_lease_lost=self._fence_active_sidecar,
         )
         with guard:
+            accepted_generation, accepted_journal_revision, ack_ref = (
+                self._accept_verify_session_receipt(
+                    operation_id=operation_id,
+                    request_hash=request_hash,
+                    dispatch_intent_id=dispatch_intent_id,
+                )
+            )
             self._store.record_source_dispatch_ack(
                 runtime_run_id=self._runtime_run_id,
                 operation_id=operation_id,
@@ -386,9 +395,9 @@ class LiepinCardsSourceOperationExecutor:
                 dispatch_intent_digest=dispatch_digest,
                 dispatch_authorization_ordinal=1,
                 expected_outbox_revision=1,
-                accepted_sidecar_generation=1,
-                accepted_sidecar_journal_revision=1,
-                ack_ref=f"source-ack://{operation_id}/1",
+                accepted_sidecar_generation=accepted_generation,
+                accepted_sidecar_journal_revision=accepted_journal_revision,
+                ack_ref=ack_ref,
                 ack_kind="new_logical_operation",
                 acknowledged_at=_now(),
             )
@@ -484,6 +493,68 @@ class LiepinCardsSourceOperationExecutor:
                 observed_at=_now(),
             )
             self._pending_checkpoint_operation_ids.add(operation_id)
+
+    def _accept_verify_session_receipt(
+        self,
+        *,
+        operation_id: str,
+        request_hash: str,
+        dispatch_intent_id: str,
+    ) -> tuple[int, int, str]:
+        """Persist the verify-session acceptance before any browser effect."""
+        self._verify_session_journal_path.parent.mkdir(parents=True, exist_ok=True)
+        with sqlite3.connect(self._verify_session_journal_path) as connection:
+            connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS verify_session_receipts (
+                    generation INTEGER PRIMARY KEY,
+                    journal_revision INTEGER NOT NULL,
+                    operation_id TEXT NOT NULL UNIQUE,
+                    request_hash TEXT NOT NULL,
+                    dispatch_intent_id TEXT NOT NULL,
+                    accepted_at TEXT NOT NULL
+                )
+                """
+            )
+            existing = connection.execute(
+                """
+                SELECT generation, journal_revision
+                FROM verify_session_receipts
+                WHERE operation_id = ?
+                """,
+                (operation_id,),
+            ).fetchone()
+            if existing is not None:
+                generation, revision = (int(existing[0]), int(existing[1]))
+            else:
+                generation = int(
+                    connection.execute(
+                        "SELECT COALESCE(MAX(generation), 0) + 1 FROM verify_session_receipts"
+                    ).fetchone()[0]
+                )
+                revision = int(
+                    connection.execute(
+                        "SELECT COALESCE(MAX(journal_revision), 0) + 1 FROM verify_session_receipts"
+                    ).fetchone()[0]
+                )
+                connection.execute(
+                    """
+                    INSERT INTO verify_session_receipts
+                    (generation, journal_revision, operation_id, request_hash,
+                     dispatch_intent_id, accepted_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        generation,
+                        revision,
+                        operation_id,
+                        request_hash,
+                        dispatch_intent_id,
+                        _now(),
+                    ),
+                )
+        receipt = f"verify-session-ack://{operation_id}/{generation}/{revision}"
+        return generation, revision, receipt
 
     def _ensure_supervisor_ready_for_recovery(self) -> None:
         supervisor = self._wtscli_lifecycle_supervisor

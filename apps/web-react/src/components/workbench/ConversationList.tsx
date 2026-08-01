@@ -1,5 +1,5 @@
 import { Circle, CircleCheck, CircleDashed } from "lucide-react";
-import { useAgentWorkbenchConversations } from "../../lib/api/agentWorkbench";
+import { useWorkbenchV2Conversations } from "../../lib/api/workbenchV2";
 import "./ConversationList.css";
 
 export type ConversationListSummary = {
@@ -35,7 +35,7 @@ function ConversationListQuery({
 }: {
   selectedConversationId: string | undefined;
 }) {
-  const query = useAgentWorkbenchConversations();
+  const query = useWorkbenchV2Conversations();
 
   if (query.isPending) {
     return (

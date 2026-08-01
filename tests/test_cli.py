@@ -261,7 +261,6 @@ def test_required_prompts_include_auxiliary_prompt_files() -> None:
         "finalize",
         "judge",
         "tui_summary",
-        "conversation_agent",
         "candidate_feedback",
         "prf_probe_phrase_proposal",
         "workbench_note_writer",

@@ -36,7 +36,6 @@ from seektalent_runtime_control.retention import (
     RuntimeRetentionService,
 )
 from seektalent_runtime_control.store import RuntimeControlStore
-from seektalent_ui.agent_workbench_stream_store import AgentWorkbenchStreamStore
 from seektalent_ui.workbench_store import DEFAULT_WORKSPACE_ID, WorkbenchStore
 
 
@@ -577,7 +576,6 @@ def run_local_storage_cleanup(
     cache_retention_days: int = 7,
     support_bundle_retention_days: int = 7,
     backup_retention_days: int = 30,
-    stream_event_retention_days: int = 30,
     liepin_detail_retention_days: int = 30,
     corpus_export_retention_days: int = 30,
     max_backup_count: int = 10,
@@ -609,7 +607,6 @@ def run_local_storage_cleanup(
         corpus_tenant_id=corpus_tenant_id,
         corpus_workspace_id=corpus_workspace_id,
         apply=apply,
-        stream_event_retention_days=stream_event_retention_days,
         liepin_detail_retention_days=liepin_detail_retention_days,
         corpus_export_retention_days=corpus_export_retention_days,
     )
@@ -661,25 +658,10 @@ def _run_store_specific_local_retention(
     corpus_tenant_id: str,
     corpus_workspace_id: str,
     apply: bool,
-    stream_event_retention_days: int,
     liepin_detail_retention_days: int,
     corpus_export_retention_days: int,
 ) -> tuple[LocalStorageStoreCleanupCount, ...]:
     counts: list[LocalStorageStoreCleanupCount] = []
-    stream_db_path = settings.project_root / ".seektalent" / "agent_workbench_stream.sqlite3"
-    if closed_conversation_ids and stream_db_path.exists():
-        store = AgentWorkbenchStreamStore(stream_db_path)
-        counts.append(
-            LocalStorageStoreCleanupCount(
-                store_name="agent_workbench_stream",
-                item_kind="closed_conversation_events",
-                count=store.prune_closed_conversation_events(
-                    closed_conversation_ids,
-                    created_before=_maintenance_cutoff(current_time, stream_event_retention_days),
-                    dry_run=not apply,
-                ),
-            )
-        )
     liepin_db_path = settings.resolve_workspace_path(settings.liepin_connector_db_path)
     if liepin_db_path.exists():
         counts.append(
@@ -777,7 +759,6 @@ def main(argv: Sequence[str] | None = None) -> int:
                 cache_retention_days=args.cache_retention_days,
                 support_bundle_retention_days=args.support_bundle_retention_days,
                 backup_retention_days=args.backup_retention_days,
-                stream_event_retention_days=args.stream_event_retention_days,
                 liepin_detail_retention_days=args.liepin_detail_retention_days,
                 corpus_export_retention_days=args.corpus_export_retention_days,
                 max_backup_count=args.max_backup_count,

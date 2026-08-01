@@ -6,9 +6,6 @@ from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from seektalent_conversation_agent.errors import ConversationAgentError
-
-
 PROBLEM_TYPE_BASE = "https://seektalent.local/problems/"
 
 
@@ -79,35 +76,6 @@ def problem_http_error_from_reason(
     )
 
 
-def problem_from_conversation_error(
-    *,
-    exc: ConversationAgentError,
-    request: Request,
-    correlation_id: str,
-) -> ProblemDetails:
-    status = problem_status_from_reason(exc.reason_code)
-    return problem_from_reason(
-        reason_code=exc.reason_code,
-        status=status,
-        instance=_request_path(request),
-        correlation_id=correlation_id,
-        regions=regions_from_validation_errors(_payload_errors(exc.payload)),
-    )
-
-
-def problem_http_error_from_conversation_error(
-    *,
-    exc: ConversationAgentError,
-    request: Request,
-    correlation_id: str,
-) -> HTTPException:
-    problem = problem_from_conversation_error(exc=exc, request=request, correlation_id=correlation_id)
-    return HTTPException(
-        status_code=problem.status,
-        detail=problem.model_dump(mode="json", exclude_none=True),
-    )
-
-
 def regions_from_validation_errors(errors: Sequence[Mapping[str, object]]) -> list[ProblemRegion]:
     regions: list[ProblemRegion] = []
     for error in errors:
@@ -147,13 +115,7 @@ def problem_status_from_reason(reason_code: str) -> int:
     }:
         return 403
     if reason_code in {
-        "conversation_not_found",
-        "confirm_request_not_found",
-        "job_request_revision_not_found",
-        "job_request_missing",
         "requirement_draft_not_found",
-        "workflow_start_intent_not_found",
-        "workbench_outbox_item_not_found",
     }:
         return 404
     if reason_code == "stream_replay_gap":
@@ -180,17 +142,6 @@ def _detail_from_reason(reason_code: str) -> str:
     if reason_code == "projection_unavailable":
         return "The Workbench projection is temporarily unavailable."
     return "The Workbench request could not be completed."
-
-
-def _payload_errors(payload: Mapping[str, object]) -> list[Mapping[str, object]]:
-    errors = payload.get("errors")
-    if not isinstance(errors, list):
-        return []
-    normalized: list[Mapping[str, object]] = []
-    for error in errors:
-        if isinstance(error, Mapping):
-            normalized.append({str(key): value for key, value in error.items()})
-    return normalized
 
 
 def _field_from_loc(value: object) -> str:

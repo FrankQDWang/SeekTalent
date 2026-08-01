@@ -1,12 +1,6 @@
 import { createRoute, useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQueryClient } from "@tanstack/react-query";
 import { ConversationList } from "../components/workbench/ConversationList";
-import {
-  ConversationScreen,
-  ConversationScreenSide,
-  hasConversationWorkflowSurface,
-} from "../components/workbench/ConversationScreen";
 import {
   ConversationScreenV2,
   ConversationScreenV2Side,
@@ -34,20 +28,6 @@ import type {
   WorkbenchV2TranscriptEvent,
 } from "../lib/api/workbenchV2Types";
 import {
-  useAmendAgentWorkbenchRequirementFromText,
-  useConfirmAgentWorkbenchRequirements,
-  useAgentWorkbenchCandidateDetail,
-  useAgentWorkbenchLiveConversation,
-  useSubmitAgentWorkbenchMessage,
-  useUpdateAgentWorkbenchRequirementDraft,
-} from "../lib/api/agentWorkbench";
-import type {
-  AgentWorkbenchConversationResponse,
-  AgentWorkbenchRequirementDraftItem,
-} from "../lib/api/agentWorkbenchTypes";
-import { safeErrorMessage } from "../lib/api/client";
-import { queryKeys } from "../lib/query/keys";
-import {
   clearPendingInitialTurn,
   readPendingInitialTurn,
   writePendingInitialTurn,
@@ -68,17 +48,8 @@ function WorkbenchRoute() {
     return <NewConversationFlow />;
   }
 
-  if (isWorkbenchV2ConversationId(conversationId)) {
-    return (
-      <ExistingWorkbenchV2ConversationFlow
-        key={conversationId}
-        conversationId={conversationId}
-      />
-    );
-  }
-
   return (
-    <ExistingLegacyConversationFlow
+    <ExistingWorkbenchV2ConversationFlow
       key={conversationId}
       conversationId={conversationId}
     />
@@ -405,233 +376,6 @@ function ExistingWorkbenchV2ConversationFlow({
   );
 }
 
-function ExistingLegacyConversationFlow({
-  conversationId,
-}: {
-  conversationId: string;
-}) {
-  const queryClient = useQueryClient();
-  const query = useAgentWorkbenchLiveConversation(conversationId);
-  const queryKey = useMemo(
-    () => queryKeys.agentConversation(conversationId),
-    [conversationId],
-  );
-  const requirementMutationChainRef = useRef<Promise<void>>(Promise.resolve());
-  const requirementMutationErrorRef = useRef<unknown>(null);
-  const [selectedCandidateId, setSelectedCandidateId] = useState<string | null>(
-    null,
-  );
-  const [actionErrorMessage, setActionErrorMessage] = useState<string | null>(
-    null,
-  );
-  const [updatingRequirementItemIds, setUpdatingRequirementItemIds] = useState<
-    string[]
-  >([]);
-  const detailQuery = useAgentWorkbenchCandidateDetail(
-    conversationId,
-    selectedCandidateId,
-  );
-  const submitMessageMutation = useSubmitAgentWorkbenchMessage(conversationId);
-  const confirmRequirementsMutation =
-    useConfirmAgentWorkbenchRequirements(conversationId);
-  const updateRequirementMutation =
-    useUpdateAgentWorkbenchRequirementDraft(conversationId);
-  const amendRequirementMutation =
-    useAmendAgentWorkbenchRequirementFromText(conversationId);
-  const selectedCandidate = useMemo(
-    () =>
-      query.data?.candidates.find(
-        (candidate) => candidate.candidateId === selectedCandidateId,
-      ) ?? null,
-    [selectedCandidateId, query.data?.candidates],
-  );
-  const closeCandidateDrawer = useCallback(() => {
-    setSelectedCandidateId(null);
-  }, []);
-  const retryCandidateDetail = useCallback(() => {
-    void detailQuery.refetch();
-  }, [detailQuery]);
-  const viewCandidateDetails = useCallback((candidateId: string) => {
-    setActionErrorMessage(null);
-    setSelectedCandidateId(candidateId);
-  }, []);
-
-  useEffect(() => {
-    requirementMutationChainRef.current = Promise.resolve();
-    requirementMutationErrorRef.current = null;
-    setActionErrorMessage(null);
-    setSelectedCandidateId(null);
-    setUpdatingRequirementItemIds([]);
-  }, [conversationId]);
-
-  if (query.isPending) {
-    return (
-      <ConversationShell
-        main={<section aria-busy="true" className="conversation-view__state" />}
-        rail={<ConversationList selectedConversationId={conversationId} />}
-      />
-    );
-  }
-
-  if (query.isError) {
-    return (
-      <ConversationShell
-        main={
-          <section className="conversation-view__state" role="alert">
-            {safeErrorMessage(query.error)}
-          </section>
-        }
-        rail={<ConversationList selectedConversationId={conversationId} />}
-      />
-    );
-  }
-
-  const view = query.data;
-  const workflowSurfaceVisible = hasConversationWorkflowSurface(view);
-  const latestRequirementDraftRevisionId = () =>
-    queryClient.getQueryData<AgentWorkbenchConversationResponse>(queryKey)
-      ?.requirementDraft?.draftRevisionId ??
-    view.requirementDraft?.draftRevisionId;
-
-  const enqueueRequirementMutation = (run: () => Promise<void>) => {
-    const next = requirementMutationChainRef.current
-      .catch(() => undefined)
-      .then(async () => {
-        requirementMutationErrorRef.current = null;
-        await run();
-      });
-    requirementMutationChainRef.current = next.catch((error: unknown) => {
-      requirementMutationErrorRef.current = error;
-    });
-    return next;
-  };
-
-  const onSubmitMessage = async (message: string) => {
-    setActionErrorMessage(null);
-    try {
-      await submitMessageMutation.mutateAsync(message);
-    } catch (error) {
-      setActionErrorMessage(safeErrorMessage(error));
-      throw error;
-    }
-  };
-
-  const onConfirmRequirements = async () => {
-    setActionErrorMessage(null);
-    await requirementMutationChainRef.current.catch(() => undefined);
-    if (requirementMutationErrorRef.current !== null) {
-      setActionErrorMessage(
-        safeErrorMessage(requirementMutationErrorRef.current),
-      );
-      return;
-    }
-    const draftRevisionId = latestRequirementDraftRevisionId();
-    if (!draftRevisionId) {
-      setActionErrorMessage("当前没有可确认的需求草稿。");
-      return;
-    }
-    try {
-      await confirmRequirementsMutation.mutateAsync(draftRevisionId);
-    } catch (error) {
-      setActionErrorMessage(safeErrorMessage(error));
-    }
-  };
-
-  const onToggleRequirementItem = async (
-    item: AgentWorkbenchRequirementDraftItem,
-    selected: boolean,
-  ) => {
-    setActionErrorMessage(null);
-    setUpdatingRequirementItemIds((current) =>
-      current.includes(item.itemId) ? current : [...current, item.itemId],
-    );
-    try {
-      await enqueueRequirementMutation(async () => {
-        const draftRevisionId = latestRequirementDraftRevisionId();
-        if (!draftRevisionId) {
-          throw new Error("Requirement draft is unavailable.");
-        }
-        await updateRequirementMutation.mutateAsync({
-          draftRevisionId,
-          operations: [{ itemId: item.itemId, op: "set_selected", selected }],
-        });
-      });
-    } catch (error) {
-      setActionErrorMessage(safeErrorMessage(error));
-      throw error;
-    } finally {
-      setUpdatingRequirementItemIds((current) =>
-        current.filter((itemId) => itemId !== item.itemId),
-      );
-    }
-  };
-
-  const onAddOtherRequirement = async (text: string) => {
-    setActionErrorMessage(null);
-    try {
-      await enqueueRequirementMutation(async () => {
-        const draftRevisionId = latestRequirementDraftRevisionId();
-        if (!draftRevisionId) {
-          throw new Error("Requirement draft is unavailable.");
-        }
-        await amendRequirementMutation.mutateAsync({ draftRevisionId, text });
-      });
-    } catch (error) {
-      setActionErrorMessage(safeErrorMessage(error));
-      throw error;
-    }
-  };
-
-  return (
-    <>
-      <ConversationShell
-        main={
-          <ConversationScreen
-            actionErrorMessage={actionErrorMessage}
-            amendingRequirements={amendRequirementMutation.isPending}
-            confirmingRequirements={confirmRequirementsMutation.isPending}
-            onAddOtherRequirement={onAddOtherRequirement}
-            onConfirmRequirements={() => void onConfirmRequirements()}
-            onSubmitMessage={onSubmitMessage}
-            onToggleRequirementItem={onToggleRequirementItem}
-            submittingMessage={submitMessageMutation.isPending}
-            updatingRequirementItemIds={updatingRequirementItemIds}
-            view={view}
-          />
-        }
-        rail={<ConversationList selectedConversationId={conversationId} />}
-        side={
-          workflowSurfaceVisible ? (
-            <ConversationScreenSide
-              onViewCandidateDetails={viewCandidateDetails}
-              view={view}
-            />
-          ) : null
-        }
-      />
-      <CandidateDetailDrawer
-        candidate={selectedCandidate}
-        detail={detailQuery.data ?? null}
-        errorMessage={
-          detailQuery.isError ? safeErrorMessage(detailQuery.error) : undefined
-        }
-        onClose={closeCandidateDrawer}
-        onRetry={retryCandidateDetail}
-        open={selectedCandidateId !== null}
-        status={
-          selectedCandidateId === null
-            ? "idle"
-            : detailQuery.isPending
-              ? "loading"
-              : detailQuery.isError
-                ? "error"
-                : "ready"
-        }
-      />
-    </>
-  );
-}
-
 function WorkbenchV2ConversationRail({
   selectedConversationId,
 }: {
@@ -644,10 +388,6 @@ function WorkbenchV2ConversationRail({
       selectedConversationId={selectedConversationId}
     />
   );
-}
-
-function isWorkbenchV2ConversationId(conversationId: string): boolean {
-  return conversationId.startsWith("agentv2_");
 }
 
 function createIdempotencyKey(): string {
@@ -786,10 +526,13 @@ function conversationTitleFromMessage(message: string): string {
 
 function safeWorkbenchV2ErrorMessage(error: unknown): string {
   if (error instanceof WorkbenchV2RequestError) {
+    if (error.reasonCode === "liepin_browser_lane_reconciliation_required") {
+      return "上一轮猎聘浏览器操作正在等待对账；请等待对账或联系支持，不要重试。";
+    }
     if (error.status > 0) {
       return `请求失败，状态码 ${String(error.status)}`;
     }
     return "网络请求失败，请稍后重试。";
   }
-  return safeErrorMessage(error);
+  return "请求失败，请稍后重试。";
 }

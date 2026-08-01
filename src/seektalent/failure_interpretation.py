@@ -156,6 +156,10 @@ PUBLIC_SOURCE_PROBLEMS = {
             "source_unknown",
             "{source_label}检索失败，但暂时无法确定具体原因，请稍后重试；若仍失败，请联系支持。",
         ),
+        _problem(
+            "liepin_browser_lane_reconciliation_required",
+            "{source_label}上一轮浏览器操作正在等待对账；请等待对账或联系支持，不要重试。",
+        ),
     )
 }
 PUBLIC_SOURCE_REASON_CODES = frozenset(PUBLIC_SOURCE_PROBLEMS)
@@ -199,6 +203,11 @@ _LIEPIN_FAILURE_POLICY_ENTRIES = (
         user_action_code="log_in_to_liepin",
     ),
     _policy("liepin_browser_probe_unavailable", "source_browser_backend_unavailable"),
+    _policy(
+        "liepin_browser_lane_reconciliation_required",
+        "liepin_browser_lane_reconciliation_required",
+        legacy_lane_retryable_metadata=False,
+    ),
     _policy("liepin_browser_account_mismatch", "source_account_mismatch"),
     _policy(
         "liepin_opencli_backend_disabled",
@@ -597,6 +606,11 @@ _RECOVERY_GUIDANCE_ENTRIES = (
         failure_cause_code="liepin_opencli_unknown_modal",
         reason="猎聘页面当前不可操作，具体原因尚无法确认。",
         action="请切换到 Chrome 查看并处理当前猎聘页面。",
+    ),
+    LiepinRecoveryGuidance(
+        failure_cause_code="liepin_browser_lane_reconciliation_required",
+        reason="上一轮猎聘浏览器操作的真实副作用尚未完成对账。",
+        action="请等待对账或联系支持；在明确对账前不要重试、清理或新建运行。",
     ),
 )
 LIEPIN_RECOVERY_GUIDANCE = {guidance.failure_cause_code: guidance for guidance in _RECOVERY_GUIDANCE_ENTRIES}

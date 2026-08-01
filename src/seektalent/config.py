@@ -46,9 +46,6 @@ PROD_ARTIFACTS_DIR = "~/.seektalent/artifacts"
 PROD_RUNS_DIR = "~/.seektalent/runs"
 PROD_LLM_CACHE_DIR = "~/.seektalent/cache"
 DEFAULT_RUNTIME_CONTROL_DB_PATH = ".seektalent/runtime_control.sqlite3"
-DEFAULT_CONVERSATION_AGENT_DB_PATH = ".seektalent/conversation_agent.sqlite3"
-DEFAULT_AGENT_MEMORY_DB_PATH = ".seektalent/agent_memory.sqlite3"
-DEFAULT_AGENT_MEMORY_WORKSPACE_PATH = ".seektalent/agent_memory_workspace"
 DEFAULT_DOMI_LLM_BASE_URL = "https://test-api-agent.hewa.cn/api/v1/runtime/llm-proxy/v1"
 DEFAULT_DOMI_LLM_CHANNEL = "seek_talent"
 DEFAULT_LIEPIN_OPENCLI_SESSION = "seektalent-liepin"
@@ -554,9 +551,6 @@ class AppSettings(BaseSettings):
     flywheel_db_path: str = ".seektalent/flywheel.sqlite3"
     corpus_db_path: str = ".seektalent/corpus.sqlite3"
     runtime_control_db_path: str = DEFAULT_RUNTIME_CONTROL_DB_PATH
-    conversation_agent_db_path: str = DEFAULT_CONVERSATION_AGENT_DB_PATH
-    agent_memory_db_path: str = DEFAULT_AGENT_MEMORY_DB_PATH
-    agent_memory_workspace_dir: str = DEFAULT_AGENT_MEMORY_WORKSPACE_PATH
     agent_turn_input_token_budget: int = 64_000
     agent_turn_output_token_budget: int = 4_096
     agent_conversation_token_budget: int = 128_000
@@ -627,9 +621,6 @@ class AppSettings(BaseSettings):
         "runs_dir",
         "llm_cache_dir",
         "runtime_control_db_path",
-        "conversation_agent_db_path",
-        "agent_memory_db_path",
-        "agent_memory_workspace_dir",
         mode="before",
     )
     @classmethod
@@ -966,18 +957,6 @@ class AppSettings(BaseSettings):
     @property
     def runtime_control_path(self) -> Path:
         return self.resolve_workspace_path(self.runtime_control_db_path)
-
-    @property
-    def conversation_agent_path(self) -> Path:
-        return self.resolve_workspace_path(self.conversation_agent_db_path)
-
-    @property
-    def agent_memory_path(self) -> Path:
-        return self.resolve_workspace_path(self.agent_memory_db_path)
-
-    @property
-    def agent_memory_workspace_path(self) -> Path:
-        return self.resolve_workspace_path(self.agent_memory_workspace_dir)
 
     @property
     def artifacts_path(self) -> Path:

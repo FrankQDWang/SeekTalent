@@ -62,13 +62,9 @@ def test_server_delegates_packaged_frontend_mounting() -> None:
     assert "mount_packaged_frontend" not in _function_names(tree)
 
 
-def test_server_delegates_workbench_database_path_policy() -> None:
+def test_server_delegates_runtime_composition() -> None:
     tree = _module_tree(SERVER_PATH)
     modules = _imported_modules(tree)
 
-    assert "seektalent_ui.workbench_paths" in modules
-    assert not {
-        "_liepin_db_path",
-        "_workbench_db_path",
-        "_agent_workbench_stream_db_path",
-    } & _function_names(tree)
+    assert "seektalent_ui.runtime_execution" in modules
+    assert "seektalent_ui.workbench_paths" not in modules

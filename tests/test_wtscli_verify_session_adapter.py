@@ -22,7 +22,7 @@ from seektalent.source_port.authenticated_verify_session_frames import VerifySes
 from seektalent.source_port.verify_session_contract import VerifySessionRequestV1, VerifySessionResultV1
 from seektalent.wtscli_verify_session_adapter import (
     WtsCliCurrentProfileSnapshot,
-    create_wtscli_verify_session_effect,
+    run_wtscli_verify_session_effect,
     probe_wtscli_liepin_session,
 )
 from tests.browser_bridge_bundle_fixtures import exact_browser_bridge_requirement
@@ -303,7 +303,7 @@ def _effect(
     snapshots: _SnapshotSource,
     clock: _Clock,
 ):
-    return create_wtscli_verify_session_effect(
+    return run_wtscli_verify_session_effect(
         daemon=daemon,
         bridge_requirement=BRIDGE_REQUIREMENT,
         current_profile_snapshot=snapshots,
@@ -483,7 +483,7 @@ def test_factory_returns_the_exact_typed_reply_required_by_the_journal_effect_se
     clock = _Clock()
     daemon = _FakeDaemon(clock)
     snapshots = _SnapshotSource(_snapshot(request), clock=clock)
-    effect = create_wtscli_verify_session_effect(
+    effect = run_wtscli_verify_session_effect(
         daemon=daemon,
         bridge_requirement=BRIDGE_REQUIREMENT,
         current_profile_snapshot=snapshots,
@@ -1289,7 +1289,7 @@ def test_adapter_module_has_one_durable_prepare_caller_without_old_readiness_sea
     factory_callers = [
         path.relative_to(project_root).as_posix()
         for path in (project_root / "src").rglob("*.py")
-        if path != adapter_path and "create_wtscli_verify_session_effect(" in path.read_text(encoding="utf-8")
+        if path != adapter_path and "run_wtscli_verify_session_effect(" in path.read_text(encoding="utf-8")
     ]
     packaged_builder = (project_root / "tools" / "build_packaged_sidecar.py").read_text(encoding="utf-8")
     packaged_bootstrap = (project_root / "src" / "seektalent" / "sidecar_bootstrap.py").read_text(encoding="utf-8")

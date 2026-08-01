@@ -4,9 +4,6 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-from seektalent_conversation_agent.safety import MAX_REQUIREMENT_TEXT_CHARS, MAX_SECTION_HINT_CHARS
-
-
 SourceKind = Literal["cts", "liepin"]
 
 MAX_AGENT_MESSAGE_CHARS = 20000
@@ -14,6 +11,8 @@ MAX_CONVERSATION_TITLE_CHARS = 120
 MAX_IDEMPOTENCY_KEY_CHARS = 160
 MAX_JOB_TITLE_CHARS = 256
 MAX_NOTES_CHARS = 5000
+MAX_REQUIREMENT_TEXT_CHARS = 2000
+MAX_SECTION_HINT_CHARS = 120
 MAX_REQUIREMENT_OPERATION_COUNT = 50
 MAX_REQUEST_ID_CHARS = 200
 MAX_SECTION_ID_CHARS = MAX_SECTION_HINT_CHARS

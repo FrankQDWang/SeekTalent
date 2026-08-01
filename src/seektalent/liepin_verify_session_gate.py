@@ -29,7 +29,7 @@ from seektalent.wtscli_verify_session_classification import (
 )
 from seektalent.wtscli_verify_session_adapter import (
     WtsCliCurrentProfileSnapshot,
-    create_wtscli_verify_session_effect,
+    run_wtscli_verify_session_effect,
 )
 from seektalent.source_port.authenticated_verify_session_frames import (
     VerifySessionFailureV1,
@@ -150,7 +150,7 @@ def _prepare_session_mutating(
         environment_status = _check_environment(runtime)
         if not environment_status.ok:
             _raise_reason(_environment_reason(environment_status))
-        effect = create_wtscli_verify_session_effect(
+        effect = run_wtscli_verify_session_effect(
             daemon=daemon,
             bridge_requirement=requirement,
             current_profile_snapshot=lambda: (

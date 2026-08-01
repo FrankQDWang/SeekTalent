@@ -20,9 +20,6 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from seektalent.config import AppSettings, load_process_env
 from seektalent.dev_mode import DevModeStatus, build_dev_mode_env_diagnostics
 from seektalent.wtscli_runtime import BootstrapError
-from seektalent.providers.liepin.runtime_context import (
-    local_opencli_liepin_source_context,
-)
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
 from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.workbench_internal_secrets import ensure_workbench_internal_liepin_env
@@ -31,24 +28,18 @@ from seektalent.wtscli_lifecycle_supervisor import (
     WtsCliLifecycleSupervisor,
     build_wtscli_lifecycle_supervisor,
 )
-from seektalent_conversation_agent.factory import build_agent_service
 from seektalent_workbench_v2.agent_loop import BailianStrictWorkbenchV2AgentLoop
 from seektalent_workbench_v2.runtime_runner import WorkbenchV2RuntimeQueueRunner
 from seektalent_workbench_v2.runtime_service import (
     WorkbenchV2RuntimeService,
-    build_workbench_v2_requirement_extractor,
 )
 from seektalent_workbench_v2.service import WorkbenchV2Service
 from seektalent_workbench_v2.store import WorkbenchV2Store
 from seektalent_ui import (
-    agent_routes,
-    agent_workbench_routes,
     agent_workbench_v2_routes,
     event_routes,
     validation_errors,
-    workbench_routes,
 )
-from seektalent_ui.agent_workbench_stream_store import AgentWorkbenchStreamStore
 from seektalent_ui.liepin_routes import create_liepin_router
 from seektalent_ui.network_guard import (
     NetworkGuard,
@@ -64,12 +55,10 @@ from seektalent_ui.problem_details import (
     problem_from_reason,
     regions_from_validation_errors,
 )
+from seektalent_ui.runtime_execution import build_runtime_execution
 from seektalent_ui.liepin_security import reject_unsafe_liepin_control_plane
 from seektalent_ui.static_frontend import mount_packaged_frontend
-from seektalent_ui.workbench_paths import agent_workbench_stream_db_path, workbench_db_path
 from seektalent_ui.workbench_observability import correlation_id_from_request
-from seektalent_ui.workbench_store import WorkbenchStore
-from seektalent_ui.workflow_start_outbox_runner import RequirementExtractionOutboxRunner, WorkflowStartOutboxRunner
 
 
 logger = logging.getLogger(__name__)
@@ -97,49 +86,22 @@ def create_app(
     )
     app.state.dev_mode_env_diagnostics = dev_mode_env_diagnostics
     app.state.workbench_graph_secret = secrets.token_urlsafe(32)
-    app.state.workbench_store = WorkbenchStore(workbench_db_path(app_settings))
-    app.state.agent_workbench_stream_store = AgentWorkbenchStreamStore(agent_workbench_stream_db_path(app_settings))
-    app.state.agent_memory_service = agent_routes.build_memory_service(settings=app_settings)
-    app.state.agent_conversation_service = build_agent_service(
-        settings=app_settings,
+    execution = build_runtime_execution(
+        app_settings,
         runtime_factory=runtime_factory,
-        source_context_provider=local_opencli_liepin_source_context,
         wtscli_lifecycle_supervisor=app.state.wtscli_lifecycle_supervisor,
     )
-    app.state.agent_conversation_store = app.state.agent_conversation_service.store
-    runtime_control_store = app.state.agent_conversation_service.service_action_adapter.runtime_store
-    if runtime_control_store is None:
-        raise RuntimeError("runtime_control_store_unavailable")
+    runtime_control_store = execution.store
+    runtime_executor = execution.executor
+    command_service = execution.command_service
     app.state.runtime_control_store = runtime_control_store
-    runtime_executor = (
-        app.state.agent_conversation_service
-        .service_action_adapter
-        .workflow_executor
-    )
-    command_service = (
-        app.state.agent_conversation_service
-        .service_action_adapter
-        .command_service
-    )
-    if runtime_executor is None:
-        raise RuntimeError("runtime_workflow_executor_unavailable")
-    if command_service is None:
-        raise RuntimeError("runtime_command_service_unavailable")
-    if runtime_executor.store is not runtime_control_store:
-        raise RuntimeError("runtime_execution_store_identity_mismatch")
-    if command_service.store is not runtime_control_store:
-        raise RuntimeError("runtime_command_store_identity_mismatch")
     app.state.workbench_v2_store = WorkbenchV2Store(
         app_settings.resolve_workspace_path(".seektalent/workbench_v2.sqlite3")
     )
     app.state.workbench_v2_store.initialize()
-    app.state.workbench_v2_requirement_extractor = build_workbench_v2_requirement_extractor(app_settings)
+    app.state.workbench_v2_requirement_extractor = execution.requirement_extractor
     def workbench_v2_runtime_factory() -> object:
-        return _runtime_factory_with_supervisor(
-            runtime_factory,
-            app_settings,
-            app.state.wtscli_lifecycle_supervisor,
-        )
+        return runtime_factory(app_settings)
 
     app.state.runtime_command_service = command_service
     app.state.workbench_v2_runtime_executor = runtime_executor
@@ -160,38 +122,8 @@ def create_app(
             on_run_queued=app.state.workbench_v2_runtime_runner.wake,
         ),
     )
-    app.state.agent_conversation_service.memory_service = app.state.agent_memory_service
-    app.state.workflow_start_outbox_runner = WorkflowStartOutboxRunner(
-        service=app.state.agent_conversation_service,
-    )
-    app.state.requirement_extraction_outbox_runner = RequirementExtractionOutboxRunner(
-        service=app.state.agent_conversation_service,
-    )
     app.state.workbench_job_runner = None
-    if app_settings.runtime_mode != "prod":
-        from seektalent_ui.job_runner import WorkbenchJobRunner
-
-        app.state.workbench_job_runner = WorkbenchJobRunner(
-            store=app.state.workbench_store,
-            settings=app_settings,
-            runtime_factory=runtime_factory,
-            runtime_control_store=runtime_control_store,
-            workbench_note_writer_agent_factory=workbench_note_writer_agent_factory,
-        )
-    app.state.agent_rate_limiter = agent_routes.LocalAgentRateLimiter()
     app.state.network_guard = network_guard
-
-    app.state.workbench_store.record_security_audit_event(
-        actor_user_id=None,
-        actor_role="system",
-        workspace_id="default",
-        target_type="feature_gate",
-        target_id="workbench",
-        action="workbench_feature_gate_evaluated",
-        result="enabled" if app_settings.workbench_enabled else "disabled",
-        reason_code="startup",
-        metadata={"workbenchEnabled": app_settings.workbench_enabled},
-    )
 
     @app.middleware("http")
     async def workbench_host_guard(request: Request, call_next):
@@ -246,14 +178,7 @@ def create_app(
         from datetime import UTC, datetime
 
         observed_at = datetime.now(UTC)
-        components = [
-            runner.health_snapshot()
-            for runner in (
-                app.state.workbench_v2_runtime_runner,
-                app.state.workflow_start_outbox_runner,
-                app.state.requirement_extraction_outbox_runner,
-            )
-        ]
+        components = [app.state.workbench_v2_runtime_runner.health_snapshot()]
         component_payloads = []
         for component in components:
             heartbeat = (
@@ -304,20 +229,6 @@ def create_app(
             )
             <= observed_at
         ]
-        oldest_backlog_at = (
-            app.state.agent_conversation_service.outbox_store
-            .oldest_unfinished_created_at()
-        )
-        backlog_stale = bool(
-            oldest_backlog_at
-            and (
-                observed_at
-                - datetime.fromisoformat(
-                    oldest_backlog_at.replace("Z", "+00:00")
-                )
-            ).total_seconds()
-            > 300
-        )
         ready = (
             all(item["status"] == "ready" for item in component_payloads)
             and (
@@ -327,7 +238,6 @@ def create_app(
             and not lane_expired
             and not lane_unresolved
             and not expired_executor_leases
-            and not backlog_stale
         )
         content: dict[str, object] = {
             "schemaVersion": "seektalent.execution-readiness.v1",
@@ -338,8 +248,6 @@ def create_app(
                 if app.state.wtscli_lifecycle_supervisor is None
                 else app.state.wtscli_lifecycle_supervisor.health_snapshot()
             ),
-            "oldestBacklogAt": oldest_backlog_at,
-            "backlogStale": backlog_stale,
             "expiredExecutorLeaseCount": len(
                 expired_executor_leases
             ),
@@ -358,9 +266,6 @@ def create_app(
         }
         return JSONResponse(status_code=200 if ready else 503, content=content)
 
-    app.include_router(workbench_routes.router)
-    app.include_router(agent_routes.router)
-    app.include_router(agent_workbench_routes.router)
     app.include_router(agent_workbench_v2_routes.router)
     app.include_router(event_routes.router)
     app.include_router(create_liepin_router(settings=app_settings))
@@ -381,15 +286,10 @@ def create_app(
                 content=problem.model_dump(mode="json", exclude_none=True),
             )
         if _request.url.path.startswith("/api/agent"):
-            schema_version = (
-                agent_routes.AGENT_MEMORY_SCHEMA_VERSION
-                if _request.url.path.startswith("/api/agent/memory")
-                else agent_routes.AGENT_CONVERSATION_SCHEMA_VERSION
-            )
             return JSONResponse(
                 status_code=400,
                 content={
-                    "schemaVersion": schema_version,
+                    "schemaVersion": "agent.workbench.v2",
                     "reasonCode": "agent_request_invalid",
                     "errors": validation_errors.public_validation_errors(exc),
                 },
@@ -403,9 +303,9 @@ def create_app(
             if "type" in content:
                 return no_store_json_response(status_code=exc.status_code, content=content)
             return JSONResponse(status_code=exc.status_code, content={"detail": content})
-        if _request.url.path.startswith("/api/agent") and isinstance(exc.detail, dict):
+        if _request.url.path.startswith("/api/agent/workbench/v2") and isinstance(exc.detail, dict):
             content = dict(exc.detail)
-            if _request.url.path.startswith("/api/agent/workbench") and "type" in content:
+            if "type" in content:
                 return no_store_json_response(status_code=exc.status_code, content=content)
             return JSONResponse(status_code=exc.status_code, content=content)
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
@@ -419,8 +319,6 @@ def create_app(
 
 @asynccontextmanager
 async def _lifespan(app: FastAPI):
-    runner = getattr(app.state, "workflow_start_outbox_runner", None)
-    extraction_runner = getattr(app.state, "requirement_extraction_outbox_runner", None)
     runtime_runner = getattr(app.state, "workbench_v2_runtime_runner", None)
     wtscli_supervisor: WtsCliLifecycleSupervisor | None = getattr(
         app.state,
@@ -439,20 +337,11 @@ async def _lifespan(app: FastAPI):
                 )
         if runtime_runner is not None:
             runtime_runner.start()
-        if runner is not None:
-            runner.start()
-            runner.wake()
-        if extraction_runner is not None:
-            extraction_runner.start()
         yield
     finally:
         body_error = sys.exception()
         cleanup_errors: list[Exception] = []
-        for name, lifespan_runner in (
-            ("requirement extraction runner", extraction_runner),
-            ("workflow start runner", runner),
-            ("Workbench v2 runtime runner", runtime_runner),
-        ):
+        for name, lifespan_runner in (("Workbench v2 runtime runner", runtime_runner),):
             if lifespan_runner is None:
                 continue
             try:
@@ -470,21 +359,6 @@ async def _lifespan(app: FastAPI):
             if len(cleanup_errors) == 1:
                 raise cleanup_errors[0]
             raise ExceptionGroup("application lifespan cleanup failed", cleanup_errors)
-
-
-def _runtime_factory_with_supervisor(
-    runtime_factory: Callable[..., object],
-    settings: AppSettings,
-    supervisor: WtsCliLifecycleSupervisor | None,
-) -> object:
-    if supervisor is None:
-        return runtime_factory(settings)
-    if runtime_factory is not build_source_enabled_runtime:
-        return runtime_factory(settings)
-    return runtime_factory(
-        settings,
-        wtscli_lifecycle_supervisor=supervisor,
-    )
 
 
 def _install_custom_openapi(app: FastAPI) -> None:

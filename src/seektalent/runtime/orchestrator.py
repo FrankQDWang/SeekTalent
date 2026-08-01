@@ -109,6 +109,7 @@ from seektalent.models import (
     scored_candidate_sort_key,
     unique_strings,
 )
+from seektalent_runtime_control.browser_lane import BrowserLaneBusyError
 from seektalent.normalization import normalize_resume
 from seektalent.prompting import PromptRegistry
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
@@ -1116,6 +1117,10 @@ class WorkflowRuntime:
                 source_coverage_summary=run_state.source_coverage_summary,
                 run_state=run_state,
             )
+        except BrowserLaneBusyError:
+            close_status = "failed"
+            close_failure_summary = "liepin_browser_lane_reconciliation_required"
+            raise
         except Exception as exc:  # noqa: BLE001
             stage = exc.stage if isinstance(exc, RunStageError) else "runtime"
             close_status = "failed"

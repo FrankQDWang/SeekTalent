@@ -59,8 +59,6 @@ module-name = [
     "seektalent",
     "seektalent_ui",
     "seektalent_runtime_control",
-    "seektalent_conversation_agent",
-    "seektalent_agent_memory",
     "seektalent_workbench_v2",
 ]
 
@@ -82,7 +80,6 @@ check-typed-exception = true
 "src/seektalent_runtime_control/browser_lane.py" = ["BLE001"]
 "src/seektalent_runtime_control/executor.py" = ["BLE001"]
 "src/seektalent_runtime_control/worker.py" = ["BLE001"]
-"src/seektalent_ui/workflow_start_outbox_runner.py" = ["BLE001"]
 "src/seektalent_workbench_v2/runtime_runner.py" = ["BLE001"]
 
 [[tool.ty.overrides]]

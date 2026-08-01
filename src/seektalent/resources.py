@@ -12,7 +12,6 @@ REQUIRED_PROMPTS = (
     "finalize",
     "judge",
     "tui_summary",
-    "conversation_agent",
     "candidate_feedback",
     "prf_probe_phrase_proposal",
     "workbench_note_writer",

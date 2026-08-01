@@ -262,7 +262,7 @@ def test_mutating_prepare_connects_daemon_before_full_environment_probe(
     monkeypatch.setattr(gate_module, "_check_environment", full_environment_probe)
     monkeypatch.setattr(
         gate_module,
-        "create_wtscli_verify_session_effect",
+        "run_wtscli_verify_session_effect",
         lambda **_kwargs: (
             events.append("effect"),
             lambda _request, _deadline: VerifySessionResultV1.model_validate(

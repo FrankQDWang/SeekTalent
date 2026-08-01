@@ -17,7 +17,6 @@ from seektalent_runtime_control.models import RuntimeCheckpoint, RuntimeRunRecor
 from seektalent_runtime_control.recovery import RuntimeRecoveryService
 from seektalent_runtime_control.requirements import ApprovedRequirementRevision
 from seektalent_runtime_control.store import RuntimeControlStore
-from seektalent_ui.server import _lifespan
 from seektalent_workbench_v2.runtime_runner import WorkbenchV2RuntimeQueueRunner
 
 
@@ -166,75 +165,6 @@ class _BlockingClaimLock:
 
     def __exit__(self, *args: object) -> None:
         self.release()
-
-
-def test_lifespan_starts_runtime_runner_and_stops_in_reverse_producer_order() -> None:
-    calls: list[str] = []
-    app = _lifespan_app(calls)
-
-    async def scenario() -> None:
-        async with _lifespan(app):  # type: ignore[arg-type]
-            calls.append("yield")
-
-    asyncio.run(scenario())
-
-    assert calls == [
-        "runtime.start",
-        "workflow.start",
-        "workflow.wake",
-        "extraction.start",
-        "yield",
-        "extraction.stop",
-        "workflow.stop",
-        "runtime.stop",
-    ]
-
-
-def test_lifespan_preserves_body_error_when_cleanup_also_fails(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    calls: list[str] = []
-    app = _lifespan_app(calls, stop_errors={"extraction": RuntimeError("extraction stop failed")})
-
-    async def scenario() -> None:
-        with caplog.at_level(logging.ERROR, logger="seektalent_ui.server"):
-            with pytest.raises(RuntimeError, match="lifespan failed"):
-                async with _lifespan(app):  # type: ignore[arg-type]
-                    raise RuntimeError("lifespan failed")
-
-    asyncio.run(scenario())
-
-    assert calls[-3:] == ["extraction.stop", "workflow.stop", "runtime.stop"]
-    assert "requirement extraction runner failed during application lifespan cleanup" in caplog.text
-
-
-def test_lifespan_attempts_all_cleanup_and_propagates_cleanup_errors(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    calls: list[str] = []
-    app = _lifespan_app(
-        calls,
-        stop_errors={
-            "extraction": RuntimeError("extraction stop failed"),
-            "workflow": ValueError("workflow stop failed"),
-        },
-    )
-
-    async def scenario() -> None:
-        with caplog.at_level(logging.ERROR, logger="seektalent_ui.server"):
-            with pytest.raises(ExceptionGroup) as exc_info:
-                async with _lifespan(app):  # type: ignore[arg-type]
-                    calls.append("yield")
-        assert [str(error) for error in exc_info.value.exceptions] == [
-            "extraction stop failed",
-            "workflow stop failed",
-        ]
-
-    asyncio.run(scenario())
-
-    assert calls[-3:] == ["extraction.stop", "workflow.stop", "runtime.stop"]
-    assert "requirement extraction runner failed during application lifespan cleanup" in caplog.text
-    assert "workflow start runner failed during application lifespan cleanup" in caplog.text
 
 
 def test_cold_sqlite_queue_is_consumed_without_route_wake(tmp_path) -> None:

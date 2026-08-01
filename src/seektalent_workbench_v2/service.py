@@ -507,6 +507,17 @@ class WorkbenchV2Service:
                 ),
             )
             return self.get_conversation(conversation_id)
+        except RuntimeControlError as exc:
+            if str(exc) != "liepin_browser_lane_reconciliation_required":
+                raise
+            self._append_service_error(
+                conversation_id,
+                code="liepin_browser_lane_reconciliation_required",
+                message="上一轮猎聘浏览器操作正在等待对账；请等待对账或联系支持，不要重试。",
+                scope=scope,
+                idempotency_key=idempotency_key,
+            )
+            return self.get_conversation(conversation_id)
         except SERVICE_BOUNDARY_ERRORS:
             self._append_service_error(
                 conversation_id,
@@ -1374,6 +1385,18 @@ class WorkbenchV2Service:
                 selected_item_ids=selected_item_ids,
                 deselected_item_ids=deselected_item_ids,
             )
+        except RuntimeControlError as exc:
+            if str(exc) != "liepin_browser_lane_reconciliation_required":
+                raise
+            self._append_service_error(
+                conversation_id,
+                code="liepin_browser_lane_reconciliation_required",
+                message="上一轮猎聘浏览器操作正在等待对账；请等待对账或联系支持，不要重试。",
+                scope=scope,
+                idempotency_key=idempotency_key,
+                action_digest=action_digest,
+            )
+            return
         except SERVICE_BOUNDARY_ERRORS:
             self._append_runtime_start_failed_error(
                 conversation_id,

@@ -263,6 +263,7 @@ class WorkbenchV2RuntimeService:
         selected_item_ids: list[str] | None = None,
         deselected_item_ids: list[str] | None = None,
     ) -> RuntimeRunRecord:
+        self._ensure_browser_lane_admissible()
         job_title, jd_text, notes = _runtime_input_values(runtime_input)
         created_at = self.now()
         operation_key = _start_operation_key(conversation_id=conversation_id, idempotency_key=idempotency_key)
@@ -313,6 +314,19 @@ class WorkbenchV2RuntimeService:
         if run.status in {"queued", "resume_requested"} and self.on_run_queued is not None:
             self.on_run_queued(run.runtime_run_id)
         return run
+
+    def _ensure_browser_lane_admissible(self) -> None:
+        lane = self.store.get_browser_lane()
+        if lane is None or lane.status != "active":
+            return
+        if lane.last_failure_code != "liepin_browser_lane_reconciliation_required":
+            return
+        if lane.lease_expires_at is None:
+            return
+        if lane.lease_expires_at <= self.now():
+            raise RuntimeControlError(
+                "liepin_browser_lane_reconciliation_required"
+            )
 
     def start_run_from_runtime_input(
         self,
