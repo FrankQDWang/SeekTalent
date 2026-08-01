@@ -100,6 +100,8 @@ Default to pragmatic simplicity, but do not preserve experimental-stage shortcut
 - Tests should track real behavior, not ceremony.
 - Do not make risky changes to important paths without verification.
 - If code is stable and correct, do not churn it for style alone.
+- Before publishing code changes, run `scripts/verify-local-quality.sh` and the relevant focused tests locally.
+- For native delivery changes, run `scripts/verify-native-macos-arm64.sh` on the Apple Silicon development host; GitHub supplies the Windows x64 and macOS Intel evidence that is unavailable locally.
 
 ## Complexity Discipline
 - Reduce unnecessary layers, wrappers, and indirection aggressively.

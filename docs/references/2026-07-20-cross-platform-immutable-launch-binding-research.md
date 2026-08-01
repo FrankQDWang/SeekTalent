@@ -55,7 +55,7 @@ This spike must not weaken the existing properties: main-owned direct child, thr
 **Engineering inference.** GitHub-hosted machines are appropriate for:
 
 - a manually dispatched one-time native probe that captures OS version, filesystem type, architecture, compiler, every operation result, Win32 error/`errno`, and a bounded race-loop result;
-- a small deterministic required CI job that guards the chosen primitive on `windows-2025`, `macos-15-intel`, and arm64 macOS;
+- a small deterministic native gate that runs arm64 macOS locally and uses CI only for the unavailable `windows-2025` and `macos-15-intel` hosts;
 - repeating the probe whenever the runner image or minimum supported OS changes.
 
 They are not sufficient as the only release evidence because:
