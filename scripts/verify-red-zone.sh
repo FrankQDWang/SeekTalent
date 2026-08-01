@@ -9,7 +9,10 @@ uv run pytest \
   tests/test_runtime_audit.py \
   tests/test_runtime_source_lanes.py \
   tests/test_runtime_multi_source_round_dispatch.py \
-  tests/test_workbench_runtime_owned_execution.py \
+  tests/test_runtime_production_hard_cut.py \
+  tests/test_runtime_hard_cut_contract_red.py \
+  tests/test_workbench_v2_runtime_service.py \
+  tests/test_workbench_v2_runtime_runner.py \
   tests/test_liepin_runtime_source_lane.py \
   tests/test_liepin_opencli_retriever.py \
   tests/test_liepin_worker_client.py \

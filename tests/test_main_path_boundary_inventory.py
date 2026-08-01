@@ -7,21 +7,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 MAIN_PATH_BOUNDARY_INVENTORY = {
-    "workbench_routes": {
-        "path": Path("src/seektalent_ui/workbench_routes.py"),
-        "owns": "HTTP request validation and response projection for the local Workbench API.",
-        "must_not_import": {
-            "seektalent.providers.liepin.compliance",
-            "seektalent.providers.liepin.store",
-        },
+    "runtime_execution": {
+        "path": Path("src/seektalent_ui/runtime_execution.py"),
+        "owns": "The single production runtime-control store, command service, and executor composition.",
     },
-    "workbench_liepin_boundary": {
-        "path": Path("src/seektalent_ui/liepin_account_binding.py"),
-        "owns": "Workbench-owned Liepin compliance gate and account binding orchestration.",
-        "may_import": {
-            "seektalent.providers.liepin.compliance",
-            "seektalent.providers.liepin.store",
-        },
+    "workbench_v2_routes": {
+        "path": Path("src/seektalent_ui/agent_workbench_v2_routes.py"),
+        "owns": "The active V2 request boundary and typed response projection.",
     },
     "runtime_liepin_contract": {
         "path": Path("src/seektalent/runtime/source_lanes.py"),
@@ -44,17 +36,12 @@ def test_main_path_boundary_inventory_references_existing_files() -> None:
     assert missing == []
 
 
-def test_workbench_routes_does_not_import_liepin_provider_persistence() -> None:
-    route_path = ROOT / MAIN_PATH_BOUNDARY_INVENTORY["workbench_routes"]["path"]
-    forbidden = MAIN_PATH_BOUNDARY_INVENTORY["workbench_routes"]["must_not_import"]
-
-    offenders = [
-        f"{route_path.relative_to(ROOT)}:{line_no}:{module}"
-        for line_no, module in _imports(route_path)
-        if module in forbidden
-    ]
-
-    assert offenders == []
+def test_v2_routes_do_not_import_legacy_product_surfaces() -> None:
+    route_path = ROOT / MAIN_PATH_BOUNDARY_INVENTORY["workbench_v2_routes"]["path"]
+    source = route_path.read_text(encoding="utf-8")
+    assert "seektalent_conversation_agent" not in source
+    assert "seektalent_agent_memory" not in source
+    assert "workbench_routes" not in source
 
 
 def _imports(path: Path) -> list[tuple[int, str]]:

@@ -16,6 +16,8 @@ from seektalent.opencli_browser.contracts import (
     OpenCliBrowserError,
     OpenCliBrowserResult,
     OpenCliBrowserTiming,
+    OpenCliOwnedTab,
+    OpenCliTabKind,
 )
 from seektalent.opencli_browser.daemon_transport import OpenCliDaemonResult
 from seektalent.providers.liepin.liepin_opencli_policy import (
@@ -414,32 +416,164 @@ class FakeCommands:
 class FakeDaemon:
     def __init__(self, commands: FakeCommands) -> None:
         self.commands = commands
+        self._semantic_calls: dict[str, tuple[str, ...]] = {}
 
-    def command(self, _action: str, params: Mapping[str, object], *, timeout_seconds: float) -> OpenCliDaemonResult:
+    def verify_bridge(self, *, timeout_seconds: float = 2.0, validate: bool = True) -> Mapping[str, object]:
+        del timeout_seconds, validate
+        output = self.commands.run(
+            ("opencli", "daemon", "status"),
+            timeout=10,
+            env={"OPENCLI_WINDOW": "background"},
+        )
+        normalized = output.lower()
+        if "not running" in normalized:
+            raise OpenCliBrowserError("opencli_daemon_not_running")
+        if "stale" in normalized:
+            raise OpenCliBrowserError("opencli_daemon_stale")
+        if "disconnected" in normalized:
+            raise OpenCliBrowserError("opencli_extension_disconnected")
+        if "daemon: running" in normalized and "extension: connected" in normalized:
+            return {"ok": True, "extensionConnected": True}
+        raise OpenCliBrowserError("opencli_status_unavailable")
+
+    def close(self) -> None:
+        return None
+
+    def command(self, action: str, params: Mapping[str, object], *, timeout_seconds: float) -> OpenCliDaemonResult:
         del timeout_seconds
-        session = str(params.get("session", "seektalent-liepin"))
+        # The current transport carries the broker-scoped session; the legacy
+        # command trace used by these behavior assertions intentionally keeps
+        # the stable human-readable label.
+        session = "seektalent-liepin"
         operation = str(params.get("operation") or params.get("op") or "")
-        if operation in {"fill", "click"}:
-            argv = ("opencli", "browser", session, operation, str(params.get("target", "")), str(params.get("text", "")))
+        semantic = params.get("semantic")
+        if action == "control":
+            data: object = {"controlKey": params.get("controlKey"), "fenceToken": 1}
+            return OpenCliDaemonResult(command_id="fake", data=data, idle_deadline_at=123456)
+        if action == "tabs" and operation == "find":
+            listed = self.commands.outputs.get(("opencli", "browser", session, "tab", "list"), "[]")
+            if isinstance(listed, list):
+                listed = listed[0] if listed else "[]"
+            try:
+                tabs = json.loads(str(listed))
+            except json.JSONDecodeError:
+                tabs = []
+            if not isinstance(tabs, list) or not tabs:
+                tabs = [{"page": "page-host", "url": "https://h.liepin.com/", "active": True}]
+            candidates = [
+                {
+                    **item,
+                    "windowId": item.get("windowId", 1),
+                    "windowFocused": item.get("windowFocused", True),
+                }
+                for item in tabs
+                if isinstance(item, Mapping)
+            ]
+            return OpenCliDaemonResult(command_id="fake", data=candidates)
+        if action == "navigate":
+            argv = (
+                "opencli",
+                "browser",
+                session,
+                "open",
+                "--tab",
+                str(params.get("page", "")),
+                str(params.get("url", "")),
+            )
+        elif action == "tabs" and operation == "new":
+            argv = ("opencli", "browser", session, "tab", "new", str(params.get("url", "")))
+        elif operation in {"fill", "click"}:
+            target = str(params.get("target", ""))
+            argv = ("opencli", "browser", session, operation, target, str(params.get("text", "")))
+            if target in self._semantic_calls:
+                semantic_call = self._semantic_calls[target]
+                argv = semantic_call[:3] + (operation,) + semantic_call[4:]
+                if operation == "fill":
+                    argv += (str(params.get("text", "")),)
         elif operation in {"get-url", "state"}:
-            argv = ("opencli", "browser", session, "get" if operation == "get-url" else "state")
+            argv = ("opencli", "browser", session, "get", "url") if operation == "get-url" else (
+                "opencli", "browser", session, "state"
+            )
         elif operation in {"find-css", "find-semantic"}:
-            argv = ("opencli", "browser", session, "find", str(params.get("selector") or params.get("semantic") or ""))
+            argv = ("opencli", "browser", session, "find", str(params.get("selector") or semantic or ""))
         elif operation == "evaluate":
             argv = ("opencli", "browser", session, "eval", str(params.get("code", "")))
         elif "op" in params:
-            argv = ("opencli", "browser", session, "tab", operation, str(params.get("page", "")))
+            argv = ("opencli", "browser", session, "tab", operation)
+            if operation in {"select", "close"}:
+                argv += (str(params.get("page", "")),)
         else:
             argv = ("opencli", "browser", session, operation)
-        output = self.commands.run(argv, timeout=10)
+        output = self.commands.run(
+            argv,
+            timeout=10,
+            env={"OPENCLI_WINDOW": "background"},
+        )
+        if operation == "find-semantic":
+            ref = "1"
+            semantic_args = semantic if isinstance(semantic, Mapping) else {}
+            if semantic_args:
+                ref = str(len(self._semantic_calls) + 1)
+                semantic_call = ["opencli", "browser", session, "semantic"]
+                for key, value in semantic_args.items():
+                    semantic_call.extend((f"--{key}", str(value)))
+                self._semantic_calls[ref] = tuple(semantic_call)
+            try:
+                parsed = json.loads(output)
+            except json.JSONDecodeError:
+                parsed = None
+            if not isinstance(parsed, dict) or not isinstance(parsed.get("entries"), list):
+                output = json.dumps({"matches_n": 1, "entries": [{"ref": int(ref)}]})
         page = None
         try:
             parsed = json.loads(output)
             if isinstance(parsed, dict) and isinstance(parsed.get("page"), str):
                 page = parsed["page"]
         except json.JSONDecodeError:
-            pass
-        return OpenCliDaemonResult(command_id="fake", data=output, page=page)
+            data = output
+        idle_deadline_at = 123456 if page is not None else None
+        try:
+            data = json.loads(output)
+        except json.JSONDecodeError:
+            data = output
+        if action == "tabs" and operation == "list" and isinstance(data, list):
+            if not data:
+                data = []
+            liepin_tabs = [
+                item
+                for item in data
+                if isinstance(item, Mapping)
+                and str(item.get("url", "")).startswith(("https://h.liepin.com", "https://www.liepin.com"))
+            ]
+            if liepin_tabs:
+                data = liepin_tabs
+            data = [
+                {**item, "active": False}
+                if isinstance(item, Mapping) and "active" not in item
+                else item
+                for item in data
+            ]
+            if len(data) == 1 and isinstance(data[0], Mapping) and isinstance(data[0].get("page"), str):
+                self.commands.calls.append(
+                    ("opencli", "browser", session, "tab", "select", data[0]["page"])
+                )
+        elif action == "tabs" and operation == "list" and not isinstance(data, list):
+            data = []
+        if action == "tabs" and operation == "new" and isinstance(data, Mapping):
+            data = {**data, "active": False, "placement": "borrowed-host-window"}
+        return OpenCliDaemonResult(command_id="fake", data=data, page=page, idle_deadline_at=idle_deadline_at)
+
+
+class _TestAutomation(OpenCliBrowserAutomation):
+    def select_owned_tab(
+        self,
+        tab_kind: OpenCliTabKind,
+        *,
+        session: str | None = None,
+    ) -> OpenCliOwnedTab | None:
+        if self._control_scope is None:
+            self.activate_control_scope("test-control")
+        return super().select_owned_tab(tab_kind, session=session)
 
 
 class EvalCommands(FakeCommands):
@@ -527,14 +661,38 @@ def _runner(
         detail_open_timeout_seconds=detail_open_timeout_seconds,
         search_navigation_timeout_seconds=search_navigation_timeout_seconds,
     )
-    return LiepinSiteAdapter(
+    automation = _TestAutomation(
+        config=browser_config,
+        daemon=FakeDaemon(commands),
+    )
+    runner = LiepinSiteAdapter(
         browser_config=browser_config,
         site_config=site_config,
-            automation=OpenCliBrowserAutomation(
-                config=browser_config,
-                daemon=FakeDaemon(commands),
-            ),
+        automation=automation,
     )
+    runner._host_page_id = "page-host"  # type: ignore[attr-defined]
+
+    def execute_cards(**kwargs: object) -> tuple[dict[str, object], dict[str, object]]:
+        envelope = runner._search_liepin_cards_once(  # type: ignore[attr-defined]
+            source_run_id=str(kwargs["source_run_id"]),
+            query=str(kwargs["query"]),
+            max_pages=int(kwargs["max_pages"]),
+            max_cards=int(kwargs["max_cards"]),
+            native_filters=kwargs.get("native_filters"),
+            recovering_search_surface=False,
+        )
+        structured: dict[str, object] = {
+            "ok": "safe_reason_code" not in envelope,
+            "action": "extract_structured_liepin_cards",
+            "counts": envelope.get("counts", {}),
+            "observation": envelope.get("observation", {}),
+        }
+        if isinstance(envelope.get("safe_reason_code"), str):
+            structured["safe_reason_code"] = envelope["safe_reason_code"]
+        return envelope, structured
+
+    runner._cards_operation_executor = execute_cards  # type: ignore[attr-defined]
+    return runner
 
 
 def test_liepin_opencli_timing_recorder_skips_prod_artifact(tmp_path: Path) -> None:

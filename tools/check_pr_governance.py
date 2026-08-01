@@ -192,9 +192,9 @@ MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID = {
     "react-agent-workbench-rebuild-2026-06": (
         "scripts/verify-dev-workbench.sh",
         "uv run python scripts/build_packaged_workbench.py",
-        "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py -q -p no:cacheprovider",
+        "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_runtime_hard_cut_contract_red.py tests/test_workbench_v2_routes.py -q -p no:cacheprovider",
         "pnpm --dir apps/web-react check",
-        "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run",
+        "CI=1 pnpm --dir apps/web-react test -- --runInBand",
     ),
 }
 MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_LAYER = {

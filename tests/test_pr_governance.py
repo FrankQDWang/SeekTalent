@@ -101,17 +101,16 @@ def _major_refactor_goal_payload(
         "uv run python scripts/build_packaged_workbench.py",
         (
             "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest "
-            "tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py "
+            "tests/test_runtime_hard_cut_contract_red.py tests/test_workbench_v2_routes.py "
             "-q -p no:cacheprovider"
         ),
         (
             "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest "
-            "tests/test_agent_workbench_contract.py -q -p no:cacheprovider"
+            "tests/test_runtime_production_hard_cut.py -q -p no:cacheprovider"
         ),
         "pnpm --dir apps/web-react check",
         (
-            "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts "
-            "src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run"
+            "CI=1 pnpm --dir apps/web-react test -- --runInBand"
         ),
     ]
     default_verification = (
@@ -207,8 +206,8 @@ def test_classify_path_red_provider_registry() -> None:
     assert classify_path("src/seektalent/providers/registry.py") == "red"
 
 
-def test_classify_path_yellow_workbench_route() -> None:
-    assert classify_path("src/seektalent_ui/workbench_routes.py") == "yellow"
+def test_classify_path_yellow_workbench_v2_route() -> None:
+    assert classify_path("src/seektalent_ui/agent_workbench_v2_routes.py") == "yellow"
 
 
 def test_classify_path_green_docs() -> None:
@@ -451,7 +450,7 @@ def test_evaluate_changed_files_allows_valid_security_remediation_manifest(tmp_p
         manifest_path,
         "src/seektalent/providers/liepin/store.py",
         "src/seektalent/providers/liepin/security.py",
-        "src/seektalent_ui/workbench_routes.py",
+        "src/seektalent_ui/agent_workbench_v2_routes.py",
     ]
     manifest = tmp_path / manifest_path
     manifest.parent.mkdir(parents=True)
@@ -586,18 +585,18 @@ def test_evaluate_changed_files_allows_valid_red_zone_review_manifest(tmp_path: 
     assert result.ok
 
 
-def test_evaluate_changed_files_blocks_red_zone_review_missing_red_file(tmp_path: Path) -> None:
+def test_evaluate_changed_files_blocks_unreviewed_red_zone_file(tmp_path: Path) -> None:
     manifest_path = "docs/governance/red-zone/2026-06-01-runtime-graph-sections.json"
     _write_json(
         tmp_path / manifest_path,
-        _red_zone_review_payload(red_files=["src/seektalent_ui/runtime_graph.py"]),
+        _red_zone_review_payload(red_files=["src/seektalent/runtime/orchestrator.py"]),
     )
 
     result = evaluate_changed_files(
         [
             manifest_path,
-            "src/seektalent_ui/runtime_graph.py",
-            "src/seektalent_ui/workbench_store.py",
+            "src/seektalent/runtime/orchestrator.py",
+            "src/seektalent_ui/runtime_execution.py",
         ],
         max_files=15,
         max_layers=1,
@@ -605,7 +604,7 @@ def test_evaluate_changed_files_blocks_red_zone_review_missing_red_file(tmp_path
     )
 
     assert not result.ok
-    assert any("red-zone review manifest does not cover red-zone files" in message for message in result.messages)
+    assert any("red-zone files touched" in message for message in result.messages)
 
 
 def test_evaluate_changed_files_blocks_red_zone_review_for_governance_changes(tmp_path: Path) -> None:
@@ -696,8 +695,8 @@ def test_evaluate_changed_files_allows_source_decoupling_major_refactor_manifest
             "scripts/verify-source-decoupling.sh",
             "tach.toml",
             "src/seektalent/sources/contracts.py",
-            "src/seektalent_ui/workbench_routes.py",
-            "apps/web-react/src/lib/stream/agentStream.ts",
+            "src/seektalent_ui/agent_workbench_v2_routes.py",
+            "apps/web-react/src/lib/api/workbenchV2Client.ts",
             "apps/web-react/src/components/workbench/CandidateQueue.tsx",
             "docs/architecture.md",
             "docs/source-contracts.md",

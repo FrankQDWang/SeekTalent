@@ -14,8 +14,8 @@ Red-zone paths require owner review and focused verification:
 - `src/seektalent/prompts/**`
 - `src/seektalent/providers/**`
 - `src/seektalent/core/retrieval/**`
-- `src/seektalent_ui/workbench_store.py`
-- `src/seektalent_ui/runtime_bridge.py`
+- `src/seektalent_ui/runtime_execution.py`
+- `src/seektalent_runtime_control/**`
 - `.github/**`
 - `tools/**`
 - `scripts/verify-dev-workbench.sh`
@@ -24,10 +24,9 @@ Red-zone paths require owner review and focused verification:
 Yellow-zone paths may be delegated, but require contract tests and Workbench verification:
 
 - `src/seektalent_ui/server.py`
-- `src/seektalent_ui/workbench_routes.py`
+- `src/seektalent_ui/agent_workbench_v2_routes.py`
 - `src/seektalent_ui/models.py`
-- `src/seektalent_ui/job_runner.py`
-- `src/seektalent_ui/*projection*.py`
+- `src/seektalent_ui/workbench_v2_runtime_*.py`
 - `apps/web-react/src/lib/api/schema.d.ts`
 - Workbench graph, note, candidate, and source-card projections
 

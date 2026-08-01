@@ -109,7 +109,7 @@ from seektalent.models import (
     scored_candidate_sort_key,
     unique_strings,
 )
-from seektalent_runtime_control.browser_lane import BrowserLaneBusyError
+from seektalent.runtime.errors import BrowserLaneBusyError
 from seektalent.normalization import normalize_resume
 from seektalent.prompting import PromptRegistry
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger

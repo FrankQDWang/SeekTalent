@@ -15,6 +15,7 @@ from typing import Literal, Protocol
 from uuid import uuid4
 
 from seektalent_runtime_control.errors import RuntimeControlError
+from seektalent.runtime.errors import BrowserLaneBusyError
 
 
 logger = logging.getLogger(__name__)
@@ -114,10 +115,6 @@ class BrowserLaneSnapshot:
     released_at: str | None
     last_failure_code: str | None
     updated_at: str
-
-
-class BrowserLaneBusyError(RuntimeError):
-    pass
 
 
 class BrowserLaneStore(Protocol):

@@ -31,7 +31,7 @@ def test_pull_request_workbench_frontend_change_runs_workbench_contract() -> Non
 
 
 def test_pull_request_workbench_backend_change_runs_workbench_contract() -> None:
-    scope = classify_paths(["src/seektalent_ui/workbench_routes.py"], event_name="pull_request")
+    scope = classify_paths(["src/seektalent_ui/agent_workbench_v2_routes.py"], event_name="pull_request")
 
     assert scope.python_quality
     assert scope.workbench_contract
@@ -47,8 +47,8 @@ def test_pull_request_runtime_control_change_runs_workbench_contract() -> None:
 def test_pull_request_react_workbench_gate_change_runs_workbench_contract() -> None:
     scope = classify_paths(
         [
-            "tools/check_react_workbench_cutover.py",
-            "tests/test_react_workbench_cutover_gate.py",
+            "tests/test_workbench_v2_routes.py",
+            "tools/check_pr_governance.py",
         ],
         event_name="pull_request",
     )
