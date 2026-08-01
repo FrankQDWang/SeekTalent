@@ -5,7 +5,7 @@ import logging
 import os
 import secrets
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -37,7 +37,6 @@ from seektalent_workbench_v2.service import WorkbenchV2Service
 from seektalent_workbench_v2.store import WorkbenchV2Store
 from seektalent_ui import (
     agent_workbench_v2_routes,
-    event_routes,
     validation_errors,
 )
 from seektalent_ui.liepin_routes import create_liepin_router
@@ -71,7 +70,6 @@ def create_app(
     network_guard: NetworkGuard | None = None,
     dev_mode_env_diagnostics: DevModeStatus | None = None,
     serve_frontend: bool = False,
-    workbench_note_writer_agent_factory: Callable[[], object] | None = None,
 ) -> FastAPI:
     app_settings = settings or AppSettings()
     reject_unsafe_liepin_control_plane(app_settings)
@@ -100,9 +98,6 @@ def create_app(
     )
     app.state.workbench_v2_store.initialize()
     app.state.workbench_v2_requirement_extractor = execution.requirement_extractor
-    def workbench_v2_runtime_factory() -> object:
-        return runtime_factory(app_settings)
-
     app.state.runtime_command_service = command_service
     app.state.workbench_v2_runtime_executor = runtime_executor
     app.state.workbench_v2_runtime_runner = WorkbenchV2RuntimeQueueRunner(
@@ -116,13 +111,11 @@ def create_app(
             store=runtime_control_store,
             requirement_extractor=app.state.workbench_v2_requirement_extractor,
             settings=app_settings,
-            runtime_factory=workbench_v2_runtime_factory,
             executor=runtime_executor,
             command_service=command_service,
             on_run_queued=app.state.workbench_v2_runtime_runner.wake,
         ),
     )
-    app.state.workbench_job_runner = None
     app.state.network_guard = network_guard
 
     @app.middleware("http")
@@ -267,7 +260,6 @@ def create_app(
         return JSONResponse(status_code=200 if ready else 503, content=content)
 
     app.include_router(agent_workbench_v2_routes.router)
-    app.include_router(event_routes.router)
     app.include_router(create_liepin_router(settings=app_settings))
 
     @app.exception_handler(RequestValidationError)
@@ -303,11 +295,6 @@ def create_app(
             if "type" in content:
                 return no_store_json_response(status_code=exc.status_code, content=content)
             return JSONResponse(status_code=exc.status_code, content={"detail": content})
-        if _request.url.path.startswith("/api/agent/workbench/v2") and isinstance(exc.detail, dict):
-            content = dict(exc.detail)
-            if "type" in content:
-                return no_store_json_response(status_code=exc.status_code, content=content)
-            return JSONResponse(status_code=exc.status_code, content=content)
         return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
     if serve_frontend:

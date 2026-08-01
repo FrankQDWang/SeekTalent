@@ -10,10 +10,6 @@ IMAGE_ASSET_SUFFIXES = {".jpeg", ".jpg", ".png", ".webp"}
 SUPPLEMENTAL_VISUAL_OWNERS = {
     "StrategyGraphCanvas/LargeSearchStrategy": "workbench-strategy-graph-large"
 }
-LEGACY_STORY_FIXTURE_IMPORTS = (
-    'from "../../test/fixtures/agentWorkbench"',
-    'from "../../test/fixtures/agentWorkbenchStates"',
-)
 
 
 @dataclass(frozen=True)
@@ -195,16 +191,6 @@ def collect_violations(root: Path) -> list[AcceptanceViolation]:
                     value=screenshot_owner,
                 )
             )
-    for path in (root / "apps/web-react/src/components").glob("**/*.stories.tsx"):
-        text = path.read_text(encoding="utf-8")
-        for legacy_import in LEGACY_STORY_FIXTURE_IMPORTS:
-            if legacy_import in text:
-                violations.append(
-                    AcceptanceViolation(
-                        reason="Storybook story imports legacy design fixture directly",
-                        value=path.relative_to(root).as_posix(),
-                    )
-                )
     return violations
 
 

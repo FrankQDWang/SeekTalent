@@ -1,17 +1,19 @@
 import { AlertTriangle, LockKeyhole, RefreshCw, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 import type {
-  AgentWorkbenchCandidateDetailResponse,
-  AgentWorkbenchCandidateSummary,
-} from "../../lib/api/agentWorkbenchTypes";
+  WorkbenchV2CandidateDetail,
+  WorkbenchV2CandidateSummary,
+} from "../../lib/api/workbenchV2Types";
 import { Button } from "../primitives/Button";
 import "./CandidateDetailDrawer.css";
 
 type CandidateDetailDrawerStatus = "idle" | "loading" | "error" | "ready";
+type AgentWorkbenchCandidateDetailResponse = WorkbenchV2CandidateDetail;
+type AgentWorkbenchCandidateSummary = WorkbenchV2CandidateSummary;
 
 type CandidateDetailDrawerProps = {
-  candidate?: AgentWorkbenchCandidateSummary | null;
-  detail?: AgentWorkbenchCandidateDetailResponse | null;
+  candidate?: WorkbenchV2CandidateSummary | null;
+  detail?: WorkbenchV2CandidateDetail | null;
   errorMessage?: string | undefined;
   onClose: () => void;
   onRetry?: (() => void) | undefined;
@@ -222,7 +224,7 @@ function CandidateDetailError({
 function CandidateDetailBody({
   detail,
 }: {
-  detail: AgentWorkbenchCandidateDetailResponse;
+  detail: WorkbenchV2CandidateDetail;
 }) {
   const access = accessStateCopy(detail.accessState, detail.reasonCode);
   const sections = buildStructuredSections(detail);

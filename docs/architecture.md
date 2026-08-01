@@ -24,7 +24,8 @@ flowchart LR
 
     cli --> api
     api --> runtime["WorkflowRuntime\nruntime/orchestrator.py"]
-    uiapi --> agent["ConversationAgentService\nseektalent_conversation_agent"]
+    uiapi --> v2["WorkbenchV2Service"]
+    v2 --> execution["RuntimeExecutionBundle\nstore + command service + executor"]
     agent --> control["RuntimeControlStore\nruntime_control.sqlite3"]
     control --> worker["RuntimeExecutionWorker"]
     worker --> runtime

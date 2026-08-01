@@ -2,12 +2,12 @@ import { cleanup, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it } from "vitest";
 import type {
-  AgentWorkbenchCandidateSummary,
-  AgentWorkbenchThinkingProcess,
-} from "../../lib/api/agentWorkbenchTypes";
+  WorkbenchV2CandidateSummary,
+  WorkbenchV2ThinkingProcess,
+} from "../../lib/api/workbenchV2Types";
 import { ThinkingProcessRail } from "./ThinkingProcessRail";
 
-const thinkingProcess: AgentWorkbenchThinkingProcess = {
+const thinkingProcess: WorkbenchV2ThinkingProcess = {
   activeRoundNo: 1,
   rounds: [
     {
@@ -73,9 +73,9 @@ const thinkingProcess: AgentWorkbenchThinkingProcess = {
       ],
     },
   ],
-} as AgentWorkbenchThinkingProcess;
+} as WorkbenchV2ThinkingProcess;
 
-const candidates: AgentWorkbenchCandidateSummary[] = [
+const candidates: WorkbenchV2CandidateSummary[] = [
   {
     candidateId: "candidate_001",
     rank: 1,

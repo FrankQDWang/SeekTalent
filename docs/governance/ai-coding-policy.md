@@ -16,8 +16,6 @@ Red-zone paths require owner review and focused verification:
 - `src/seektalent/core/retrieval/**`
 - `src/seektalent_ui/workbench_store.py`
 - `src/seektalent_ui/runtime_bridge.py`
-- `src/seektalent_ui/runtime_graph.py`
-- `src/seektalent_conversation_agent/**`
 - `.github/**`
 - `tools/**`
 - `scripts/verify-dev-workbench.sh`

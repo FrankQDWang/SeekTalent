@@ -2,11 +2,11 @@ import { BrainCircuit, UsersRound } from "lucide-react";
 import type { ReactNode } from "react";
 import { useId, useState } from "react";
 import type {
-  AgentWorkbenchCandidateSummary,
-  AgentWorkbenchThinkingProcess,
-  AgentWorkbenchQueryGroup,
-  AgentWorkbenchThinkingProcessRound,
-} from "../../lib/api/agentWorkbenchTypes";
+  WorkbenchV2CandidateSummary,
+  WorkbenchV2ThinkingProcess,
+  WorkbenchV2QueryGroup,
+  WorkbenchV2ThinkingProcessRound,
+} from "../../lib/api/workbenchV2Types";
 import { Tabs } from "../primitives/Tabs";
 import { CandidateQueue } from "./CandidateQueue";
 import "./ThinkingProcessRail.css";
@@ -14,11 +14,11 @@ import "./ThinkingProcessRail.css";
 type ThinkingProcessRailTab = "candidates" | "thinking";
 
 type ThinkingProcessRailProps = {
-  candidates: readonly AgentWorkbenchCandidateSummary[];
+  candidates: readonly WorkbenchV2CandidateSummary[];
   defaultTab?: ThinkingProcessRailTab;
   onViewCandidateDetails?: ((candidateId: string) => void) | undefined;
   selectedCandidateId?: string | null | undefined;
-  thinkingProcess: AgentWorkbenchThinkingProcess;
+  thinkingProcess: WorkbenchV2ThinkingProcess;
 };
 
 const tabLabels: Record<ThinkingProcessRailTab, string> = {
@@ -94,7 +94,7 @@ export function ThinkingProcessRail({
 function ThinkingTimeline({
   thinkingProcess,
 }: {
-  thinkingProcess: AgentWorkbenchThinkingProcess;
+  thinkingProcess: WorkbenchV2ThinkingProcess;
 }) {
   if (thinkingProcess.rounds.length === 0) {
     return (
@@ -122,7 +122,7 @@ function ThinkingRound({
   round,
 }: {
   active: boolean;
-  round: AgentWorkbenchThinkingProcessRound;
+  round: WorkbenchV2ThinkingProcessRound;
 }) {
   return (
     <article className="thinking-round" data-active={active ? "true" : "false"}>
@@ -162,7 +162,7 @@ function QueryGroups({
   queryGroups,
   roundNo,
 }: {
-  queryGroups: readonly AgentWorkbenchQueryGroup[];
+  queryGroups: readonly WorkbenchV2QueryGroup[];
   roundNo: number;
 }) {
   const paths = selectQueryPaths(queryGroups, roundNo);
@@ -179,7 +179,7 @@ function QueryGroups({
 }
 
 function selectQueryPaths(
-  queryGroups: readonly AgentWorkbenchQueryGroup[],
+  queryGroups: readonly WorkbenchV2QueryGroup[],
   roundNo: number,
 ) {
   const main = queryGroups.find(({ laneType }) => laneType === "exploit");

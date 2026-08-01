@@ -70,7 +70,6 @@ class DatabaseGroupBackupResult:
 def product_database_specs(settings: AppSettings) -> tuple[ProductDatabaseSpec, ...]:
     workspace_root = settings.project_root
     return (
-        ProductDatabaseSpec("workbench", workspace_root / ".seektalent" / "workbench.sqlite3"),
         ProductDatabaseSpec("workbench_v2", workspace_root / ".seektalent" / "workbench_v2.sqlite3"),
         ProductDatabaseSpec("runtime_control", settings.runtime_control_path),
         ProductDatabaseSpec("liepin", settings.resolve_workspace_path(settings.liepin_connector_db_path)),

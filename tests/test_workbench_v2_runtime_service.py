@@ -2044,6 +2044,9 @@ def _service_with_store(
     **kwargs: object,
 ) -> WorkbenchV2RuntimeService:
     resolved_runtime_factory = runtime_factory or (lambda: object())
+    resolved_requirement_extractor = requirement_extractor
+    if resolved_requirement_extractor is None and runtime_factory is not None:
+        resolved_requirement_extractor = runtime_factory()
     resolved_now = now or (lambda: NOW)
     executor = WorkflowRuntimeExecutor(
         store=store,
@@ -2058,8 +2061,7 @@ def _service_with_store(
     )
     return WorkbenchV2RuntimeService(
         store=store,
-        requirement_extractor=requirement_extractor,
-        runtime_factory=resolved_runtime_factory,  # type: ignore[arg-type]
+        requirement_extractor=resolved_requirement_extractor,
         executor=executor,
         command_service=command_service,
         runtime_run_id_factory=runtime_run_id_factory,  # type: ignore[arg-type]

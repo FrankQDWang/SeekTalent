@@ -101,7 +101,6 @@ High-fan-out orchestration files remain review-critical:
 
 - `src/seektalent/runtime/orchestrator.py`
 - `src/seektalent/runtime/source_lanes.py`
-- `src/seektalent_ui/workbench_store.py`
 - `src/seektalent_ui/server.py`
 
 When these files change, prefer focused tests plus the boundary gates above. Avoid creating generic managers, helper containers, or fallback layers to hide boundary pressure.

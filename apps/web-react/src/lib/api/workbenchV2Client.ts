@@ -1,8 +1,5 @@
 import {
-  normalizeAgentWorkbenchCandidateDetail,
-  type AgentWorkbenchCandidateDetailResponse,
-} from "./agentWorkbenchTypes";
-import {
+  normalizeWorkbenchV2CandidateDetail,
   normalizeWorkbenchV2Conversation,
   normalizeWorkbenchV2ConversationEvents,
   normalizeWorkbenchV2ConversationList,
@@ -12,6 +9,7 @@ import {
   type WorkbenchV2MessageRequest,
   type WorkbenchV2RequirementActionRequest,
   type WorkbenchV2RuntimeRecheckRequest,
+  type WorkbenchV2CandidateDetail,
 } from "./workbenchV2Types";
 
 const WORKBENCH_V2_CONVERSATIONS_PATH = "/api/agent/workbench/v2/conversations";
@@ -62,9 +60,9 @@ export async function getWorkbenchV2Conversation(
 export async function getWorkbenchV2CandidateDetail(
   conversationId: string,
   candidateId: string,
-): Promise<AgentWorkbenchCandidateDetailResponse> {
-  return normalizeAgentWorkbenchCandidateDetail(
-    await requestJson<AgentWorkbenchCandidateDetailResponse>(
+): Promise<WorkbenchV2CandidateDetail> {
+  return normalizeWorkbenchV2CandidateDetail(
+    await requestJson<WorkbenchV2CandidateDetail>(
       `${WORKBENCH_V2_CONVERSATIONS_PATH}/${encodeURIComponent(conversationId)}/candidates/${encodeURIComponent(candidateId)}/detail`,
       { method: "GET" },
     ),

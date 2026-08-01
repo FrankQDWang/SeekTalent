@@ -92,8 +92,6 @@ TEXT_LLM_MODEL_ID_FIELDS = {
     "tui_summary_model_id",
     "candidate_feedback_model_id",
     "prf_probe_phrase_proposal_model_id",
-    "workbench_note_writer_model_id",
-    "workbench_conversation_model_id",
 }
 LEGACY_TEXT_LLM_PREFIXES = ("openai-chat:", "openai-responses:", "anthropic:")
 TEXT_LLM_ENDPOINT_KIND_BY_PROTOCOL_FAMILY = {
@@ -256,10 +254,6 @@ class TextLLMSettings:
     candidate_feedback_reasoning_effort: ReasoningEffort
     prf_probe_phrase_proposal_model_id: str
     prf_probe_phrase_proposal_reasoning_effort: ReasoningEffortName
-    workbench_note_writer_model_id: str
-    workbench_note_writer_reasoning_effort: ReasoningEffort
-    workbench_conversation_model_id: str
-    workbench_conversation_reasoning_effort: ReasoningEffort
     prf_probe_phrase_proposal_timeout_seconds: float
     prf_probe_phrase_proposal_live_harness_timeout_seconds: float
     prf_probe_phrase_proposal_max_output_tokens: int
@@ -524,10 +518,6 @@ class AppSettings(BaseSettings):
     candidate_feedback_reasoning_effort: ReasoningEffort = "off"
     prf_probe_phrase_proposal_model_id: str = "deepseek-v4-flash"
     prf_probe_phrase_proposal_reasoning_effort: ReasoningEffortName = "off"
-    workbench_note_writer_model_id: str = "deepseek-v4-flash"
-    workbench_note_writer_reasoning_effort: ReasoningEffort = "off"
-    workbench_conversation_model_id: str = "deepseek-v4-flash"
-    workbench_conversation_reasoning_effort: ReasoningEffort = "max"
     prf_probe_phrase_proposal_timeout_seconds: float = 3.0
     prf_probe_phrase_proposal_live_harness_timeout_seconds: float = 30.0
     prf_probe_phrase_proposal_max_output_tokens: int = 2048
@@ -551,14 +541,6 @@ class AppSettings(BaseSettings):
     flywheel_db_path: str = ".seektalent/flywheel.sqlite3"
     corpus_db_path: str = ".seektalent/corpus.sqlite3"
     runtime_control_db_path: str = DEFAULT_RUNTIME_CONTROL_DB_PATH
-    agent_turn_input_token_budget: int = 64_000
-    agent_turn_output_token_budget: int = 4_096
-    agent_conversation_token_budget: int = 128_000
-    agent_compaction_trigger_token_budget: int = 96_000
-    agent_monthly_cost_budget_cents: int | None = None
-    agent_model_timeout_seconds: float = 60.0
-    agent_tool_timeout_seconds: float = 30.0
-    agent_stream_heartbeat_seconds: float = 15.0
     runtime_terminal_retention_days: int = 90
     runtime_checkpoint_retention_days: int = 30
     runtime_event_payload_retention_days: int = 30
@@ -606,13 +588,6 @@ class AppSettings(BaseSettings):
         if not normalized:
             raise ValueError(f"{info.field_name} must not be empty")
         return normalized
-
-    @field_validator("agent_monthly_cost_budget_cents", mode="before")
-    @classmethod
-    def normalize_empty_agent_monthly_cost_budget(cls, value: object) -> object:
-        if value == "":
-            return None
-        return value
 
     @field_validator(
         "workspace_root",
@@ -713,26 +688,8 @@ class AppSettings(BaseSettings):
             raise ValueError("prf_probe_phrase_proposal_live_harness_timeout_seconds must be > 0")
         if self.prf_probe_phrase_proposal_max_output_tokens < 256:
             raise ValueError("prf_probe_phrase_proposal_max_output_tokens must be >= 256")
-        if self.agent_turn_input_token_budget < 1:
-            raise ValueError("agent_turn_input_token_budget must be >= 1")
-        if self.agent_turn_output_token_budget < 1:
-            raise ValueError("agent_turn_output_token_budget must be >= 1")
-        if self.agent_conversation_token_budget < self.agent_turn_input_token_budget:
-            raise ValueError("agent_conversation_token_budget must be >= agent_turn_input_token_budget")
-        if not 1 <= self.agent_compaction_trigger_token_budget <= self.agent_conversation_token_budget:
-            raise ValueError(
-                "agent_compaction_trigger_token_budget must be between 1 and agent_conversation_token_budget"
-            )
-        if self.agent_monthly_cost_budget_cents is not None and self.agent_monthly_cost_budget_cents < 0:
-            raise ValueError("agent_monthly_cost_budget_cents must be >= 0")
-        if self.agent_model_timeout_seconds <= 0:
-            raise ValueError("agent_model_timeout_seconds must be > 0")
         if self.controller_timeout_seconds <= 0:
             raise ValueError("controller_timeout_seconds must be > 0")
-        if self.agent_tool_timeout_seconds <= 0:
-            raise ValueError("agent_tool_timeout_seconds must be > 0")
-        if self.agent_stream_heartbeat_seconds <= 0:
-            raise ValueError("agent_stream_heartbeat_seconds must be > 0")
         if self.liepin_worker_startup_timeout_seconds <= 0:
             raise ValueError("liepin_worker_startup_timeout_seconds must be > 0")
         if self.liepin_worker_timeout_seconds <= 0:
@@ -885,10 +842,6 @@ class AppSettings(BaseSettings):
             candidate_feedback_reasoning_effort=self.candidate_feedback_reasoning_effort,
             prf_probe_phrase_proposal_model_id=self.prf_probe_phrase_proposal_model_id,
             prf_probe_phrase_proposal_reasoning_effort=self.prf_probe_phrase_proposal_reasoning_effort,
-            workbench_note_writer_model_id=self.workbench_note_writer_model_id,
-            workbench_note_writer_reasoning_effort=self.workbench_note_writer_reasoning_effort,
-            workbench_conversation_model_id=self.workbench_conversation_model_id,
-            workbench_conversation_reasoning_effort=self.workbench_conversation_reasoning_effort,
             prf_probe_phrase_proposal_timeout_seconds=self.prf_probe_phrase_proposal_timeout_seconds,
             prf_probe_phrase_proposal_live_harness_timeout_seconds=(
                 self.prf_probe_phrase_proposal_live_harness_timeout_seconds

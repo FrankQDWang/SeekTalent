@@ -1,12 +1,67 @@
-import {
-  normalizeAgentWorkbenchCandidateSummary,
-  type AgentWorkbenchCandidateSummary,
-  type AgentWorkbenchStrategyGraph,
-  type AgentWorkbenchThinkingProcess,
-} from "./agentWorkbenchTypes";
 import type { components } from "./schema";
 
 type Schemas = components["schemas"];
+
+export type WorkbenchV2CandidateSummary = Schemas["WorkbenchV2CandidateSummaryView"] & {
+  sourceLabel?: string | null;
+};
+export type WorkbenchV2CandidateDetail = Omit<Schemas["WorkbenchV2CandidateDetailView"], "sections" | "sourceReferences" | "skills" | "evidence" | "workExperience" | "projectExperience" | "educationExperience"> & {
+  sections: Array<Omit<Schemas["WorkbenchV2CandidateDetailSectionView"], "items"> & { items: string[] }>;
+  sourceReferences: Schemas["WorkbenchV2SourceReferenceView"][];
+  skills: string[];
+  evidence: string[];
+  workExperience: Schemas["WorkbenchV2CandidateTimelineItemView"][];
+  projectExperience: Schemas["WorkbenchV2CandidateTimelineItemView"][];
+  educationExperience: Schemas["WorkbenchV2CandidateTimelineItemView"][];
+};
+export type WorkbenchV2StrategyGraph = Omit<Schemas["WorkbenchV2StrategyGraphView"], "nodes" | "edges"> & {
+  nodes: Schemas["WorkbenchV2GraphNodeView"][];
+  edges: Schemas["WorkbenchV2GraphEdgeView"][];
+};
+export type WorkbenchV2QueryGroup = Omit<Schemas["WorkbenchV2QueryGroupView"], "queryTerms" | "executions"> & {
+  queryTerms: string[];
+  executions: Schemas["WorkbenchV2QueryExecutionView"][];
+};
+export type WorkbenchV2ThinkingProcessCard = Omit<Schemas["WorkbenchV2ThinkingProcessCardView"], "terms"> & {
+  terms: string[];
+};
+export type WorkbenchV2ThinkingProcessRound = Omit<Schemas["WorkbenchV2ThinkingProcessRoundView"], "queryGroups" | "cards"> & {
+  queryGroups: WorkbenchV2QueryGroup[];
+  cards: WorkbenchV2ThinkingProcessCard[];
+};
+export type WorkbenchV2ThinkingProcess = Omit<Schemas["WorkbenchV2ThinkingProcessView"], "rounds"> & {
+  rounds: WorkbenchV2ThinkingProcessRound[];
+};
+export type AgentWorkbenchQueryGroup = WorkbenchV2QueryGroup;
+export type AgentWorkbenchThinkingProcessRound = WorkbenchV2ThinkingProcessRound;
+export type AgentWorkbenchGraphNode = Schemas["WorkbenchV2GraphNodeView"];
+export type AgentWorkbenchGraphEdge = Schemas["WorkbenchV2GraphEdgeView"];
+export type WorkbenchV2GraphNode = Schemas["WorkbenchV2GraphNodeView"];
+export type WorkbenchV2GraphEdge = Schemas["WorkbenchV2GraphEdgeView"];
+export type WorkbenchV2TranscriptGroup = {
+  groupId?: string;
+  title?: string;
+  events: WorkbenchV2TranscriptEvent[];
+};
+export type WorkbenchV2PendingActions = {
+  allowed: string[];
+};
+export type WorkbenchV2RequirementDraftItem = {
+  itemId: string;
+  label: string;
+  selected: boolean;
+};
+export type WorkbenchV2RequirementDraft = {
+  sections: Array<{ sectionId: string; title: string; items: WorkbenchV2RequirementDraftItem[] }>;
+};
+export type WorkbenchV2FinalSummary = Record<string, never>;
+export type WorkbenchV2DetailApproval = {
+  approvalId: string;
+  candidateId: string;
+  status: "pending" | "accepted" | "rejected" | "applied";
+  reason: string;
+};
+export type WorkbenchV2CandidateSummaryLegacy = WorkbenchV2CandidateSummary;
 
 export type WorkbenchV2EventType =
   | "user_message"
@@ -67,9 +122,9 @@ export type WorkbenchV2ConversationView = {
   transcriptEvents: WorkbenchV2TranscriptEvent[];
   requirementForm: WorkbenchV2Payload | null;
   runtime: WorkbenchV2Runtime | null;
-  strategyGraph?: AgentWorkbenchStrategyGraph;
-  thinkingProcess?: AgentWorkbenchThinkingProcess;
-  candidates?: AgentWorkbenchCandidateSummary[];
+  strategyGraph?: WorkbenchV2StrategyGraph;
+  thinkingProcess?: WorkbenchV2ThinkingProcess;
+  candidates?: WorkbenchV2CandidateSummary[];
 };
 
 export type WorkbenchV2ConversationListSummary = {
@@ -110,11 +165,11 @@ export type WorkbenchV2RuntimeRecheckRequest = {
 };
 
 type GeneratedWorkbenchV2StrategyGraph = Omit<
-  AgentWorkbenchStrategyGraph,
+  WorkbenchV2StrategyGraph,
   "edges" | "nodes"
 > & {
-  edges?: AgentWorkbenchStrategyGraph["edges"] | null;
-  nodes?: AgentWorkbenchStrategyGraph["nodes"] | null;
+  edges?: WorkbenchV2StrategyGraph["edges"] | null;
+  nodes?: WorkbenchV2StrategyGraph["nodes"] | null;
 };
 
 type GeneratedWorkbenchV2ThinkingProcessCard = Omit<
@@ -155,7 +210,7 @@ type GeneratedWorkbenchV2ConversationView = Omit<
   WorkbenchV2ConversationView,
   "candidates" | "strategyGraph" | "thinkingProcess" | "transcriptEvents"
 > & {
-  candidates?: AgentWorkbenchCandidateSummary[] | null;
+  candidates?: WorkbenchV2CandidateSummary[] | null;
   strategyGraph?: GeneratedWorkbenchV2StrategyGraph | null;
   thinkingProcess?: GeneratedWorkbenchV2ThinkingProcess | null;
   transcriptEvents?: WorkbenchV2TranscriptEvent[] | null;
@@ -186,7 +241,7 @@ export function normalizeWorkbenchV2Conversation(
     strategyGraph: normalizeWorkbenchV2StrategyGraph(input.strategyGraph),
     thinkingProcess: normalizeWorkbenchV2ThinkingProcess(input.thinkingProcess),
     candidates: (input.candidates ?? []).map(
-      normalizeAgentWorkbenchCandidateSummary,
+      normalizeWorkbenchV2CandidateSummary,
     ),
   };
 }
@@ -213,7 +268,7 @@ export function normalizeWorkbenchV2ConversationEvents(
 
 function normalizeWorkbenchV2StrategyGraph(
   strategyGraph: GeneratedWorkbenchV2StrategyGraph | null | undefined,
-): AgentWorkbenchStrategyGraph {
+): WorkbenchV2StrategyGraph {
   return {
     ...(strategyGraph ?? {}),
     nodes: strategyGraph?.nodes ?? [],
@@ -223,7 +278,7 @@ function normalizeWorkbenchV2StrategyGraph(
 
 function normalizeWorkbenchV2ThinkingProcess(
   thinkingProcess: GeneratedWorkbenchV2ThinkingProcess | null | undefined,
-): AgentWorkbenchThinkingProcess {
+): WorkbenchV2ThinkingProcess {
   return {
     ...(thinkingProcess ?? {}),
     activeRoundNo: thinkingProcess?.activeRoundNo ?? null,
@@ -244,3 +299,44 @@ function normalizeWorkbenchV2ThinkingProcess(
     })),
   };
 }
+
+export function normalizeWorkbenchV2CandidateSummary(
+  candidate: WorkbenchV2CandidateSummary,
+): WorkbenchV2CandidateSummary {
+  return { ...candidate, sourceKinds: candidate.sourceKinds ?? [] };
+}
+
+export function normalizeWorkbenchV2CandidateDetail(
+  detail: WorkbenchV2CandidateDetail,
+): WorkbenchV2CandidateDetail {
+  return {
+    ...detail,
+    sections: (detail.sections ?? []).map((section) => ({ ...section, items: section.items ?? [] })),
+    sourceReferences: detail.sourceReferences ?? [],
+    skills: detail.skills ?? [],
+    evidence: detail.evidence ?? [],
+    workExperience: detail.workExperience ?? [],
+    projectExperience: detail.projectExperience ?? [],
+    educationExperience: detail.educationExperience ?? [],
+    match: detail.match
+      ? {
+          ...detail.match,
+          strengths: detail.match.strengths ?? [],
+          weaknesses: detail.match.weaknesses ?? [],
+        }
+      : null,
+  };
+}
+
+export type AgentWorkbenchCandidateSummary = WorkbenchV2CandidateSummary;
+export type AgentWorkbenchCandidateDetailResponse = WorkbenchV2CandidateDetail;
+export type AgentWorkbenchStrategyGraph = WorkbenchV2StrategyGraph;
+export type AgentWorkbenchThinkingProcess = WorkbenchV2ThinkingProcess;
+export type AgentWorkbenchTranscriptEvent = WorkbenchV2TranscriptEvent;
+export type AgentWorkbenchTranscriptGroup = WorkbenchV2TranscriptGroup;
+export type AgentWorkbenchPendingActions = WorkbenchV2PendingActions;
+export type AgentWorkbenchRequirementDraft = WorkbenchV2RequirementDraft;
+export type AgentWorkbenchRequirementDraftItem = WorkbenchV2RequirementDraftItem;
+export type AgentWorkbenchFinalSummary = WorkbenchV2FinalSummary;
+export type AgentWorkbenchDetailApproval = WorkbenchV2DetailApproval;
+export type AgentWorkbenchConversationResponse = WorkbenchV2ConversationView;

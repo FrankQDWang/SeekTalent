@@ -38,11 +38,9 @@ GENERATED_PREFIXES = (
 )
 
 TYPED_BOUNDARY_PREFIXES = (
-    "src/seektalent_ui/agent_workbench_",
 )
 
 TYPED_BOUNDARY_FILES = {
-    "src/seektalent_ui/event_routes.py",
 }
 
 TEST_PATH_MARKERS = (

@@ -1,7 +1,7 @@
-import type { AgentWorkbenchCandidateSummary } from "../../lib/api/agentWorkbenchTypes";
+import type { WorkbenchV2CandidateSummary } from "../../lib/api/workbenchV2Types";
 
 export type CandidateSourceKind = NonNullable<
-  AgentWorkbenchCandidateSummary["sourceKinds"]
+  WorkbenchV2CandidateSummary["sourceKinds"]
 >[number];
 
 const sourceLabels: Record<CandidateSourceKind, string> = {

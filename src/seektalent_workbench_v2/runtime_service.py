@@ -161,7 +161,6 @@ class WorkbenchV2RuntimeService:
         *,
         store: RuntimeControlStore,
         settings: AppSettings | None = None,
-        runtime_factory: Callable[[], object] | None = None,
         requirement_extractor: object | None = None,
         executor: WorkflowRuntimeExecutor | None = None,
         command_service: RuntimeCommandService | None = None,
@@ -174,7 +173,6 @@ class WorkbenchV2RuntimeService:
     ) -> None:
         self.store = store
         self.settings = settings
-        self.runtime_factory = runtime_factory
         self.requirement_extractor = requirement_extractor
         self._runtime_executor = executor
         self.command_service = (
@@ -667,10 +665,7 @@ class WorkbenchV2RuntimeService:
         return payload
 
     def _requirement_extractor(self) -> object:
-        extractor = self.requirement_extractor
-        if extractor is None and self.runtime_factory is not None:
-            extractor = self.runtime_factory()
-        return getattr(extractor, "extract_requirements", None)
+        return getattr(self.requirement_extractor, "extract_requirements", None)
 
     def _executor(self) -> WorkflowRuntimeExecutor:
         if self._runtime_executor is None:

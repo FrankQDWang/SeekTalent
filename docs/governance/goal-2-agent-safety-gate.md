@@ -54,7 +54,6 @@ Conversation-agent code must not:
 - import `seektalent.runtime` modules, including `seektalent.runtime.orchestrator.WorkflowRuntime`;
 - import `seektalent.providers`;
 - import `seektalent.source_adapters`;
-- import `src/seektalent_ui/workbench_store.py`, `runtime_bridge.py`, or `runtime_graph.py`;
 - import browser automation modules directly;
 - execute shell or subprocess commands;
 - read or write runtime-control SQLite state directly;

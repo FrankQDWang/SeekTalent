@@ -207,10 +207,6 @@ def test_classify_path_red_provider_registry() -> None:
     assert classify_path("src/seektalent/providers/registry.py") == "red"
 
 
-def test_classify_path_red_conversation_agent() -> None:
-    assert classify_path("src/seektalent_conversation_agent/service.py") == "red"
-
-
 def test_classify_path_yellow_workbench_route() -> None:
     assert classify_path("src/seektalent_ui/workbench_routes.py") == "yellow"
 

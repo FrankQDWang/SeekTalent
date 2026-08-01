@@ -9,7 +9,6 @@ uv run pytest \
   tests/test_runtime_audit.py \
   tests/test_runtime_source_lanes.py \
   tests/test_runtime_multi_source_round_dispatch.py \
-  tests/test_workbench_runtime_graph.py \
   tests/test_workbench_runtime_owned_execution.py \
   tests/test_liepin_runtime_source_lane.py \
   tests/test_liepin_opencli_retriever.py \

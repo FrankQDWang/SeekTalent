@@ -11,7 +11,6 @@ from seektalent.config import AppSettings
 from seektalent.corpus.store import CORPUS_SQLITE_USER_VERSION
 from seektalent.local_storage_lifecycle import SQLiteFileReport, sqlite_file_report
 from seektalent.providers.liepin.store import LIEPIN_SCHEMA_VERSION
-from seektalent.product_database_versions import WORKBENCH_SCHEMA_VERSION
 from seektalent.sqlite_migrations import SQLiteMigrationError, has_user_tables, read_user_version, run_sqlite_integrity_checks
 from seektalent_runtime_control.store import RUNTIME_CONTROL_SCHEMA_VERSION
 
@@ -22,7 +21,6 @@ DatabaseSchemaStatus = Literal["ok", "missing", "uninitialized", "upgrade_availa
 DatabaseIntegrityStatus = Literal["ok", "missing", "failed", "unavailable"]
 
 _EXPECTED_USER_VERSIONS = {
-    "workbench": WORKBENCH_SCHEMA_VERSION,
     "runtime_control": RUNTIME_CONTROL_SCHEMA_VERSION,
     "liepin": LIEPIN_SCHEMA_VERSION,
     "corpus": CORPUS_SQLITE_USER_VERSION,

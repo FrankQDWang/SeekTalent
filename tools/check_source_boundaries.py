@@ -11,7 +11,6 @@ RUNTIME_ROOT = Path("src/seektalent/runtime")
 PROVIDERS_ROOT = Path("src/seektalent/providers")
 SOURCES_ROOT = Path("src/seektalent/sources")
 RUNTIME_CONTROL_ROOT = Path("src/seektalent_runtime_control")
-CONVERSATION_AGENT_ROOT = Path("src/seektalent_conversation_agent")
 
 FORBIDDEN_RUNTIME_IMPORTS = (
     "seektalent.providers",
@@ -30,17 +29,6 @@ FORBIDDEN_RUNTIME_CONTROL_SERVICE_IMPORTS = (
 FORBIDDEN_RUNTIME_CONTROL_NON_EXECUTOR_IMPORTS = (
     "seektalent.runtime.orchestrator",
     "seektalent.source_adapters",
-)
-FORBIDDEN_CONVERSATION_AGENT_IMPORTS = (
-    ("seektalent.providers", "conversation-agent must not import provider modules"),
-    ("seektalent.runtime", "conversation-agent must not import seektalent.runtime"),
-    ("seektalent.source_adapters", "conversation-agent must not import source adapters"),
-    ("seektalent_ui.workbench_store", "conversation-agent must not import Workbench persistence internals"),
-    ("seektalent_ui.runtime_bridge", "conversation-agent must not import Workbench runtime bridge internals"),
-    ("seektalent_ui.runtime_graph", "conversation-agent must not import Workbench graph internals"),
-    ("seektalent.opencli_browser", "conversation-agent must not import browser automation directly"),
-    ("playwright", "conversation-agent must not import browser automation directly"),
-    ("selenium", "conversation-agent must not import browser automation directly"),
 )
 RUNTIME_IMPORT_MESSAGES = {
     "seektalent.providers": "runtime must not import seektalent.providers",
@@ -346,20 +334,6 @@ def _runtime_control_import_failures(project_root: Path, path: Path) -> list[str
     return failures
 
 
-def _conversation_agent_import_failures(project_root: Path, path: Path) -> list[str]:
-    failures: list[str] = []
-    for forbidden_module, message in FORBIDDEN_CONVERSATION_AGENT_IMPORTS:
-        failures.extend(
-            _import_failures(
-                project_root=project_root,
-                path=path,
-                forbidden_modules=(forbidden_module,),
-                message=message,
-            )
-        )
-    return failures
-
-
 def _tach_boundary_failures(project_root: Path) -> list[str]:
     tach_path = project_root / "tach.toml"
     if not tach_path.exists():
@@ -389,7 +363,6 @@ def collect_source_boundary_failures(project_root: Path = PROJECT_ROOT) -> list[
     providers_root = project_root / PROVIDERS_ROOT
     sources_root = project_root / SOURCES_ROOT
     runtime_control_root = project_root / RUNTIME_CONTROL_ROOT
-    conversation_agent_root = project_root / CONVERSATION_AGENT_ROOT
 
     for path in _python_files(runtime_root):
         failures.extend(_runtime_import_failures(project_root=project_root, path=path))
@@ -411,9 +384,6 @@ def collect_source_boundary_failures(project_root: Path = PROJECT_ROOT) -> list[
 
     for path in _python_files(runtime_control_root):
         failures.extend(_runtime_control_import_failures(project_root, path))
-
-    for path in _python_files(conversation_agent_root):
-        failures.extend(_conversation_agent_import_failures(project_root, path))
 
     failures.extend(_tach_boundary_failures(project_root))
     return sorted(failures, key=_failure_sort_key)

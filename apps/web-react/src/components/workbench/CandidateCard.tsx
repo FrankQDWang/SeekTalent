@@ -1,10 +1,10 @@
 import { Eye } from "lucide-react";
-import type { AgentWorkbenchCandidateSummary } from "../../lib/api/agentWorkbenchTypes";
+import type { WorkbenchV2CandidateSummary } from "../../lib/api/workbenchV2Types";
 import { Button } from "../primitives/Button";
 import { candidateSourceLabel } from "./candidateSource";
 import "./CandidateQueue.css";
 
-export type CandidateCardCandidate = AgentWorkbenchCandidateSummary;
+export type CandidateCardCandidate = WorkbenchV2CandidateSummary;
 
 type CandidateCardProps = {
   candidate: CandidateCardCandidate;

@@ -1,10 +1,10 @@
 import { Check, Clock3, X } from "lucide-react";
-import type { AgentWorkbenchDetailApproval } from "../../lib/api/agentWorkbenchTypes";
+import type { WorkbenchV2DetailApproval } from "../../lib/api/workbenchV2Types";
 import { Button } from "../primitives/Button";
 import type { CandidateCardCandidate } from "./CandidateCard";
 import "./DetailApprovalQueue.css";
 
-export type DetailApproval = AgentWorkbenchDetailApproval;
+export type DetailApproval = WorkbenchV2DetailApproval;
 
 type DetailApprovalItemProps = {
   approval: DetailApproval;

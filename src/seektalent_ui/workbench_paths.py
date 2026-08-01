@@ -14,11 +14,6 @@ def liepin_db_path(settings: AppSettings) -> Path:
     return root / path if root is not None else path
 
 
-def workbench_db_path(settings: AppSettings) -> Path:
-    root = _production_home() if settings.runtime_mode == "prod" else Path(settings.workspace_root or ".")
-    return root / ".seektalent" / "workbench.sqlite3"
-
-
 def _production_home() -> Path:
     return Path(
         os.environ.get("SEEKTALENT_INSTALL_HOME", str(Path.home()))

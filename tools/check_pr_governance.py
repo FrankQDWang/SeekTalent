@@ -15,7 +15,6 @@ RED_PREFIXES = (
     "src/seektalent/runtime/",
     "src/seektalent/prompts/",
     "src/seektalent/providers/",
-    "src/seektalent_conversation_agent/",
     "src/seektalent/core/retrieval/",
 )
 
@@ -24,10 +23,6 @@ RED_FILES = {
     "src/seektalent/default.env",
     "src/seektalent/models.py",
     "src/seektalent/config.py",
-    "src/seektalent_ui/workbench_store.py",
-    "src/seektalent_ui/runtime_bridge.py",
-    "src/seektalent_ui/runtime_graph.py",
-    "scripts/verify-dev-workbench.sh",
     "scripts/verify-red-zone.sh",
 }
 
@@ -198,7 +193,6 @@ MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID = {
         "scripts/verify-dev-workbench.sh",
         "uv run python scripts/build_packaged_workbench.py",
         "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_workbench_static_frontend.py tests/test_react_workbench_cutover_gate.py -q -p no:cacheprovider",
-        "PYTHONDONTWRITEBYTECODE=1 uv run --group dev python -m pytest tests/test_agent_workbench_contract.py -q -p no:cacheprovider",
         "pnpm --dir apps/web-react check",
         "CI=1 pnpm --dir apps/web-react exec vitest run src/lib/stream/agentStream.test.ts src/lib/stream/agentStreamReducer.test.ts src/lib/stream/agentStreamView.test.ts --run",
     ),

@@ -1,10 +1,10 @@
 import type {
-  AgentWorkbenchGraphEdge,
-  AgentWorkbenchGraphNode,
-} from "../api/agentWorkbenchTypes";
+  WorkbenchV2GraphEdge,
+  WorkbenchV2GraphNode,
+} from "../api/workbenchV2Types";
 
-export type AgentGraphNode = AgentWorkbenchGraphNode;
-export type AgentGraphEdge = AgentWorkbenchGraphEdge & {
+export type AgentGraphNode = WorkbenchV2GraphNode;
+export type AgentGraphEdge = WorkbenchV2GraphEdge & {
   status?: string | null;
 };
 
