@@ -82,11 +82,21 @@ Passing paths or test ids to `scripts/test-fast.sh` does this automatically.
 
 ## CI Workflow Shape
 
-Direct `main` pushes use a trimmed fast-iteration CI shape:
+Local verification is authoritative for normal single-developer iteration. Before publishing code changes, run:
 
-- `quality-python`
+```bash
+scripts/verify-local-quality.sh
+```
 
-`quality-python` is one fast job covering architecture imports, Ruff, ty, Workbench schema validation, and privacy/agent-safety diff scans. It does not run pytest or frontend tests; coding agents run focused tests locally before publishing changes. Documentation-only changes do not start this workflow. Use `uv run python tools/check_tach_baseline.py` locally for architecture drift checks when working on source boundaries or red-zone architecture.
+This covers Ruff, ty, architecture imports, Workbench schema validation, and privacy/agent-safety diff scans. The matching `Python Quality` workflow is manual-only and exists for an explicitly requested clean-runner check; pushes and pull requests do not repeat it automatically. Continue to run focused tests locally before publishing changes. Use `uv run python tools/check_tach_baseline.py` locally for architecture drift checks when working on source boundaries or red-zone architecture.
+
+Native delivery changes use the local Apple Silicon verifier:
+
+```bash
+scripts/verify-native-macos-arm64.sh
+```
+
+The path-filtered `Native launch-binding probe` pull-request workflow covers only Windows x64 and macOS Intel, which are unavailable on the development host. Pure documentation changes do not start it.
 
 `workbench-contract` is manual-only. Run it explicitly for release candidates or when remote macOS frontend evidence is needed; normal frontend verification stays local.
 

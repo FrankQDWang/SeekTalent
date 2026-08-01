@@ -16,15 +16,11 @@ Apply this to the default branch, currently `main`.
 
 ## Required Status Checks
 
-For the fast direct-main workflow, keep only these checks as required if a ruleset is enabled:
+The single-developer workflow has no required automatic Python status check. `scripts/verify-local-quality.sh` is the publishing gate, and `Python Quality` remains available only through manual dispatch.
 
-- `quality-python`
+The path-filtered `Native launch-binding probe` supplies Windows x64 and macOS Intel evidence for relevant delivery changes. Do not configure it as an unconditional required check because unrelated pull requests do not trigger it.
 
-`quality-python` is the only automatic code gate. It runs one short job for static quality, architecture imports, Workbench schema consistency, and privacy/agent-safety diff scans. It intentionally excludes pytest and frontend verification.
-
-Do not require `workbench-contract`, `pr-governance`, or CodeQL for fast direct-main iteration. Workbench Contract and Governance are manual-only; CodeQL is weekly or manual.
-
-If the existing `main` protection still requires the legacy `test` status, remove that requirement after this governance branch lands. `quality-python` is now the stable Python aggregate check.
+Do not require `quality-python`, `workbench-contract`, `pr-governance`, or CodeQL for fast direct-main iteration. Python Quality, Workbench Contract, and Governance are manual-only; CodeQL is weekly or manual.
 
 Do not reuse these job names in another workflow. Required status checks become ambiguous when multiple workflows publish the same job name.
 

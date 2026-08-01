@@ -29,15 +29,33 @@ def test_workbench_contract_ci_does_not_use_slow_pnpm_cache_post_step():
     assert "corepack enable && corepack prepare pnpm@11.6.0 --activate" in workflow
 
 
-def test_python_quality_uses_slim_direct_main_gate():
+def test_python_quality_is_a_manual_clean_runner_mirror():
     workflow = (ROOT / ".github/workflows/python-quality.yml").read_text(encoding="utf-8")
+    triggers = workflow.split("permissions:", 1)[0]
 
+    assert "workflow_dispatch:" in triggers
+    assert "push:" not in triggers
+    assert "pull_request:" not in triggers
     assert "python -m pytest" not in workflow
     assert "jobs:\n  quality-python:" in workflow
     assert "tools/check_arch_imports.py" in workflow
     assert "tools/check_tach_baseline.py" not in workflow
     assert "tools/check_privacy_gate.py --base" in workflow
     assert "tools/check_agent_safety_gate.py --base" in workflow
+
+
+def test_local_quality_gate_mirrors_manual_python_quality():
+    script = (ROOT / "scripts/verify-local-quality.sh").read_text(encoding="utf-8")
+
+    for command in (
+        "ruff check src tests experiments tools",
+        "ty check src tests tools",
+        "python tools/check_arch_imports.py",
+        "python tools/check_workbench_schema_modes.py",
+        'python3 tools/check_privacy_gate.py --base "$base_ref"',
+        'python3 tools/check_agent_safety_gate.py --base "$base_ref"',
+    ):
+        assert command in script
 
 
 def test_expensive_remote_checks_are_manual_or_scheduled_only():

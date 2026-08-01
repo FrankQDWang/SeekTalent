@@ -2,31 +2,6 @@ name: Python Quality
 
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/python-quality.yml"
-      - "apps/**"
-      - "experiments/**"
-      - "scripts/**"
-      - "src/**"
-      - "tests/**"
-      - "tools/**"
-      - "pyproject.toml"
-      - "tach.toml"
-      - "uv.lock"
-  pull_request:
-    paths:
-      - ".github/workflows/python-quality.yml"
-      - "apps/**"
-      - "experiments/**"
-      - "scripts/**"
-      - "src/**"
-      - "tests/**"
-      - "tools/**"
-      - "pyproject.toml"
-      - "tach.toml"
-      - "uv.lock"
 
 permissions:
   contents: read

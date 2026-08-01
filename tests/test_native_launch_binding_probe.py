@@ -163,12 +163,25 @@ def test_native_executable_timeout_kills_and_reaps_exact_child(
         os.kill(pid, 0)
 
 
-def test_native_workflow_has_the_three_fixed_native_hosts() -> None:
+def test_native_workflow_keeps_only_hosts_unavailable_locally() -> None:
     source = WORKFLOW.read_text(encoding="utf-8")
 
-    assert "windows-2025" in source
-    assert "macos-15" in source
-    assert "macos-15-intel" in source
+    assert "- name: windows-2025 x64" in source
+    assert "- name: macos-15-intel x86_64" in source
+    assert "- name: macos-15 arm64" not in source
+    assert '"docs/decisions/**"' not in source
+    assert '"docs/plans/external-execution-plane-v1-release-artifact-evidence.md"' not in source
     assert '"tools/native_probes/launch_binding_probe.py", "--json"' in source
     assert "tests/test_native_launch_binding_probe.py" in source
     assert EVIDENCE_PATH_ENV in source
+
+
+def test_apple_silicon_native_evidence_has_a_local_entrypoint() -> None:
+    script = Path("scripts/verify-native-macos-arm64.sh").read_text(encoding="utf-8")
+
+    assert '"$(uname -s)" != "Darwin"' in script
+    assert '"$(uname -m)" != "arm64"' in script
+    assert "tests/test_native_launch_binding_probe.py" in script
+    assert "tests/test_build_domi_delivery_bundle.py" in script
+    assert "tests/test_packaged_sidecar_artifact.py" in script
+    assert "tests/test_installed_slot_lease.py" in script

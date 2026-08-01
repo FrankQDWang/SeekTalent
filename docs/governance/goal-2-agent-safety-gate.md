@@ -136,10 +136,9 @@ Confirmation state: pending owner verification. On 2026-06-09, `gh api repos/Fra
 - Require conversation resolution.
 - Block force pushes.
 - Block branch deletions.
-- Require status checks:
-  - `quality-python`
+- Do not require an automatic Python status check for the single-developer direct-main workflow. Run `scripts/verify-local-quality.sh` before publishing; `Python Quality` is manual-only.
 
-Workbench Contract and Governance are manual workflows. CodeQL runs weekly or manually; none of them should block direct-main iteration.
+The path-filtered native workflow provides Windows x64 and macOS Intel evidence when delivery boundaries change. Workbench Contract and Governance are manual workflows. CodeQL runs weekly or manually; none of them should block direct-main iteration.
 
 ### Required Secret Settings
 
