@@ -1121,49 +1121,23 @@ class LiepinSiteAdapter:
                         {"action_kind": "open_detail_succeeded", "route_kind": "detail", "ref": ref, "rank": rank},
                     )
                 return OpenCliBrowserResult(ok=True, action="open_liepin_detail", counts={"rank": rank})
-            tabs_before_click = self._safe_list_tabs()
-            safe_reason_code = "liepin_opencli_timeout"
-            try:
-                self._click_liepin_detail_ref(ref)
-            except OpenCliBrowserError as exc:
-                if exc.safe_reason_code != "liepin_opencli_timeout":
-                    if emit_events:
-                        self._append_agent_event(
-                            source_run_id,
-                            {
-                                "action_kind": "open_detail_failed",
-                                "route_kind": "detail",
-                                "ref": ref,
-                                "rank": rank,
-                                "safe_reason_code": exc.safe_reason_code,
-                            },
-                        )
-                    raise
-                safe_reason_code = exc.safe_reason_code
-            if not self._claim_liepin_tab_after_detail_click(tabs_before_click, source_run_id=source_run_id):
-                if emit_events:
-                    self._append_agent_event(
-                        source_run_id,
-                        {
-                            "action_kind": "open_detail_timeout",
-                            "route_kind": "detail",
-                            "ref": ref,
-                            "rank": rank,
-                            "safe_reason_code": safe_reason_code,
-                        },
-                    )
-                return OpenCliBrowserResult(
-                    ok=False,
-                    action="open_liepin_detail",
-                    safe_reason_code=safe_reason_code,
-                    counts={"rank": rank},
-                )
             if emit_events:
                 self._append_agent_event(
                     source_run_id,
-                    {"action_kind": "open_detail_succeeded", "route_kind": "detail", "ref": ref, "rank": rank},
+                    {
+                        "action_kind": "open_detail_failed",
+                        "route_kind": "detail",
+                        "ref": ref,
+                        "rank": rank,
+                        "safe_reason_code": "liepin_opencli_detail_not_opened",
+                    },
                 )
-            return OpenCliBrowserResult(ok=True, action="open_liepin_detail", counts={"rank": rank})
+            return OpenCliBrowserResult(
+                ok=False,
+                action="open_liepin_detail",
+                safe_reason_code="liepin_opencli_detail_not_opened",
+                counts={"rank": rank},
+            )
         except OpenCliBrowserError as exc:
             return OpenCliBrowserResult(ok=False, action="open_liepin_detail", safe_reason_code=exc.safe_reason_code)
 
@@ -3295,12 +3269,6 @@ class LiepinSiteAdapter:
         self._run_opencli_call(lambda: self._automation.click_ref(ref))
         self._touch_lease()
 
-    def _click_liepin_detail_ref(self, ref: str) -> None:
-        if not _is_safe_page_id(ref):
-            raise OpenCliBrowserError("liepin_opencli_forbidden_command")
-        self._run_opencli_call(lambda: self._automation.click_ref(ref))
-        self._touch_lease()
-
     def _open_liepin_detail_ref_controlled(self, ref: str, *, source_run_id: str) -> bool:
         detail_url = self._liepin_detail_url_for_ref(ref)
         if detail_url is None:
@@ -3352,63 +3320,6 @@ class LiepinSiteAdapter:
         output = self._run_opencli_call(lambda: self._automation.readonly_eval(script))
         self._touch_lease()
         return output
-
-    def _safe_list_tabs(self) -> tuple[dict[str, object], ...]:
-        try:
-            return tuple(self._list_tabs())
-        except OpenCliBrowserError:
-            return ()
-
-    def _claim_liepin_tab_after_detail_click(
-        self,
-        before_tabs: Sequence[Mapping[str, object]],
-        *,
-        source_run_id: str,
-    ) -> bool:
-        before_urls = _tab_urls_by_page_id(before_tabs)
-        if not before_urls:
-            return False
-        attempts = max(1, int(self._site_config.detail_open_timeout_seconds))
-        for attempt_index in range(attempts):
-            candidate = self._liepin_tab_claim_candidate(before_urls=before_urls)
-            if candidate is not None:
-                page_id, url = candidate
-                self._select_and_mark_owned_liepin_tab(page_id=page_id, url=url, source_run_id=source_run_id)
-                return True
-            if attempt_index < attempts - 1:
-                time.sleep(1)
-        return False
-
-    def _liepin_tab_claim_candidate(self, *, before_urls: Mapping[str, str]) -> tuple[str, str] | None:
-        try:
-            after_tabs = self._list_tabs()
-            markers = self._read_owned_page_markers()
-        except OpenCliBrowserError:
-            return None
-        candidates: list[tuple[int, str, str]] = []
-        for tab in after_tabs:
-            page_id = _tab_page_id(tab)
-            url = str(tab.get("url") or "")
-            if not _is_safe_page_id(page_id) or not self._is_owned_liepin_tab(url):
-                continue
-            before_url = before_urls.get(page_id)
-            marker = markers.get(page_id)
-            is_new_tab = page_id not in before_urls
-            is_owned_navigation = marker is not None and before_url is not None and before_url != url
-            if not is_new_tab and not is_owned_navigation:
-                continue
-            score = 0
-            if tab.get("active") is True:
-                score += 100
-            if _is_liepin_detail_url(url):
-                score += 50
-            if is_new_tab:
-                score += 10
-            candidates.append((score, page_id, url))
-        if not candidates:
-            return None
-        _, page_id, url = max(candidates, key=lambda item: item[0])
-        return page_id, url
 
     def _select_and_mark_owned_liepin_tab(self, *, page_id: str, url: str, source_run_id: str | None = None) -> None:
         self._run_browser_command("tab", ("select", page_id))

@@ -450,8 +450,7 @@ def test_liepin_opencli_policy_rejects_api_ajax_graphql_download_and_export_rout
         assert _opencli_tab_url_is_blocked(runner, blocked_url), f"{blocked_url} should be blocked"
 
 
-@pytest.mark.parametrize("click_method", ("_click_liepin_detail_ref", "_click_native_filter_ref"))
-def test_stale_ref_is_not_reissued_inside_one_browser_effect(click_method: str) -> None:
+def test_stale_filter_ref_is_not_reissued_inside_one_browser_effect() -> None:
     class StaleRefAutomation:
         def __init__(self) -> None:
             self.click_calls = 0
@@ -481,7 +480,7 @@ def test_stale_ref_is_not_reissued_inside_one_browser_effect(click_method: str) 
     )
 
     with pytest.raises(OpenCliBrowserError) as caught:
-        getattr(runner, click_method)("70")
+        runner._click_native_filter_ref("70")
 
     assert caught.value.safe_reason_code == "liepin_opencli_stale_ref"
     assert automation.click_calls == 1
@@ -664,6 +663,41 @@ def test_city_filter_never_uses_page_text_when_focused_probe_is_unavailable(
         )
 
     assert page_text_clicks == 0
+
+
+def test_detail_url_unavailable_never_falls_back_to_clicking_card_ref(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = LiepinSiteAdapter(
+        browser_config=OpenCliBrowserConfig(
+            session="seektalent-detail-url-unavailable",
+            timeout_seconds=10,
+            pacing_enabled=False,
+        ),
+        site_config=LiepinOpenCliSiteConfig(
+            allowed_hosts=("h.liepin.com",),
+            allowed_start_urls=(LIEPIN_RECRUITER_SEARCH_URL,),
+        ),
+        automation=object(),  # type: ignore[arg-type]
+    )
+    state = OpenCliBrowserResult(ok=True, action="state", private_output="detail card visible")
+    monkeypatch.setattr(runner, "_detail_ref_open_state", lambda **_kwargs: None)
+    monkeypatch.setattr(runner, "_state_with_liepin_detail_ref", lambda _ref: state)
+    monkeypatch.setattr(runner, "_open_liepin_detail_ref_controlled", lambda *_args, **_kwargs: False)
+    result = runner._open_liepin_detail(
+        source_run_id="detail-url-unavailable",
+        ref="70",
+        rank=1,
+        emit_events=False,
+    )
+
+    assert result.ok is False
+    assert result.safe_reason_code == "liepin_opencli_detail_not_opened"
+    adapter_source = (
+        Path(__file__).resolve().parents[1]
+        / "src/seektalent/providers/liepin/liepin_site_adapter.py"
+    ).read_text(encoding="utf-8")
+    assert "_click_liepin_detail_ref" not in adapter_source
 
 
 def _opencli_tab_url_is_blocked(runner: LiepinSiteAdapter, url: str) -> bool:
