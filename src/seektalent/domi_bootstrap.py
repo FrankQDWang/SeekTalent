@@ -10,6 +10,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from seektalent.browser_bridge_install import install_browser_bridge_bundle
 from seektalent.browser_bridge_manifest import (
@@ -20,13 +21,17 @@ from seektalent.browser_bridge_manifest import (
     WTSCLI_VERSION,
     load_browser_bridge_bundle,
 )
+from seektalent.domi_host_runtime import (
+    probe_runtime_with_python,
+    validate_delivery_runtime_contract,
+)
 from seektalent.version import __version__
 
 
 DOMI_NODE_ENV_KEYS = ("SEEKTALENT_DOMI_NODE", "DOMI_NODE")
 DEFAULT_BIN_DIR = Path.home() / ".seektalent" / "bin"
 INSTALL_RECEIPT_RELATIVE_PATH = Path(".seektalent") / "install-receipt.json"
-INSTALL_RECEIPT_SCHEMA = "seektalent.install-receipt.v1"
+INSTALL_RECEIPT_SCHEMA = "seektalent.install-receipt.v2"
 
 
 class DomiBootstrapError(RuntimeError):
@@ -131,6 +136,33 @@ def bootstrap_domi_workbench(
         reason_code="domi_node_missing",
         label="Domi Node",
     )
+    if delivery_identity is not None:
+        try:
+            runtime_identity = probe_runtime_with_python(
+                resolved_python,
+                resolved_node,
+            )
+        except (OSError, RuntimeError, ValueError) as exc:
+            raise DomiBootstrapError(
+                "domi_host_runtime_probe_failed",
+                "The Domi-provided Python and Node identities could not be verified.",
+            ) from exc
+        contract = delivery_identity.pop("_hostRuntimeContract")
+        if not isinstance(contract, dict):
+            raise DomiBootstrapError(
+                "delivery_manifest_identity_mismatch",
+                "The delivery manifest does not bind a Domi runtime contract.",
+            )
+        reason = validate_delivery_runtime_contract(
+            runtime_identity,
+            cast(dict[str, object], contract),
+        )
+        if reason is not None:
+            raise DomiBootstrapError(
+                reason,
+                "The Domi-provided runtime does not match this delivery.",
+            )
+        delivery_identity.update(runtime_identity.to_receipt_payload())
 
     resolved_python_paths = tuple(path.expanduser() for path in python_paths if str(path).strip())
     if browser_bridge_bundle_dir is None:
@@ -217,13 +249,30 @@ def bootstrap_domi_workbench(
                         root / INSTALL_RECEIPT_RELATIVE_PATH,
                     )
                 )
-                if product_wheel_path is not None and delivery_manifest_path is not None:
+                if delivery_manifest_path is not None:
                     additional_targets.append(
                         (
                             delivery_manifest_path.expanduser(),
                             root / ".seektalent" / str(
                                 delivery_identity["deliveryManifestFilename"]
                             ),
+                        )
+                    )
+                    fixture_source = delivery_manifest_path.parent / str(
+                        delivery_identity["acceptanceFixtureSourcePath"]
+                    )
+                    additional_targets.append(
+                        (
+                            fixture_source,
+                            root / ".seektalent" / str(
+                                delivery_identity["acceptanceFixtureInstalledPath"]
+                            ),
+                        )
+                    )
+                    additional_targets.append(
+                        (
+                            delivery_manifest_path.parent / "verify_domi_host_runtime.py",
+                            root / ".seektalent" / "verify_domi_host_runtime.py",
                         )
                     )
                 if product_wheel_path is not None:
@@ -329,7 +378,7 @@ def _delivery_identity(
             "The exact SeekTalent delivery manifest is unavailable.",
         ) from exc
     expected = {
-        "schema_version": 1,
+        "schema_version": 2,
         "product_version": package_version,
         "bridge_build_id": WTSCLI_BUILD_ID,
         "wtscli_version": WTSCLI_VERSION,
@@ -351,6 +400,8 @@ def _delivery_identity(
     wheel_sha256 = payload.get("seektalent_wheel_sha256")
     wheel_filename = payload.get("seektalent_wheel")
     product_build_id = payload.get("product_build_id")
+    runtime_contract = payload.get("host_runtime_contract")
+    acceptance_fixture = payload.get("acceptance_fixture")
     if (
         not isinstance(source_revision, str)
         or len(source_revision) != 40
@@ -364,10 +415,40 @@ def _delivery_identity(
         or not isinstance(product_build_id, str)
         or product_build_id
         != f"seektalent-{package_version}+{source_revision}"
+        or not isinstance(runtime_contract, dict)
+        or not isinstance(acceptance_fixture, dict)
+        or payload.get("platform") != runtime_contract.get("platform")
+        or payload.get("os_family") != runtime_contract.get("os_family")
+        or payload.get("architecture") != runtime_contract.get("architecture")
     ):
         raise DomiBootstrapError(
             "delivery_manifest_identity_mismatch",
             "The delivery manifest does not bind an exact product build.",
+        )
+    fixture_path = acceptance_fixture.get("path")
+    fixture_schema = acceptance_fixture.get("schema_version")
+    fixture_sha = acceptance_fixture.get("sha256")
+    if (
+        not isinstance(fixture_path, str)
+        or Path(fixture_path).is_absolute()
+        or ".." in Path(fixture_path).parts
+        or fixture_schema != "seektalent.acceptance-fixture.v1"
+        or not isinstance(fixture_sha, str)
+        or len(fixture_sha) != 64
+        or any(character not in "0123456789abcdef" for character in fixture_sha)
+    ):
+        raise DomiBootstrapError(
+            "acceptance_fixture_identity_mismatch",
+            "The delivery manifest does not bind the acceptance fixture.",
+        )
+    fixture_source = manifest_path.parent / fixture_path
+    if (
+        not fixture_source.is_file()
+        or hashlib.sha256(fixture_source.read_bytes()).hexdigest() != fixture_sha
+    ):
+        raise DomiBootstrapError(
+            "acceptance_fixture_identity_mismatch",
+            "The delivery acceptance fixture does not match its manifest.",
         )
     return {
         "schemaVersion": INSTALL_RECEIPT_SCHEMA,
@@ -383,6 +464,11 @@ def _delivery_identity(
         "wtscliForkCommit": payload.get("wtscli_fork_commit"),
         "extensionVersion": WTSCLI_VERSION,
         "extensionIdSha256": expected["extension_id_sha256"],
+        "acceptanceFixtureSourcePath": fixture_path,
+        "acceptanceFixtureInstalledPath": f"acceptance/{Path(fixture_path).name}",
+        "acceptanceFixtureSchemaVersion": fixture_schema,
+        "acceptanceFixtureSha256": fixture_sha,
+        "_hostRuntimeContract": runtime_contract,
     }
 
 
@@ -416,30 +502,28 @@ def _write_windows_shims(
         f"""$ErrorActionPreference = "Stop"
 $DomiPython = "{_escape_powershell(domi_python)}"
 $DomiNode = "{_escape_powershell(domi_node)}"
-$ResolvedDomiPython = if ($env:SEEKTALENT_DOMI_PYTHON) {{ $env:SEEKTALENT_DOMI_PYTHON }} elseif ($env:DOMI_PYTHON) {{ $env:DOMI_PYTHON }} else {{ $DomiPython }}
-$ResolvedDomiNode = if ($env:SEEKTALENT_DOMI_NODE) {{ $env:SEEKTALENT_DOMI_NODE }} elseif ($env:DOMI_NODE) {{ $env:DOMI_NODE }} else {{ $DomiNode }}
 $PythonPathEntries = @()
 {python_path_lines}
 if ($PythonPathEntries.Count -gt 0) {{
   $env:PYTHONPATH = if ($env:PYTHONPATH) {{ ($PythonPathEntries + @($env:PYTHONPATH)) -join ";" }} else {{ $PythonPathEntries -join ";" }}
 }}
 $env:PATH = "{_escape_powershell(domi_python.parent)};{_escape_powershell(domi_node.parent)};$env:PATH"
-$env:SEEKTALENT_DOMI_PYTHON = $ResolvedDomiPython
-$env:SEEKTALENT_DOMI_NODE = $ResolvedDomiNode
-$env:DOMI_NODE = $ResolvedDomiNode
+$env:SEEKTALENT_DOMI_PYTHON = $DomiPython
+$env:SEEKTALENT_DOMI_NODE = $DomiNode
+$env:DOMI_NODE = $DomiNode
 if ($args.Count -ge 1 -and $args[0] -eq "workbench") {{
   $remaining = @()
   if ($args.Count -gt 1) {{ $remaining = $args[1..($args.Count - 1)] }}
-  & $ResolvedDomiPython -m seektalent.domi_workbench @remaining
+  & $DomiPython -m seektalent.domi_workbench @remaining
   exit $LASTEXITCODE
 }}
 if ($args.Count -ge 1 -and $args[0] -eq "maintenance") {{
   $remaining = @()
   if ($args.Count -gt 1) {{ $remaining = $args[1..($args.Count - 1)] }}
-  & $ResolvedDomiPython -m seektalent_ui.maintenance @remaining
+  & $DomiPython -m seektalent_ui.maintenance @remaining
   exit $LASTEXITCODE
 }}
-& $ResolvedDomiPython -m seektalent @args
+& $DomiPython -m seektalent @args
 exit $LASTEXITCODE
 """,
         encoding="utf-8",
@@ -485,8 +569,6 @@ set -eu
 DOMI_PYTHON={_shell_quote(domi_python)}
 DOMI_NODE={_shell_quote(domi_node)}
 {pythonpath_block}PATH={_shell_quote(domi_python.parent)}:{_shell_quote(domi_node.parent)}:$PATH
-DOMI_PYTHON="${{SEEKTALENT_DOMI_PYTHON:-$DOMI_PYTHON}}"
-DOMI_NODE="${{SEEKTALENT_DOMI_NODE:-${{DOMI_NODE:-$DOMI_NODE}}}}"
 SEEKTALENT_DOMI_PYTHON="$DOMI_PYTHON"
 SEEKTALENT_DOMI_NODE="$DOMI_NODE"
 export PATH SEEKTALENT_DOMI_PYTHON SEEKTALENT_DOMI_NODE DOMI_NODE

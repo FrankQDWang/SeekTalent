@@ -16,6 +16,18 @@ from seektalent_workbench_v2.runtime_service import (
 )
 
 
+DEV_PROD_PARITY_DIFFERENCE_ALLOWLIST = frozenset(
+    {
+        "frontend_delivery",
+        "data_directory",
+        "artifact_policy",
+        "flywheel_policy",
+        "installation_validation",
+        "dev_diagnostics",
+    }
+)
+
+
 @dataclass(frozen=True, slots=True)
 class RuntimeExecutionBundle:
     store: RuntimeControlStore

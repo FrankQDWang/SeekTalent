@@ -1,0 +1,21 @@
+{
+  "schemaVersion": "seektalent.acceptance-fixture.v1",
+  "fixtureId": "liepin-ai-agent-engineer-v1",
+  "sourceId": "liepin",
+  "jobTitle": "AI Agent 工程师",
+  "jd": "### 关于我们\n\nAccio 是全球首个面向 B2B 电商领域的 AI Agent 平台（访问官网：www.accio.com）。我们致力于借助 AI 技术，帮助全球企业高效完成跨境找品、供应商匹配、市场趋势研究、新品开发、竞对格局分析等复杂商业任务。AI 正重塑商业智能的未来，而我们已经率先踏入这片蓝海。诚邀志同道合的你，与我们一起共创下一代智能商业助手。\n\n### 岗位职责\n\n参与并主导 Multi‑Agent 多智能体协同架构的设计与落地，探索上下文工程的最佳实践，持续优化 Agent 交互效果。\n\n参与并主导 Agent 记忆系统（短期/长期记忆）的设计与实现，攻克复杂技术难题，提升 Agent 的连续推理与个性化能力。\n\n持续跟踪 Agent 领域前沿论文、开源项目及行业经验，推动先进技术在业务中的落地，提升产品效果。\n\n负责 Agent 系统研发效率、线上运维、性能调优及稳定性保障，确保系统在高并发场景下的可靠运行。\n\n### 任职要求\n\n工作经验：2 年以上软件工程经验，至少 1 年 AI Agent 系统研发经验。\n\n编程能力：精通 Python 或 Java 主流编程语言，具备良好的工程化编码习惯。\n\n技术深度：深入掌握 Agent 架构核心组件（如 ADK、Prompt 调优、Function Calling、RAG、上下文工程与压缩等）的设计原理及调优方案，对主流开源 Agent 框架有实际使用或源码阅读经验。\n\n综合素质：具备批判性思维，擅于将复杂业务问题抽象为简洁、高效的实现方案；热爱技术，拥抱开源，乐于分享与协作。\n\n学历背景：本科及以上学历，计算机科学、人工智能或相关专业优先。\n\n### 我们提供\n\n参与定义 B2B 电商领域 AI Agent 标准的机会，从零到一打造具有全球影响力的产品；\n\n与技术大牛和顶尖算法团队并肩作战，接触最前沿的 LLM 应用与系统工程实践；\n\n阿里巴巴集团级平台资源，快速迭代、海量数据、真实业务场景；\n\n开放、包容的技术氛围，鼓励创新与试错，支持技术社区贡献。",
+  "allowedActions": [
+    "search",
+    "paginate",
+    "read_cards",
+    "open_detail"
+  ],
+  "forbiddenActions": [
+    "contact_candidate",
+    "send_message",
+    "favorite",
+    "apply",
+    "download_resume",
+    "export_resume"
+  ]
+}

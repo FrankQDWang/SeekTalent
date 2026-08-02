@@ -8,6 +8,7 @@ import json
 import sys
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from seektalent.browser_bridge_manifest import (
     WTSCLI_BUILD_ID,
@@ -22,7 +23,7 @@ from seektalent.providers.liepin.browser_environment import (
 from seektalent.version import __version__
 
 
-INSTALL_RECEIPT_SCHEMA = "seektalent.install-receipt.v1"
+INSTALL_RECEIPT_SCHEMA = "seektalent.install-receipt.v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -37,6 +38,8 @@ def validate_installed_release(home: Path) -> InstalledReleaseValidation:
     receipt = _read_object(receipt_path)
     if receipt is None:
         return InstalledReleaseValidation(False, "seektalent_receipt_invalid")
+    if receipt.get("schemaVersion") == "seektalent.install-receipt.v1":
+        return InstalledReleaseValidation(False, "install_receipt_upgrade_required")
     if receipt.get("schemaVersion") != INSTALL_RECEIPT_SCHEMA:
         return InstalledReleaseValidation(False, "seektalent_receipt_invalid")
 
@@ -81,6 +84,25 @@ def validate_installed_release(home: Path) -> InstalledReleaseValidation:
     if manifest is None or not _manifest_matches_receipt(manifest, receipt, wheel_filename, wheel_sha):
         return InstalledReleaseValidation(False, "delivery_manifest_identity_mismatch")
 
+    fixture_relative = receipt.get("acceptanceFixtureInstalledPath")
+    fixture_schema = receipt.get("acceptanceFixtureSchemaVersion")
+    fixture_sha = receipt.get("acceptanceFixtureSha256")
+    if (
+        not isinstance(fixture_relative, str)
+        or not _safe_relative_path(fixture_relative)
+        or fixture_schema != "seektalent.acceptance-fixture.v1"
+        or not _is_sha(fixture_sha)
+    ):
+        return InstalledReleaseValidation(False, "acceptance_fixture_identity_mismatch")
+    fixture_path = root / fixture_relative
+    fixture = _read_object(fixture_path)
+    if (
+        fixture is None
+        or fixture.get("schemaVersion") != fixture_schema
+        or _sha256(fixture_path) != fixture_sha
+    ):
+        return InstalledReleaseValidation(False, "acceptance_fixture_identity_mismatch")
+
     bridge_manifest = root / "browser-bridge" / "bridge-manifest.json"
     try:
         requirement = load_browser_bridge_requirement(bridge_manifest)
@@ -124,9 +146,13 @@ def _manifest_matches_receipt(
     wheel_filename: str,
     wheel_sha: object,
 ) -> bool:
+    fixture = manifest.get("acceptance_fixture")
+    if not isinstance(fixture, dict):
+        return False
+    fixture = cast(dict[str, object], fixture)
     return all(
         (
-            manifest.get("schema_version") == 1,
+            manifest.get("schema_version") == 2,
             manifest.get("product_version") == receipt.get("productVersion"),
             manifest.get("source_revision") == receipt.get("sourceRevision"),
             manifest.get("product_build_id") == receipt.get("productBuildId"),
@@ -137,6 +163,12 @@ def _manifest_matches_receipt(
             manifest.get("extension_id_sha256") == receipt.get("extensionIdSha256"),
             manifest.get("seektalent_wheel") == wheel_filename,
             manifest.get("seektalent_wheel_sha256") == wheel_sha,
+            isinstance(manifest.get("host_runtime_contract"), dict),
+            isinstance(manifest.get("files"), list),
+            fixture.get("schema_version")
+            == receipt.get("acceptanceFixtureSchemaVersion"),
+            fixture.get("sha256")
+            == receipt.get("acceptanceFixtureSha256"),
         )
     )
 
@@ -188,6 +220,16 @@ def _safe_filename(value: str, *, suffix: str) -> bool:
         path.name == value
         and path.suffix == suffix
         and value not in {"", ".", ".."}
+    )
+
+
+def _safe_relative_path(value: str) -> bool:
+    path = Path(value)
+    return (
+        value not in {"", ".", ".."}
+        and not path.is_absolute()
+        and ".." not in path.parts
+        and path.as_posix() == value
     )
 
 

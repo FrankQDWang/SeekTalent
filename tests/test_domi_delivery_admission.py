@@ -61,7 +61,7 @@ source {_shell_quote(POSIX_INSTALLER)} 0.7.49
     os.name == "nt" or shutil.which("zsh") is None,
     reason="zsh-sourced Domi delivery is a macOS product entrypoint",
 )
-def test_posix_delivery_resolves_adjacent_exact_wheel_when_sourced_from_zsh(
+def test_posix_delivery_rejects_v1_payload_before_install_when_sourced_from_zsh(
     tmp_path: Path,
 ) -> None:
     delivery = tmp_path / "delivery"
@@ -120,9 +120,10 @@ source {_shell_quote(installer)} 0.8.0rc1
     )
 
     assert completed.returncode != 0
-    assert "reason_code=seektalent_pypi_install_failed" in completed.stderr
+    assert "reason_code=delivery_manifest_missing" in completed.stderr
     assert "reason_code=wtscli_bundle_missing" not in completed.stderr
-    assert "-m pip install" in log.read_text(encoding="utf-8")
+    assert "-m pip install" not in log.read_text(encoding="utf-8")
+    assert not (home / ".seektalent").exists()
 
 
 @pytest.mark.parametrize("mutation", ["legacy_identity", "tampered_runtime"])

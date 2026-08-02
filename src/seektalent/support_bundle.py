@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import socket
 import sqlite3
 from typing import Callable
 from uuid import uuid4
@@ -32,9 +33,10 @@ from seektalent.domi_bootstrap import (
     INSTALL_RECEIPT_SCHEMA,
 )
 from seektalent.version import __version__
+from seektalent.wtscli_lifecycle_supervisor import WtsCliLifecycleStatus
 
 
-SUPPORT_BUNDLE_SCHEMA = "seektalent.execution-support-bundle.v1"
+SUPPORT_BUNDLE_SCHEMA = "seektalent.execution-support-bundle.v2"
 
 
 class SupportBundleError(RuntimeError):
@@ -428,8 +430,26 @@ def _execution_identity() -> dict[str, object]:
                         "wtscliForkCommit",
                         "extensionVersion",
                         "extensionIdSha256",
+                        "hostPlatform",
+                        "hostOsFamily",
+                        "hostArchitecture",
+                        "pythonVersion",
+                        "pythonImplementation",
+                        "pythonCacheTag",
+                        "pythonSoabi",
+                        "pythonExecutableSha256",
+                        "nodeVersion",
+                        "nodeExecutableSha256",
+                        "acceptanceFixtureSchemaVersion",
+                        "acceptanceFixtureSha256",
                     )
                 }
+                receipt["pythonExecutablePathSha256"] = _sha256_string(
+                    candidate["pythonExecutable"]
+                )
+                receipt["nodeExecutablePathSha256"] = _sha256_string(
+                    candidate["nodeExecutable"]
+                )
             else:
                 receipt_reason = "install_receipt_identity_mismatch"
         except (OSError, json.JSONDecodeError):
@@ -451,7 +471,81 @@ def _execution_identity() -> dict[str, object]:
         "receiptReasonCode": receipt_reason,
         "receipt": receipt,
         "installedAssets": _installed_asset_identity(install_root),
+        "launchFacts": _launch_facts(install_root, receipt),
     }
+
+
+def _launch_facts(
+    install_root: Path,
+    receipt: dict[str, object] | None,
+) -> dict[str, object]:
+    owner_classification = "unknown"
+    extension_activation = "unknown"
+    manifest_path = install_root / ".seektalent" / "browser-bridge" / "bridge-manifest.json"
+    try:
+        requirement = load_browser_bridge_requirement(manifest_path)
+        state_root = requirement.runtime_identity.state.resolve_root(home=install_root)
+        status_payload = json.loads(
+            (state_root / "seektalent-wtscli-supervisor-status.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        status = WtsCliLifecycleStatus.from_payload(status_payload)
+    except (BrowserBridgeManifestError, OSError, json.JSONDecodeError):
+        status = None
+    port_open = _local_port_open(19826)
+    if port_open is False:
+        owner_classification = "absent"
+    elif port_open is True:
+        owner_classification = (
+            "owned_exact"
+            if status is not None
+            and status.bridge_build_id == WTSCLI_BUILD_ID
+            and status.daemon_owned
+            else "foreign"
+        )
+    if status is not None:
+        extension_activation = "active" if status.extension_connected else "inactive"
+    return {
+        "hostPlatform": None if receipt is None else receipt.get("hostPlatform"),
+        "hostOsFamily": None if receipt is None else receipt.get("hostOsFamily"),
+        "hostArchitecture": None if receipt is None else receipt.get("hostArchitecture"),
+        "productBuildId": None if receipt is None else receipt.get("productBuildId"),
+        "pythonVersion": None if receipt is None else receipt.get("pythonVersion"),
+        "pythonCacheTag": None if receipt is None else receipt.get("pythonCacheTag"),
+        "pythonSoabi": None if receipt is None else receipt.get("pythonSoabi"),
+        "pythonExecutablePathSha256": None
+        if receipt is None
+        else receipt.get("pythonExecutablePathSha256"),
+        "pythonExecutableSha256": None
+        if receipt is None
+        else receipt.get("pythonExecutableSha256"),
+        "nodeVersion": None if receipt is None else receipt.get("nodeVersion"),
+        "nodeExecutablePathSha256": None
+        if receipt is None
+        else receipt.get("nodeExecutablePathSha256"),
+        "nodeExecutableSha256": None
+        if receipt is None
+        else receipt.get("nodeExecutableSha256"),
+        "port19826OwnerClassification": owner_classification,
+        "extensionActivation": extension_activation,
+    }
+
+
+def _local_port_open(port: int) -> bool | None:
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+            return True
+    except ConnectionRefusedError:
+        return False
+    except OSError:
+        return None
+
+
+def _sha256_string(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    return hashlib.sha256(value.encode()).hexdigest()
 
 
 def _installed_asset_identity(
@@ -592,6 +686,26 @@ def _receipt_matches_expected_identity(
         and receipt.get("wtscliForkCommit") == WTSCLI_FORK_COMMIT
         and receipt.get("extensionVersion") == WTSCLI_VERSION
         and receipt.get("extensionIdSha256") == extension_hash
+        and receipt.get("hostPlatform")
+        in {"macos-arm64", "macos-x86_64", "windows-x64"}
+        and receipt.get("hostOsFamily") in {"macos", "windows"}
+        and receipt.get("hostArchitecture") in {"arm64", "x64"}
+        and receipt.get("pythonImplementation") == "cpython"
+        and isinstance(receipt.get("pythonVersion"), str)
+        and str(receipt.get("pythonVersion")).startswith("3.13.")
+        and receipt.get("pythonCacheTag") == "cpython-313"
+        and isinstance(receipt.get("pythonSoabi"), str)
+        and bool(receipt.get("pythonSoabi"))
+        and isinstance(receipt.get("pythonExecutable"), str)
+        and bool(receipt.get("pythonExecutable"))
+        and _sha256_text(receipt.get("pythonExecutableSha256"))
+        and isinstance(receipt.get("nodeExecutable"), str)
+        and bool(receipt.get("nodeExecutable"))
+        and receipt.get("nodeVersion") == "22.14.0"
+        and _sha256_text(receipt.get("nodeExecutableSha256"))
+        and receipt.get("acceptanceFixtureSchemaVersion")
+        == "seektalent.acceptance-fixture.v1"
+        and _sha256_text(receipt.get("acceptanceFixtureSha256"))
     )
 
 

@@ -117,8 +117,12 @@ The command starts the backend and serves the built React Workbench from the sam
 For source checkout development, use the repo-local WTSCLI/React launcher:
 
 ```bash
+export DOMI_NODE=/path/to/domi/node
 scripts/start-dev-workbench.sh
 ```
+
+The product WTSCLI runtime always uses the Domi-provided Node 22.14.0. Vite and
+pnpm may continue to use the developer's local frontend toolchain.
 
 For production-package staging on macOS, install the published wheel into a fully isolated home:
 

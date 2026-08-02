@@ -131,10 +131,11 @@ uv run seektalent-ui-api --help
 Start the local React workbench with the repo-local WTSCLI browser bridge:
 
 ```bash
+export DOMI_NODE=/path/to/domi/node
 scripts/start-dev-workbench.sh
 ```
 
-This launcher is the product development preset for the CTS + Liepin local Workbench. It installs React dependencies with pnpm when needed, enables the WTSCLI-backed Liepin worker, and then starts both the backend and React frontend. A plain low-level `seektalent-ui-api` command only reads its explicit configuration and does not silently enable Liepin when `SEEKTALENT_LIEPIN_WORKER_MODE=disabled`.
+This launcher is the product development preset for the CTS + Liepin local Workbench. It requires the Domi-provided Node 22.14.0 for the product WTSCLI runtime, while pnpm and Vite may use the local frontend toolchain. It then starts the shared backend runtime composition and React frontend. A plain low-level `seektalent-ui-api` command only reads its explicit configuration and does not silently enable Liepin when `SEEKTALENT_LIEPIN_WORKER_MODE=disabled`.
 
 For local Liepin browser readiness, run the Workbench launcher and inspect the Workbench health surface. The application owns and supervises the WTSCLI daemon for its lifetime; do not invoke a daemon CLI directly.
 

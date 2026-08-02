@@ -2,57 +2,6 @@ name: Native launch-binding probe
 
 on:
   workflow_dispatch:
-  pull_request:
-    paths:
-      - ".github/workflows/native-launch-binding-probe.yml"
-      - ".github/workflows/build-macos-intel-offline.yml"
-      - "scripts/build_offline_macos_intel.py"
-      - "scripts/build_domi_delivery_bundle.py"
-      - "scripts/install-seektalent-domi.ps1"
-      - "scripts/install-seektalent-domi.sh"
-      - "scripts/install-seektalent-staging.sh"
-      - "scripts/install_staging_browser_bridge.py"
-      - "scripts/offline/install-offline-macos-intel.sh"
-      - "src/seektalent/browser_bridge_install.py"
-      - "src/seektalent/providers/liepin/browser_environment.py"
-      - "src/seektalent/browser_bridge_manifest.py"
-      - "src/seektalent/browser_bridge_runtime_receipt.py"
-      - "src/seektalent/domi_bootstrap.py"
-      - "src/seektalent/opencli_browser/**"
-      - "src/seektalent/wtscli_runtime.py"
-      - "tests/browser_bridge_bundle_fixtures.py"
-      - "tests/test_domi_delivery_admission.py"
-      - "tests/test_browser_bridge_environment.py"
-      - "tests/test_build_domi_delivery_bundle.py"
-      - "tests/test_wtscli_bundle_binding.py"
-      - "tools/native_probes/**"
-      - "tests/test_native_launch_binding_probe.py"
-      - "tests/test_installed_slot_lease.py"
-      - "tests/test_windows_installed_binding.py"
-      - "tests/test_windows_sidecar_process.py"
-      - "tests/test_packaged_sidecar_artifact.py"
-      - "tests/test_sidecar_readiness.py"
-      - "tools/build_packaged_sidecar.py"
-      - "src/seektalent/windows_installed_binding.py"
-      - "src/seektalent/windows_native_files.py"
-      - "src/seektalent/windows_sidecar_process.py"
-      - "src/seektalent/installed_release.py"
-      - "src/seektalent/installed_filesystem.py"
-      - "src/seektalent/installed_slot.py"
-      - "src/seektalent/owned_sidecar_process.py"
-      - "src/seektalent/release_manifest.py"
-      - "src/seektalent/release_signing.py"
-      - "src/seektalent/sidecar_bootstrap.py"
-      - "src/seektalent/sidecar_child_session.py"
-      - "src/seektalent/sidecar_handshake_protocol.py"
-      - "src/seektalent/sidecar_readiness.py"
-      - "src/seektalent/source_port/_command_journal_engine.py"
-      - "src/seektalent/source_port/_command_journal_types.py"
-      - "src/seektalent/source_port/command_journal.py"
-      - "src/seektalent/source_port/history_sqlite_reader.py"
-      - "pyproject.toml"
-      - "tests/test_source_port_command_journal.py"
-      - "uv.lock"
 
 permissions:
   contents: read
@@ -114,7 +63,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: "3.12"
+          python-version: "3.13"
 
       - uses: actions/setup-node@v6
         with:
@@ -189,6 +138,7 @@ jobs:
           from pathlib import Path
           import shutil
           from subprocess import check_call
+          import sys
 
           uv = shutil.which("uv")
           node = shutil.which("node")
@@ -197,6 +147,19 @@ jobs:
           check_call([uv, "build", "--wheel", "--out-dir", "dist/wheel"])
           wheels = list(Path("dist/wheel").glob("seektalent-*.whl"))
           assert len(wheels) == 1, wheels
+          Path("dist/wheelhouse").mkdir(parents=True)
+          check_call(
+              [
+                  sys.executable,
+                  "-m",
+                  "pip",
+                  "download",
+                  "--only-binary=:all:",
+                  "--dest",
+                  "dist/wheelhouse",
+                  str(wheels[0]),
+              ]
+          )
           check_call(
               [
                   uv,
@@ -211,6 +174,10 @@ jobs:
                   "wtscli-browser-bridge",
                   "--seektalent-wheel",
                   str(wheels[0]),
+                  "--wheelhouse-dir",
+                  "dist/wheelhouse",
+                  "--domi-python",
+                  sys.executable,
                   "--node",
                   node,
                   "--platform",
@@ -220,7 +187,7 @@ jobs:
 
       - name: Verify native product package contents
         env:
-          SEEKTALENT_NATIVE_DELIVERY_ARCHIVE: dist/delivery/seektalent-domi-${{ matrix.delivery_platform }}.zip
+          SEEKTALENT_NATIVE_DELIVERY_ARCHIVE: dist/delivery/seektalent-offline-0.8.0rc1-${{ matrix.delivery_platform }}-py313.zip
           SEEKTALENT_NATIVE_DELIVERY_PLATFORM: ${{ matrix.delivery_platform }}
         run: uv run --group dev python -m pytest tests/test_build_domi_delivery_bundle.py -q
 
@@ -276,7 +243,9 @@ jobs:
       - name: Upload native SeekTalent product package
         uses: actions/upload-artifact@v4
         with:
-          name: seektalent-domi-${{ matrix.delivery_platform }}
-          path: dist/delivery/seektalent-domi-${{ matrix.delivery_platform }}.zip
+          name: seektalent-offline-0.8.0rc1-${{ matrix.delivery_platform }}-py313
+          path: |
+            dist/delivery/seektalent-offline-0.8.0rc1-${{ matrix.delivery_platform }}-py313.zip
+            dist/delivery/seektalent-offline-0.8.0rc1-${{ matrix.delivery_platform }}-py313.zip.sha256
           if-no-files-found: error
           retention-days: 14

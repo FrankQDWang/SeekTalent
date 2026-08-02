@@ -16,6 +16,7 @@ from seektalent.browser_bridge_manifest import (
     WTSCLI_FORK_COMMIT,
     WTSCLI_VERSION,
 )
+from seektalent.domi_host_runtime import HostRuntimeIdentity
 from tests.browser_bridge_bundle_fixtures import write_browser_bridge_bundle
 
 
@@ -168,11 +169,21 @@ def test_bootstrap_installs_prepared_runtime_only_with_its_exact_bundle(
     write_browser_bridge_bundle(bundle)
     prepared_runtime.mkdir()
     delivery_manifest = tmp_path / "delivery-manifest.json"
+    fixture = tmp_path / "acceptance" / "fixture.json"
+    fixture.parent.mkdir()
+    fixture.write_text(
+        json.dumps({"schemaVersion": "seektalent.acceptance-fixture.v1"}),
+        encoding="utf-8",
+    )
+    (tmp_path / "verify_domi_host_runtime.py").write_text("# verifier\n", encoding="utf-8")
     delivery_manifest.write_text(
         json.dumps(
-            {
-                "schema_version": 1,
-                "product_version": "0.8.0rc1",
+                {
+                    "schema_version": 2,
+                    "platform": "macos-arm64",
+                    "os_family": "macos",
+                    "architecture": "arm64",
+                    "product_version": "0.8.0rc1",
                 "source_revision": "a" * 40,
                 "product_build_id": (
                     "seektalent-0.8.0rc1+" + "a" * 40
@@ -186,6 +197,21 @@ def test_bootstrap_installs_prepared_runtime_only_with_its_exact_bundle(
                 "extension_id_sha256": hashlib.sha256(
                     WTSCLI_EXTENSION_ID.encode()
                 ).hexdigest(),
+                "host_runtime_contract": {
+                    "platform": "macos-arm64",
+                    "os_family": "macos",
+                    "architecture": "arm64",
+                    "python_implementation": "cpython",
+                    "python_major_minor": "3.13",
+                    "python_cache_tag": "cpython-313",
+                    "python_soabi": "cpython-313-darwin",
+                    "node_version": "22.14.0",
+                },
+                "acceptance_fixture": {
+                    "path": "acceptance/fixture.json",
+                    "schema_version": "seektalent.acceptance-fixture.v1",
+                    "sha256": hashlib.sha256(fixture.read_bytes()).hexdigest(),
+                },
             }
         ),
         encoding="utf-8",
@@ -202,6 +228,24 @@ def test_bootstrap_installs_prepared_runtime_only_with_its_exact_bundle(
                 )
 
     monkeypatch.setattr(domi_bootstrap, "install_browser_bridge_bundle", fake_install)
+    monkeypatch.setattr(
+        domi_bootstrap,
+        "probe_runtime_with_python",
+        lambda *_args: HostRuntimeIdentity(
+            platform="macos-arm64",
+            os_family="macos",
+            architecture="arm64",
+            python_executable=str(domi_python.resolve()),
+            python_version="3.13.7",
+            python_implementation="cpython",
+            python_cache_tag="cpython-313",
+            python_soabi="cpython-313-darwin",
+            python_executable_sha256="c" * 64,
+            node_executable=str(domi_node.resolve()),
+            node_version="22.14.0",
+            node_executable_sha256="d" * 64,
+        ),
+    )
 
     domi_bootstrap.bootstrap_domi_workbench(
         home=home,
@@ -223,10 +267,15 @@ def test_bootstrap_installs_prepared_runtime_only_with_its_exact_bundle(
     assert [target for _source, target in additional_targets] == [
         home / ".seektalent" / "bin",
         home / domi_bootstrap.INSTALL_RECEIPT_RELATIVE_PATH,
+        home / ".seektalent" / "delivery-manifest.json",
+        home / ".seektalent" / "acceptance" / "fixture.json",
+        home / ".seektalent" / "verify_domi_host_runtime.py",
     ]
     assert captured_receipt["sourceRevision"] == "a" * 40
     assert captured_receipt["productVersion"] == "0.8.0rc1"
     assert captured_receipt["bridgeBuildId"] == WTSCLI_BUILD_ID
+    assert captured_receipt["schemaVersion"] == "seektalent.install-receipt.v2"
+    assert captured_receipt["pythonSoabi"] == "cpython-313-darwin"
 
     with pytest.raises(
         domi_bootstrap.DomiBootstrapError,
@@ -306,7 +355,9 @@ def test_install_scripts_delegate_to_package_bootstrap() -> None:
     mac_script = Path("scripts/install-seektalent-domi.sh").read_text(encoding="utf-8")
 
     assert "pip install" in windows_script
-    assert "seektalent==$Version" in windows_script
+    assert "--no-index --find-links $Wheelhouse" in windows_script
+    assert "seektalent==$Version" not in windows_script
+    assert "validate-delivery" in windows_script
     assert "SEEKTALENT_INSTALL_HOME" in windows_script
     assert "--home $InstallHome" in windows_script
     assert "SEEKTALENT_INSTALL_HOME" in mac_script
@@ -324,7 +375,9 @@ def test_install_scripts_delegate_to_package_bootstrap() -> None:
     assert "$env:PYTHONPATH = $PreviousPythonPath" in windows_script
 
     assert "pip install" in mac_script
-    assert "seektalent==${version}" in mac_script
+    assert '--no-index --find-links "${wheelhouse}"' in mac_script
+    assert "seektalent==${version}" not in mac_script
+    assert "validate-delivery" in mac_script
     assert "--no-deps" not in mac_script
     assert "--ignore-installed" in mac_script
     assert "set -euo pipefail" not in mac_script
@@ -421,6 +474,7 @@ before_flags="$-"
 before_pipefail="$(set -o | awk '$1 == "pipefail" {{ print $2 }}')"
 before_pythonpath="$PYTHONPATH"
 source {_bash_quote(script)} 0.7.25 {_bash_quote(wtscli_bundle)} >/dev/null
+install_status=$?
 after_flags="$-"
 after_pipefail="$(set -o | awk '$1 == "pipefail" {{ print $2 }}')"
 if [[ "$after_flags" != "$before_flags" ]]; then
@@ -435,15 +489,21 @@ if [[ "$PYTHONPATH" != "$before_pythonpath" ]]; then
   echo "PYTHONPATH changed: before=$before_pythonpath after=$PYTHONPATH" >&2
   exit 43
 fi
-case ":$PATH:" in
-  *":$HOME/.seektalent/bin:"*) exit 0 ;;
-  *) echo "PATH missing seektalent bin: $PATH" >&2; exit 44 ;;
-esac
+if [[ "$install_status" -ne 1 ]]; then
+  echo "missing exact delivery should fail before install" >&2
+  exit 44
+fi
+if [[ -e "$HOME/.seektalent" ]]; then
+  echo "target changed before exact delivery validation" >&2
+  exit 45
+fi
+exit 0
 """
 
     result = subprocess.run(["bash", "-c", bash_code], capture_output=True, text=True, check=False)
 
     assert result.returncode == 0, result.stderr
+    assert "delivery_manifest_missing" in result.stderr
 
 
 def test_posix_install_script_uses_the_explicit_host_python_path(tmp_path: Path) -> None:
@@ -493,7 +553,8 @@ source {_bash_quote(script)} 0.7.25 {_bash_quote(wtscli_bundle)} >/dev/null
 
     result = subprocess.run(["bash", "-c", bash_code], capture_output=True, text=True, check=False)
 
-    assert result.returncode == 0, result.stderr
+    assert result.returncode == 1
+    assert "delivery_manifest_missing" in result.stderr
     assert python_capture.read_text(encoding="utf-8") == str(domi_python)
 
 
@@ -504,7 +565,6 @@ def test_posix_install_script_accepts_seektalent_domi_node_alias(tmp_path: Path)
     domi_python.parent.mkdir(parents=True)
     domi_node.parent.mkdir(parents=True)
     home.mkdir()
-    node_capture = tmp_path / "node-capture.txt"
     wtscli_bundle = _write_bundle_marker(tmp_path)
     domi_python.write_text(
         f"""#!/usr/bin/env bash
@@ -520,8 +580,7 @@ fi
 if [[ "${{1:-}} ${{2:-}}" == "-m seektalent.domi_bootstrap" ]]; then
   while [[ $# -gt 0 ]]; do
     if [[ "$1" == "--domi-node" ]]; then
-      printf "%s" "$2" > {_bash_quote(node_capture)}
-      echo '{{}}'
+          echo '{{}}'
       exit 0
     fi
     shift
@@ -548,8 +607,10 @@ source {_bash_quote(script)} 0.7.25 {_bash_quote(wtscli_bundle)} >/dev/null
 
     result = subprocess.run(["bash", "-c", bash_code], capture_output=True, text=True, check=False)
 
-    assert result.returncode == 0, result.stderr
-    assert node_capture.read_text(encoding="utf-8") == str(domi_node)
+    assert result.returncode == 1
+    assert "delivery_manifest_missing" in result.stderr
+    script_text = Path("scripts/install-seektalent-domi.sh").read_text(encoding="utf-8")
+    assert 'DOMI_NODE:-${SEEKTALENT_DOMI_NODE:-}' in script_text
 
 
 def _write_bundle_marker(root: Path) -> Path:

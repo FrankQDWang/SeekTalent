@@ -18,6 +18,10 @@ from seektalent.browser_bridge_manifest import (
     WTSCLI_VERSION,
 )
 from seektalent.domi_bootstrap import INSTALL_RECEIPT_SCHEMA
+from seektalent.domi_host_runtime import (
+    delivery_runtime_contract,
+    probe_current_runtime,
+)
 from seektalent.version import __version__
 from tests.browser_bridge_bundle_fixtures import write_browser_bridge_bundle
 
@@ -40,9 +44,18 @@ def _exact_install(tmp_path: Path, capture: Path) -> tuple[Path, Path, Path]:
     wheel = tmp_path / f"seektalent-{__version__}-py3-none-any.whl"
     wheel.write_bytes(b"exact-test-wheel")
     manifest = tmp_path / "delivery-manifest.json"
+    acceptance_fixture = tmp_path / "acceptance-fixture.json"
+    acceptance_fixture.write_text(
+        json.dumps({"schemaVersion": "seektalent.acceptance-fixture.v1"}),
+        encoding="utf-8",
+    )
+    runtime_identity = probe_current_runtime(Path(node_text))
     source_revision = "a" * 40
     manifest_payload = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "platform": runtime_identity.platform,
+        "os_family": runtime_identity.os_family,
+        "architecture": runtime_identity.architecture,
         "product_version": __version__,
         "source_revision": source_revision,
         "product_build_id": f"seektalent-{__version__}+{source_revision}",
@@ -53,6 +66,13 @@ def _exact_install(tmp_path: Path, capture: Path) -> tuple[Path, Path, Path]:
         "extension_id_sha256": hashlib.sha256(WTSCLI_EXTENSION_ID.encode()).hexdigest(),
         "seektalent_wheel": wheel.name,
         "seektalent_wheel_sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
+        "host_runtime_contract": delivery_runtime_contract(runtime_identity),
+        "acceptance_fixture": {
+            "path": "acceptance/acceptance-fixture.json",
+            "schema_version": "seektalent.acceptance-fixture.v1",
+            "sha256": hashlib.sha256(acceptance_fixture.read_bytes()).hexdigest(),
+        },
+        "files": [],
     }
     manifest.write_text(json.dumps(manifest_payload) + "\n", encoding="utf-8")
     receipt = {
@@ -69,6 +89,10 @@ def _exact_install(tmp_path: Path, capture: Path) -> tuple[Path, Path, Path]:
         "wtscliForkCommit": WTSCLI_FORK_COMMIT,
         "extensionVersion": WTSCLI_VERSION,
         "extensionIdSha256": manifest_payload["extension_id_sha256"],
+        "acceptanceFixtureInstalledPath": "acceptance/acceptance-fixture.json",
+        "acceptanceFixtureSchemaVersion": "seektalent.acceptance-fixture.v1",
+        "acceptanceFixtureSha256": manifest_payload["acceptance_fixture"]["sha256"],
+        **runtime_identity.to_receipt_payload(),
     }
     (tmp_path / "install-receipt.json").write_text(
         json.dumps(receipt) + "\n",
@@ -82,6 +106,14 @@ def _exact_install(tmp_path: Path, capture: Path) -> tuple[Path, Path, Path]:
             (tmp_path / "install-receipt.json", root / "install-receipt.json"),
             (manifest, root / manifest.name),
             (wheel, root / wheel.name),
+            (
+                acceptance_fixture,
+                root / "acceptance" / "acceptance-fixture.json",
+            ),
+            (
+                ROOT / "src" / "seektalent" / "domi_host_runtime.py",
+                root / "verify_domi_host_runtime.py",
+            ),
         ),
     )
     site_packages = root / "python-prefix" / __version__ / "site-packages"

@@ -17,6 +17,12 @@ from seektalent.browser_bridge_manifest import (
     WTSCLI_EXTENSION_ID,
     WTSCLI_FORK_COMMIT,
 )
+from seektalent.domi_host_runtime import (
+    HostRuntimeIdentity,
+    delivery_runtime_contract,
+    probe_runtime_with_python,
+    validate_delivery_runtime_contract,
+)
 from seektalent.version import __version__
 
 
@@ -28,6 +34,9 @@ SUPPORTED_PLATFORMS = frozenset(
         "macos-x86_64",
     }
 )
+ACCEPTANCE_FIXTURE = (
+    ROOT / "acceptance" / "fixtures" / "liepin-ai-agent-engineer-v1.json"
+)
 
 
 def build_delivery_bundle(
@@ -35,9 +44,12 @@ def build_delivery_bundle(
     output_dir: Path,
     browser_bridge_bundle: Path,
     seektalent_wheel: Path,
+    wheelhouse_dir: Path,
+    domi_python: Path | None,
     node: Path,
     platform_name: str,
     source_revision: str | None = None,
+    host_runtime_identity: HostRuntimeIdentity | None = None,
 ) -> Path:
     """Build one downloadable SeekTalent package with its exact WTSCLI pair."""
     if platform_name not in SUPPORTED_PLATFORMS:
@@ -56,9 +68,20 @@ def build_delivery_bundle(
         or seektalent_wheel.suffix != ".whl"
     ):
         raise ValueError("one SeekTalent wheel is required")
+    if not wheelhouse_dir.is_dir() or not any(wheelhouse_dir.glob("*.whl")):
+        raise ValueError("a non-empty offline Python wheelhouse is required")
+    identity = host_runtime_identity
+    if identity is None:
+        if domi_python is None:
+            raise ValueError("the Domi Python executable is required")
+        identity = probe_runtime_with_python(domi_python, node)
+    contract = delivery_runtime_contract(identity)
+    reason = validate_delivery_runtime_contract(identity, contract)
+    if reason is not None or identity.platform != platform_name:
+        raise ValueError(reason or "domi_platform_contract_mismatch")
 
     output_dir.mkdir(parents=True, exist_ok=True)
-    package_name = f"seektalent-domi-{platform_name}"
+    package_name = f"seektalent-offline-{__version__}-{platform_name}-py313"
     archive = output_dir / f"{package_name}.zip"
     archive.unlink(missing_ok=True)
     with tempfile.TemporaryDirectory(prefix="seektalent-domi-delivery-") as temporary:
@@ -96,6 +119,15 @@ def build_delivery_bundle(
                 package_root / "rollback-seektalent-domi.sh",
             )
         shutil.copy2(seektalent_wheel, package_root / seektalent_wheel.name)
+        shutil.copytree(wheelhouse_dir, package_root / "python-wheelhouse")
+        fixture_relative = Path("acceptance") / ACCEPTANCE_FIXTURE.name
+        fixture_target = package_root / fixture_relative
+        fixture_target.parent.mkdir()
+        shutil.copy2(ACCEPTANCE_FIXTURE, fixture_target)
+        shutil.copy2(
+            ROOT / "src" / "seektalent" / "domi_host_runtime.py",
+            package_root / "verify_domi_host_runtime.py",
+        )
         with tempfile.TemporaryDirectory(
             prefix="seektalent-wtscli-prepared-",
         ) as prepared_temporary:
@@ -108,9 +140,11 @@ def build_delivery_bundle(
                 installed.runtime_dir,
                 package_root / "wtscli-runtime.zip",
             )
-        manifest = {
-            "schema_version": 1,
+        manifest: dict[str, object] = {
+            "schema_version": 2,
             "platform": platform_name,
+            "os_family": identity.os_family,
+            "architecture": identity.architecture,
             "product_version": __version__,
             "source_revision": exact_source_revision,
             "product_build_id": (
@@ -136,6 +170,12 @@ def build_delivery_bundle(
             "seektalent_wheel_sha256": _sha256(
                 package_root / seektalent_wheel.name
             ),
+            "host_runtime_contract": contract,
+            "acceptance_fixture": {
+                "path": fixture_relative.as_posix(),
+                "schema_version": "seektalent.acceptance-fixture.v1",
+                "sha256": _sha256(fixture_target),
+            },
             "startup_script": startup_script_name,
             "startup_contract": {
                 "jwt_env": "SEEKTALENT_DOMI_JWT",
@@ -143,12 +183,43 @@ def build_delivery_bundle(
                 "node_env": "DOMI_NODE",
             },
         }
+        manifest["files"] = _file_manifest(package_root)
         (package_root / "delivery-manifest.json").write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2) + "\n",
+            json.dumps(manifest, ensure_ascii=False, indent=2, sort_keys=True) + "\n",
             encoding="utf-8",
         )
+        _write_sha256s(package_root)
         _write_archive(package_root, archive)
+    (output_dir / f"{archive.name}.sha256").write_text(
+        f"{_sha256(archive)}  {archive.name}\n",
+        encoding="utf-8",
+    )
     return archive
+
+
+def _file_manifest(package_root: Path) -> list[dict[str, object]]:
+    files: list[dict[str, object]] = []
+    for path in sorted(package_root.rglob("*")):
+        if path.is_symlink():
+            raise ValueError("delivery package must not contain symlinks")
+        if path.is_file():
+            files.append(
+                {
+                    "path": path.relative_to(package_root).as_posix(),
+                    "size": path.stat().st_size,
+                    "sha256": _sha256(path),
+                }
+            )
+    return files
+
+
+def _write_sha256s(package_root: Path) -> None:
+    lines = [
+        f"{entry['sha256']}  {entry['path']}"
+        for entry in _file_manifest(package_root)
+        if entry["path"] != "SHA256SUMS"
+    ]
+    (package_root / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _write_runtime_zip(runtime_dir: Path, archive: Path) -> None:
@@ -216,6 +287,8 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--wtscli-bundle-dir", type=Path, required=True)
     parser.add_argument("--seektalent-wheel", type=Path, required=True)
+    parser.add_argument("--wheelhouse-dir", type=Path, required=True)
+    parser.add_argument("--domi-python", type=Path, required=True)
     parser.add_argument("--node", type=Path, required=True)
     parser.add_argument("--source-revision")
     parser.add_argument(
@@ -233,6 +306,8 @@ def main(argv: list[str] | None = None) -> int:
         output_dir=args.output_dir,
         browser_bridge_bundle=args.wtscli_bundle_dir,
         seektalent_wheel=args.seektalent_wheel,
+        wheelhouse_dir=args.wheelhouse_dir,
+        domi_python=args.domi_python,
         node=args.node,
         platform_name=args.platform_name,
         source_revision=args.source_revision,

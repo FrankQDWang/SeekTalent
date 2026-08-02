@@ -110,6 +110,22 @@ def test_support_bundle_is_allowlisted_local_and_private(
                 "extensionIdSha256": hashlib.sha256(
                     WTSCLI_EXTENSION_ID.encode()
                 ).hexdigest(),
+                "hostPlatform": "macos-arm64",
+                "hostOsFamily": "macos",
+                "hostArchitecture": "arm64",
+                "pythonExecutable": "/PRIVATE/Domi/python",
+                "pythonVersion": "3.13.7",
+                "pythonImplementation": "cpython",
+                "pythonCacheTag": "cpython-313",
+                "pythonSoabi": "cpython-313-darwin",
+                "pythonExecutableSha256": "d" * 64,
+                "nodeExecutable": "/PRIVATE/Domi/node",
+                "nodeVersion": "22.14.0",
+                "nodeExecutableSha256": "e" * 64,
+                "acceptanceFixtureSchemaVersion": (
+                    "seektalent.acceptance-fixture.v1"
+                ),
+                "acceptanceFixtureSha256": "f" * 64,
             }
         ),
         encoding="utf-8",
@@ -209,6 +225,17 @@ def test_support_bundle_is_allowlisted_local_and_private(
     assert payload["executionIdentity"]["receipt"]["sourceRevision"] == (
         "a" * 40
     )
+    assert payload["schemaVersion"] == "seektalent.execution-support-bundle.v2"
+    assert payload["executionIdentity"]["launchFacts"]["pythonSoabi"] == (
+        "cpython-313-darwin"
+    )
+    assert payload["executionIdentity"]["launchFacts"]["nodeVersion"] == (
+        "22.14.0"
+    )
+    assert payload["executionIdentity"]["launchFacts"][
+        "port19826OwnerClassification"
+    ] in {"absent", "unknown"}
+    assert "/PRIVATE/Domi" not in text
     assert payload["runtimeControl"]["executionFailures"][0][
         "safe_reason_code"
     ] == "runtime_worker_failed"

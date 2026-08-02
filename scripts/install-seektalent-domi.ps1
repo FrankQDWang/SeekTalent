@@ -82,28 +82,19 @@ function Install-SeekTalentDomi {
   if (-not $DeliveryManifest) {
     $DeliveryManifest = Join-Path $PSScriptRoot "delivery-manifest.json"
   }
-  $DeliveryManifestArgs = @()
-  $ExactDeliveryRequested = (
-    $ProductWheel -or
-    (Test-Path -Path $DeliveryManifest -PathType Leaf) -or
-    $Version -eq "0.8.0rc1"
-  )
-  if ($ExactDeliveryRequested) {
-    if (-not $ProductWheel -or -not (Test-Path -Path $DeliveryManifest -PathType Leaf)) {
-      Fail "delivery_manifest_missing" "The exact SeekTalent wheel and delivery manifest are required."
-    }
-    $DeliveryIdentity = Get-Content -Raw -Path $DeliveryManifest | ConvertFrom-Json
-    $WheelHash = (Get-FileHash -Algorithm SHA256 -Path $ProductWheel).Hash.ToLowerInvariant()
-    if (
-      $DeliveryIdentity.schema_version -ne 1 -or
-      $DeliveryIdentity.product_version -ne $Version -or
-      $DeliveryIdentity.seektalent_wheel -ne (Split-Path -Leaf $ProductWheel) -or
-      $DeliveryIdentity.seektalent_wheel_sha256 -ne $WheelHash
-    ) {
-      Fail "delivery_manifest_identity_mismatch" "The exact SeekTalent wheel does not match the delivery manifest."
-    }
-    $DeliveryManifestArgs = @("--delivery-manifest", $DeliveryManifest)
+  $RuntimeVerifier = Join-Path $PSScriptRoot "verify_domi_host_runtime.py"
+  $Wheelhouse = Join-Path $PSScriptRoot "python-wheelhouse"
+  if (-not $ProductWheel -or
+      -not (Test-Path -Path $DeliveryManifest -PathType Leaf) -or
+      -not (Test-Path -Path $RuntimeVerifier -PathType Leaf) -or
+      -not (Test-Path -Path $Wheelhouse -PathType Container)) {
+    Fail "delivery_manifest_missing" "The exact manifest, verifier, wheel, and offline wheelhouse are required."
   }
+  & $DomiPython $RuntimeVerifier validate-delivery --node $DomiNode --manifest $DeliveryManifest
+  if ($LASTEXITCODE -ne 0) {
+    Fail "delivery_preflight_failed" "The delivery payload or Domi runtime failed exact validation."
+  }
+  $DeliveryManifestArgs = @("--delivery-manifest", $DeliveryManifest)
 
   $Prefix = Join-Path $InstallHome ".seektalent\python-prefix\$Version"
   $SitePackages = Join-Path $Prefix "Lib\site-packages"
@@ -116,10 +107,9 @@ function Install-SeekTalentDomi {
   try {
     New-Item -ItemType Directory -Force -Path $CandidateSitePackages | Out-Null
     New-Item -ItemType Directory -Force -Path $PreparedRuntimeDir | Out-Null
-    $SeekTalentInstallSource = if ($ProductWheel) { $ProductWheel } else { "seektalent==$Version" }
-    & $DomiPython -m pip install --upgrade --ignore-installed --no-cache-dir --target $CandidateSitePackages $SeekTalentInstallSource
+    & $DomiPython -m pip install --no-index --find-links $Wheelhouse --upgrade --ignore-installed --no-cache-dir --target $CandidateSitePackages $ProductWheel
     if ($LASTEXITCODE -ne 0) {
-      Fail "seektalent_pypi_install_failed" "Failed to install seektalent==$Version with Domi Python."
+      Fail "seektalent_offline_install_failed" "Failed to install the exact SeekTalent wheel from its offline wheelhouse."
     }
     Expand-Archive -Path $PreparedWtscliRuntime -DestinationPath $PreparedRuntimeDir -Force
     $env:PYTHONPATH = if ($env:PYTHONPATH) { "$CandidateSitePackages;$env:PYTHONPATH" } else { $CandidateSitePackages }

@@ -10,10 +10,28 @@ from pathlib import Path
 import pytest
 
 from scripts.build_domi_delivery_bundle import build_delivery_bundle
+from seektalent.domi_host_runtime import HostRuntimeIdentity, validate_delivery_payload
 from tests.browser_bridge_bundle_fixtures import (
     WTSCLI_BUILD_ID,
     write_browser_bridge_bundle,
 )
+
+
+def _windows_identity() -> HostRuntimeIdentity:
+    return HostRuntimeIdentity(
+        platform="windows-x64",
+        os_family="windows",
+        architecture="x64",
+        python_executable=r"C:\Domi\python.exe",
+        python_version="3.13.7",
+        python_implementation="cpython",
+        python_cache_tag="cpython-313",
+        python_soabi="cp313-win_amd64",
+        python_executable_sha256="a" * 64,
+        node_executable=r"C:\Domi\node.exe",
+        node_version="22.14.0",
+        node_executable_sha256="b" * 64,
+    )
 
 
 def test_build_delivery_bundle_contains_exact_pair_runtime_and_platform_installer(
@@ -23,14 +41,20 @@ def test_build_delivery_bundle_contains_exact_pair_runtime_and_platform_installe
     write_browser_bridge_bundle(bundle)
     wheel = tmp_path / "seektalent-0.8.0rc1-py3-none-any.whl"
     wheel.write_bytes(b"wheel")
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    (wheelhouse / "dependency-1.0-py3-none-any.whl").write_bytes(b"dependency")
 
     archive = build_delivery_bundle(
         output_dir=tmp_path / "dist",
         browser_bridge_bundle=bundle,
         seektalent_wheel=wheel,
+        wheelhouse_dir=wheelhouse,
+        domi_python=None,
         node=Path(sys.executable),
         platform_name="windows-x64",
         source_revision="a" * 40,
+        host_runtime_identity=_windows_identity(),
     )
 
     with zipfile.ZipFile(archive) as delivery:
@@ -43,7 +67,12 @@ def test_build_delivery_bundle_contains_exact_pair_runtime_and_platform_installe
         assert f"{root}/wtscli-browser-bridge/extension/manifest.json" in names
         assert f"{root}/wtscli-runtime.zip" in names
         assert f"{root}/{wheel.name}" in names
+        assert f"{root}/python-wheelhouse/dependency-1.0-py3-none-any.whl" in names
+        assert f"{root}/acceptance/liepin-ai-agent-engineer-v1.json" in names
+        assert f"{root}/verify_domi_host_runtime.py" in names
+        assert f"{root}/SHA256SUMS" in names
         manifest = json.loads(delivery.read(f"{root}/delivery-manifest.json"))
+        assert manifest["schema_version"] == 2
         assert manifest["bridge_build_id"] == WTSCLI_BUILD_ID
         assert manifest["platform"] == "windows-x64"
         assert manifest["extension_directory"] == "~/.seektalent/chrome-extension/wtscli"
@@ -58,6 +87,16 @@ def test_build_delivery_bundle_contains_exact_pair_runtime_and_platform_installe
             "python_env": "DOMI_PYTHON",
             "node_env": "DOMI_NODE",
         }
+        assert manifest["host_runtime_contract"]["python_major_minor"] == "3.13"
+        assert manifest["host_runtime_contract"]["node_version"] == "22.14.0"
+        assert manifest["acceptance_fixture"]["schema_version"] == (
+            "seektalent.acceptance-fixture.v1"
+        )
+        listed = {entry["path"]: entry for entry in manifest["files"]}
+        assert listed[wheel.name]["sha256"] == hashlib.sha256(b"wheel").hexdigest()
+
+    checksum = archive.with_name(f"{archive.name}.sha256")
+    assert checksum.read_text(encoding="utf-8").endswith(f"  {archive.name}\n")
 
 
 def test_exact_head_native_delivery_archive_contains_the_bound_pair() -> None:
@@ -102,6 +141,37 @@ def test_exact_head_native_delivery_archive_contains_the_bound_pair() -> None:
             assert hashlib.sha256(payload).hexdigest() == manifest[hash_key]
 
 
+def test_delivery_payload_tampering_is_rejected(tmp_path: Path) -> None:
+    bundle = tmp_path / "bundle"
+    write_browser_bridge_bundle(bundle)
+    wheel = tmp_path / "seektalent-0.8.0rc1-py3-none-any.whl"
+    wheel.write_bytes(b"wheel")
+    wheelhouse = tmp_path / "wheelhouse"
+    wheelhouse.mkdir()
+    dependency = wheelhouse / "dependency-1.0-py3-none-any.whl"
+    dependency.write_bytes(b"dependency")
+    archive = build_delivery_bundle(
+        output_dir=tmp_path / "dist",
+        browser_bridge_bundle=bundle,
+        seektalent_wheel=wheel,
+        wheelhouse_dir=wheelhouse,
+        domi_python=None,
+        node=Path(sys.executable),
+        platform_name="windows-x64",
+        source_revision="a" * 40,
+        host_runtime_identity=_windows_identity(),
+    )
+    extracted = tmp_path / "extracted"
+    with zipfile.ZipFile(archive) as delivery:
+        delivery.extractall(extracted)
+    root = extracted / archive.stem
+    manifest = json.loads((root / "delivery-manifest.json").read_text(encoding="utf-8"))
+    assert validate_delivery_payload(root, manifest) is None
+
+    (root / "python-wheelhouse" / dependency.name).write_bytes(b"tampered")
+    assert validate_delivery_payload(root, manifest) == "delivery_payload_hash_mismatch"
+
+
 def test_delivery_installers_default_to_the_adjacent_exact_product_bundle() -> None:
     root = Path(__file__).resolve().parents[1]
     posix = (root / "scripts" / "install-seektalent-domi.sh").read_text(encoding="utf-8")
@@ -137,6 +207,8 @@ def test_host_start_scripts_require_domi_runtime_and_use_installed_package() -> 
         assert "19826" not in script
         assert "Domi.app" not in script
         assert "daemon restart" not in script
+        assert "verify_domi_host_runtime.py" in script
+        assert "validate-receipt" in script
 
 
 def test_installers_print_one_fixed_extension_directory_and_chinese_steps() -> None:

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from seektalent.config import AppSettings
 from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_ui.server import create_app
+from seektalent_ui.runtime_execution import DEV_PROD_PARITY_DIFFERENCE_ALLOWLIST
 from seektalent_workbench_v2.runtime_service import WorkbenchV2RuntimeService
 from tests.settings_factory import make_settings
 
@@ -22,10 +23,10 @@ class _NoopRuntime:
         return object()
 
 
-def _settings(tmp_path: Path) -> AppSettings:
+def _settings(tmp_path: Path, *, runtime_mode: str = "prod") -> AppSettings:
     return make_settings(
         workspace_root=str(tmp_path),
-        runtime_mode="prod",
+        runtime_mode=runtime_mode,
         liepin_worker_mode="disabled",
         liepin_browser_action_backend="disabled",
         liepin_api_token="production-test-api-token",
@@ -42,6 +43,43 @@ def test_prod_composition_has_one_store_command_and_executor_identity(tmp_path: 
     assert app.state.workbench_v2_runtime_runner.executor is app.state.workbench_v2_runtime_executor
     assert not hasattr(app.state, "agent_conversation_service")
     assert not hasattr(app.state, "agent_memory_service")
+
+
+@pytest.mark.parametrize("runtime_mode", ["dev", "prod"])
+def test_dev_and_prod_share_one_runtime_composition_root(
+    tmp_path: Path,
+    runtime_mode: str,
+) -> None:
+    app = create_app(
+        settings=_settings(tmp_path / runtime_mode, runtime_mode=runtime_mode),
+        runtime_factory=_NoopRuntime,
+        serve_frontend=runtime_mode == "prod",
+    )
+
+    assert app.state.runtime_control_store is app.state.runtime_command_service.store
+    assert app.state.runtime_control_store is app.state.workbench_v2_runtime_executor.store
+    assert app.state.runtime_command_service is (
+        app.state.workbench_v2_runtime_executor.command_service
+    )
+    assert app.state.workbench_v2_runtime_runner.executor is (
+        app.state.workbench_v2_runtime_executor
+    )
+    assert app.state.wtscli_lifecycle_supervisor is (
+        app.state.workbench_v2_runtime_executor.wtscli_lifecycle_supervisor
+    )
+
+
+def test_dev_prod_difference_allowlist_excludes_runtime_and_source_execution() -> None:
+    assert DEV_PROD_PARITY_DIFFERENCE_ALLOWLIST == {
+        "frontend_delivery",
+        "data_directory",
+        "artifact_policy",
+        "flywheel_policy",
+        "installation_validation",
+        "dev_diagnostics",
+    }
+    assert "runtime_composition" not in DEV_PROD_PARITY_DIFFERENCE_ALLOWLIST
+    assert "source_operation_execution" not in DEV_PROD_PARITY_DIFFERENCE_ALLOWLIST
 
 
 def test_prod_openapi_exposes_only_v2_agent_surface(tmp_path: Path) -> None:

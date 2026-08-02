@@ -33,11 +33,15 @@ if (-not $DomiNode -or -not (Test-Path -Path $DomiNode -PathType Leaf)) {
 
 $SeekTalentRoot = Join-Path $InstallHome ".seektalent"
 $Receipt = Join-Path $SeekTalentRoot "install-receipt.json"
+$RuntimeVerifier = Join-Path $SeekTalentRoot "verify_domi_host_runtime.py"
 $BridgeManifest = Join-Path $SeekTalentRoot "browser-bridge\bridge-manifest.json"
 $RuntimeRoot = Join-Path $SeekTalentRoot "wtscli-runtime"
 $ExtensionRoot = Join-Path $SeekTalentRoot "chrome-extension\wtscli"
 
 if (-not (Test-Path -Path $Receipt -PathType Leaf)) { Fail "seektalent_receipt_missing" "The exact SeekTalent install receipt is missing." }
+if (-not (Test-Path -Path $RuntimeVerifier -PathType Leaf)) { Fail "domi_host_runtime_verifier_missing" "The installed host runtime verifier is missing." }
+& $DomiPython $RuntimeVerifier validate-receipt --node $DomiNode --receipt $Receipt
+if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $ProductVersion = & $DomiPython -c "import json,sys; print(json.load(open(sys.argv[1], encoding='utf-8'))['productVersion'])" $Receipt
 if ($LASTEXITCODE -ne 0 -or -not $ProductVersion) { Fail "seektalent_receipt_invalid" "The installed SeekTalent receipt cannot be read." }
 $ReleasePrefix = Join-Path $SeekTalentRoot "python-prefix\$ProductVersion"

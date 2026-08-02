@@ -38,6 +38,8 @@ _seektalent_domi_install() {
   local prepared_runtime_archive="${SEEKTALENT_WTSCLI_PREPARED_RUNTIME:-${script_dir}/wtscli-runtime.zip}"
   local admission_helper="${SEEKTALENT_BROWSER_BRIDGE_HELPER:-${script_dir}/install_staging_browser_bridge.py}"
   local delivery_manifest="${SEEKTALENT_DELIVERY_MANIFEST:-${script_dir}/delivery-manifest.json}"
+  local runtime_verifier="${script_dir}/verify_domi_host_runtime.py"
+  local wheelhouse="${script_dir}/python-wheelhouse"
   local product_wheel=""
   local product_wheel_count
   product_wheel_count="$(
@@ -83,37 +85,16 @@ _seektalent_domi_install() {
     _seektalent_domi_fail "wtscli_runtime_missing" "The prepared WTSCLI runtime was not found in the SeekTalent product package: ${prepared_runtime_archive}"
     return 1
   fi
-  local delivery_manifest_args=()
-  if [[ -n "${product_wheel}" || -f "${delivery_manifest}" || "${version}" == "0.8.0rc1" ]]; then
-    if [[ -z "${product_wheel}" || ! -f "${delivery_manifest}" ]]; then
-      _seektalent_domi_fail "delivery_manifest_missing" "The exact SeekTalent wheel and delivery manifest are required."
-      return 1
-    fi
-    if ! "${domi_python}" - "${delivery_manifest}" "${product_wheel}" "${version}" <<'PY'
-import hashlib
-import json
-import pathlib
-import sys
-
-manifest_path = pathlib.Path(sys.argv[1])
-wheel_path = pathlib.Path(sys.argv[2])
-version = sys.argv[3]
-payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-actual = hashlib.sha256(wheel_path.read_bytes()).hexdigest()
-if (
-    payload.get("schema_version") != 1
-    or payload.get("product_version") != version
-    or payload.get("seektalent_wheel") != wheel_path.name
-    or payload.get("seektalent_wheel_sha256") != actual
-):
-    raise SystemExit(1)
-PY
-    then
-      _seektalent_domi_fail "delivery_manifest_identity_mismatch" "The exact SeekTalent wheel does not match the delivery manifest."
-      return 1
-    fi
-    delivery_manifest_args=(--delivery-manifest "${delivery_manifest}")
+  if [[ -z "${product_wheel}" || ! -f "${delivery_manifest}" || ! -f "${runtime_verifier}" || ! -d "${wheelhouse}" ]]; then
+    _seektalent_domi_fail "delivery_manifest_missing" "The exact manifest, verifier, wheel, and offline wheelhouse are required."
+    return 1
   fi
+  if ! "${domi_python}" "${runtime_verifier}" validate-delivery \
+    --node "${domi_node}" --manifest "${delivery_manifest}"; then
+    _seektalent_domi_fail "delivery_preflight_failed" "The delivery payload or Domi runtime failed exact validation."
+    return 1
+  fi
+  local delivery_manifest_args=(--delivery-manifest "${delivery_manifest}")
 
   local prefix="${install_home}/.seektalent/python-prefix/${version}"
   local site_packages="${prefix}/site-packages"
@@ -132,13 +113,11 @@ PY
     return 1
   }
 
-  local seektalent_install_source="seektalent==${version}"
-  if [[ -n "${product_wheel}" ]]; then
-    seektalent_install_source="${product_wheel}"
-  fi
-  "${domi_python}" -m pip install --upgrade --ignore-installed --no-cache-dir --target "${candidate_site_packages}" "${seektalent_install_source}" || {
+  "${domi_python}" -m pip install --no-index --find-links "${wheelhouse}" \
+    --upgrade --ignore-installed --no-cache-dir --target "${candidate_site_packages}" \
+    "${product_wheel}" || {
     rm -rf -- "${candidate_root}"
-    _seektalent_domi_fail "seektalent_pypi_install_failed" "Failed to install seektalent==${version} with Domi Python."
+    _seektalent_domi_fail "seektalent_offline_install_failed" "Failed to install the exact SeekTalent wheel from its offline wheelhouse."
     return 1
   }
   if ! "${domi_python}" -m zipfile -e "${prepared_runtime_archive}" "${prepared_runtime_dir}"; then

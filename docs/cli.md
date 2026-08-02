@@ -180,23 +180,23 @@ The startup script exports the Domi provider and supplied Node path, then delega
 
 ## `seektalent-domi-bootstrap`
 
-`seektalent-domi-bootstrap` writes the prepared-machine `seektalent` command shim. It is normally invoked by the platform install scripts after they use Domi Python to install the PyPI package into `~/.seektalent/python-prefix/<version>`. Target machines do not need a source checkout; the scripts can be loaded from the release tag.
+`seektalent-domi-bootstrap` writes the prepared-machine `seektalent` command shim. It is invoked only by the matching versioned offline delivery archive after Domi Python installs the exact wheel from the included wheelhouse. Before touching `~/.seektalent`, the installer validates manifest schema v2, every payload hash, the acceptance fixture, CPython 3.13 ABI, Node 22.14.0, platform, and architecture. Target machines do not need a source checkout or network access.
 
-Windows:
+Windows (from the extracted delivery directory):
 
 ```powershell
-Invoke-Expression (Invoke-RestMethod "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.25/scripts/install-seektalent-domi.ps1"); Install-SeekTalentDomi -Version 0.7.25
-seektalent workbench
+.\install-seektalent-domi.ps1 -DomiPython $env:DOMI_PYTHON -DomiNode $env:DOMI_NODE
+.\start-seektalent-domi.ps1
 ```
 
-macOS:
+macOS (from the extracted delivery directory):
 
 ```bash
-source <(curl -fsSL "https://raw.githubusercontent.com/FrankQDWang/SeekTalent/v0.7.25/scripts/install-seektalent-domi.sh") 0.7.25
-seektalent workbench
+source ./install-seektalent-domi.sh
+./start-seektalent-domi.sh
 ```
 
-The bootstrap path writes only under `~/.seektalent`, refreshes the root-level `~/.seektalent/seektalent.*` Windows compatibility shims so existing WindowsApps launchers cannot point at stale prefixes, updates `PATH` only for the current terminal session, uses Domi Python and Domi Node, and leaves the Domi app/runtime, Chrome, and the WTSCLI Chrome extension untouched.
+The bootstrap path writes only under `~/.seektalent`, records the exact Domi Python/Node paths, versions, ABI, and binary hashes in receipt v2, refreshes the root-level Windows compatibility shims, and leaves the Domi app/runtime, Chrome, and legacy OpenCLI `19825` untouched. A later Domi runtime change requires reinstalling from the archive.
 
 ## Failure Behavior
 

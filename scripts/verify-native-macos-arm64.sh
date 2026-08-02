@@ -9,12 +9,19 @@ if [[ "$(uname -s)" != "Darwin" || "$(uname -m)" != "arm64" ]]; then
   exit 1
 fi
 
-for required_command in git node npm uv; do
+for required_command in git npm uv; do
   if ! command -v "$required_command" >/dev/null 2>&1; then
     echo "Missing required command: $required_command" >&2
     exit 1
   fi
 done
+
+domi_python="${DOMI_PYTHON:-${SEEKTALENT_DOMI_PYTHON:-}}"
+domi_node="${DOMI_NODE:-${SEEKTALENT_DOMI_NODE:-}}"
+if [[ ! -x "$domi_python" || ! -x "$domi_node" ]]; then
+  echo "Set DOMI_PYTHON and DOMI_NODE to the Domi-provided runtimes." >&2
+  exit 1
+fi
 
 wtscli_fork_commit="b05374d5d1834cda297701f7dc7a8caf756cac3c"
 temp_root="$(mktemp -d "${TMPDIR:-/tmp}/seektalent-native-arm64.XXXXXX")"
@@ -23,8 +30,11 @@ trap 'rm -rf "$temp_root"' EXIT
 wtscli_source="$temp_root/wtscli-fork"
 wtscli_bundle="$temp_root/wtscli-browser-bridge"
 native_evidence="$temp_root/native-launch-binding-evidence.json"
-wheel_dir="$temp_root/wheel"
-delivery_dir="$temp_root/delivery"
+source_revision="$(git rev-parse HEAD)"
+build_dir="$ROOT/dist/tmp/0.8.0rc1-${source_revision:0:12}"
+wheel_dir="$build_dir"
+wheelhouse_dir="$build_dir/wheelhouse-macos-arm64"
+delivery_dir="$build_dir"
 
 git init -q "$wtscli_source"
 git -C "$wtscli_source" remote add origin https://github.com/FrankQDWang/wtscli.git
@@ -33,6 +43,7 @@ git -C "$wtscli_source" checkout --quiet --detach FETCH_HEAD
 
 (
   cd "$wtscli_source"
+  export PATH="$(dirname "$domi_node"):$PATH"
   npm ci --ignore-scripts
   npm --prefix extension ci --ignore-scripts
   npm run build:seektalent-bundle -- --out "$wtscli_bundle"
@@ -55,22 +66,27 @@ uv run --group dev python -m pytest \
   tests/test_wtscli_bundle_binding.py \
   -q
 
-mkdir -p "$wheel_dir" "$delivery_dir"
-uv build --wheel --out-dir "$wheel_dir"
+mkdir -p "$wheel_dir" "$wheelhouse_dir"
+uv build --out-dir "$wheel_dir"
 wheels=("$wheel_dir"/seektalent-*.whl)
 if [[ "${#wheels[@]}" -ne 1 || ! -f "${wheels[0]}" ]]; then
   echo "Expected exactly one SeekTalent wheel in $wheel_dir." >&2
   exit 1
 fi
+"$domi_python" -m pip download --only-binary=:all: \
+  --dest "$wheelhouse_dir" "${wheels[0]}"
 
 uv run --group dev python scripts/build_domi_delivery_bundle.py \
   --output-dir "$delivery_dir" \
   --wtscli-bundle-dir "$wtscli_bundle" \
   --seektalent-wheel "${wheels[0]}" \
-  --node "$(command -v node)" \
-  --platform macos-arm64
+  --wheelhouse-dir "$wheelhouse_dir" \
+  --domi-python "$domi_python" \
+  --node "$domi_node" \
+  --platform macos-arm64 \
+  --source-revision "$source_revision"
 
-SEEKTALENT_NATIVE_DELIVERY_ARCHIVE="$delivery_dir/seektalent-domi-macos-arm64.zip" \
+SEEKTALENT_NATIVE_DELIVERY_ARCHIVE="$delivery_dir/seektalent-offline-0.8.0rc1-macos-arm64-py313.zip" \
 SEEKTALENT_NATIVE_DELIVERY_PLATFORM="macos-arm64" \
   uv run --group dev python -m pytest tests/test_build_domi_delivery_bundle.py -q
 
@@ -78,3 +94,5 @@ PYTHONNOUSERSITE=1 \
   uv run --group dev python -m pytest tests/test_packaged_sidecar_artifact.py -q
 
 uv run --group dev python -m pytest tests/test_installed_slot_lease.py -q
+
+echo "Native macOS arm64 delivery saved under: $build_dir"

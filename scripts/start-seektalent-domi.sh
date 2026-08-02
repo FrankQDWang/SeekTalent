@@ -32,11 +32,17 @@ fi
 
 seektalent_root="${install_home}/.seektalent"
 receipt="${seektalent_root}/install-receipt.json"
+runtime_verifier="${seektalent_root}/verify_domi_host_runtime.py"
 bridge_manifest="${seektalent_root}/browser-bridge/bridge-manifest.json"
 runtime_root="${seektalent_root}/wtscli-runtime"
 extension_root="${seektalent_root}/chrome-extension/wtscli"
 
 [ -f "${receipt}" ] || fail "seektalent_receipt_missing" "The exact SeekTalent install receipt is missing."
+[ -f "${runtime_verifier}" ] || fail "domi_host_runtime_verifier_missing" "The installed host runtime verifier is missing."
+if ! "${domi_python}" "${runtime_verifier}" validate-receipt \
+  --node "${domi_node}" --receipt "${receipt}"; then
+  exit 1
+fi
 
 product_version="$(${domi_python} -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["productVersion"])' "${receipt}")" \
   || fail "seektalent_receipt_invalid" "The installed SeekTalent receipt cannot be read."

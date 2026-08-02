@@ -9,12 +9,21 @@ BACKEND_PORT="${SEEKTALENT_DEV_BACKEND_PORT:-8012}"
 FRONTEND_HOST="${SEEKTALENT_DEV_FRONTEND_HOST:-127.0.0.1}"
 FRONTEND_PORT="${SEEKTALENT_DEV_FRONTEND_PORT:-5178}"
 
-if [[ -z "${SEEKTALENT_WTSCLI_NODE:-}" && -z "${SEEKTALENT_DOMI_NODE:-}" && -z "${DOMI_NODE:-}" ]]; then
-  SEEKTALENT_WTSCLI_NODE="$(command -v node || true)"
-  if [[ -n "$SEEKTALENT_WTSCLI_NODE" ]]; then
-    export SEEKTALENT_WTSCLI_NODE
-  fi
+domi_node="${DOMI_NODE:-${SEEKTALENT_DOMI_NODE:-}}"
+if [[ -d "$domi_node" ]]; then
+  domi_node="$domi_node/node"
 fi
+if [[ ! -x "$domi_node" ]]; then
+  echo "Set DOMI_NODE to the Domi-provided Node 22.14.0 executable." >&2
+  exit 1
+fi
+if [[ "$("$domi_node" --version)" != "v22.14.0" ]]; then
+  echo "Domi Node 22.14.0 is required for the product WTSCLI runtime." >&2
+  exit 1
+fi
+export SEEKTALENT_WTSCLI_NODE="$domi_node"
+export SEEKTALENT_DOMI_NODE="$domi_node"
+export DOMI_NODE="$domi_node"
 
 cd "$ROOT"
 
