@@ -937,7 +937,7 @@ def test_evaluate_changed_files_allows_offline_distribution_major_refactor_manif
 ) -> None:
     manifest_path = "docs/governance/agent-goals/offline-distribution-2026-07.json"
     red_files = [
-        ".github/workflows/build-macos-intel-offline.yml",
+        ".github/workflows/native-launch-binding-probe.yml",
         "tools/check_pr_governance.py",
     ]
     _write_json(
@@ -953,8 +953,8 @@ def test_evaluate_changed_files_allows_offline_distribution_major_refactor_manif
         [
             manifest_path,
             *red_files,
-            "scripts/build_offline_macos_intel.py",
-            "tests/test_build_offline_macos_intel.py",
+            "scripts/build_domi_delivery_bundle.py",
+            "tests/test_build_domi_delivery_bundle.py",
             "tests/test_pr_governance.py",
             "docs/references/offline-distribution.md",
             "CONTEXT.md",

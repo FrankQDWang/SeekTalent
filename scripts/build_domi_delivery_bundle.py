@@ -190,9 +190,8 @@ def build_delivery_bundle(
         )
         _write_sha256s(package_root)
         _write_archive(package_root, archive)
-    (output_dir / f"{archive.name}.sha256").write_text(
-        f"{_sha256(archive)}  {archive.name}\n",
-        encoding="utf-8",
+    (output_dir / f"{archive.name}.sha256").write_bytes(
+        f"{_sha256(archive)}  {archive.name}\n".encode("ascii")
     )
     return archive
 
@@ -219,7 +218,9 @@ def _write_sha256s(package_root: Path) -> None:
         for entry in _file_manifest(package_root)
         if entry["path"] != "SHA256SUMS"
     ]
-    (package_root / "SHA256SUMS").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (package_root / "SHA256SUMS").write_bytes(
+        ("\n".join(lines) + "\n").encode("utf-8")
+    )
 
 
 def _write_runtime_zip(runtime_dir: Path, archive: Path) -> None:

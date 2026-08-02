@@ -136,15 +136,15 @@ RUNTIME_PRODUCTION_READINESS_PROMPT_VERIFICATION = (
 )
 MAJOR_REFACTOR_REQUIRED_VERIFICATION_BY_GOAL_ID = {
     "offline-distribution-2026-07": (
-        "uv run pytest tests/test_build_offline_macos_intel.py tests/test_pr_governance.py -q",
+        "uv run pytest tests/test_build_domi_delivery_bundle.py tests/test_pr_governance.py -q",
         (
-            "uv run ruff check scripts/build_offline_macos_intel.py "
-            "tests/test_build_offline_macos_intel.py tools/check_pr_governance.py "
+            "uv run ruff check scripts/build_domi_delivery_bundle.py "
+            "tests/test_build_domi_delivery_bundle.py tools/check_pr_governance.py "
             "tests/test_pr_governance.py"
         ),
         (
-            "uv run ty check scripts/build_offline_macos_intel.py tools/check_pr_governance.py "
-            "tests/test_build_offline_macos_intel.py tests/test_pr_governance.py"
+            "uv run ty check scripts/build_domi_delivery_bundle.py tools/check_pr_governance.py "
+            "tests/test_build_domi_delivery_bundle.py tests/test_pr_governance.py"
         ),
         "uv run python tools/check_pr_governance.py --base origin/main",
     ),

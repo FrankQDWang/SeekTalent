@@ -848,28 +848,16 @@ def test_all_delivery_entrypoints_bind_the_exact_merged_wtscli_bundle() -> None:
     staging = (root / "scripts" / "install-seektalent-staging.sh").read_text(encoding="utf-8")
     posix = (root / "scripts" / "install-seektalent-domi.sh").read_text(encoding="utf-8")
     powershell = (root / "scripts" / "install-seektalent-domi.ps1").read_text(encoding="utf-8")
-    offline = (root / "scripts" / "offline" / "install-offline-macos-intel.sh").read_text(
-        encoding="utf-8"
-    )
-    workflow = (root / ".github" / "workflows" / "build-macos-intel-offline.yml").read_text(
-        encoding="utf-8"
-    )
     native_workflow = (
         root / ".github" / "workflows" / "native-launch-binding-probe.yml"
     ).read_text(encoding="utf-8")
 
     assert WTSCLI_FORK_COMMIT in staging
-    assert WTSCLI_FORK_COMMIT in workflow
-    assert "60ae80db9ed96a0813eea12d5e24aa8e5c6ec863" not in staging + workflow
+    assert "60ae80db9ed96a0813eea12d5e24aa8e5c6ec863" not in staging + native_workflow
     assert "SEEKTALENT_WTSCLI_BUNDLE_DIR" in posix
     assert "SEEKTALENT_WTSCLI_BUNDLE_DIR" in powershell
     assert "--browser-bridge-bundle-dir" in posix
     assert "--browser-bridge-bundle-dir" in powershell
-    assert "--browser-bridge-bundle-dir" in offline
-    assert "--browser-bridge-prepared-runtime-dir" in offline
-    assert "browser_bridge_runtime_sha256" in offline
-    assert "opencli-runtime/opencli" not in offline
-    assert "@jackwener/opencli" not in offline
     assert "repository: FrankQDWang/wtscli" in native_workflow
     assert f"ref: {WTSCLI_FORK_COMMIT}" in native_workflow
     assert "build-exact-wtscli-bundle:" in native_workflow

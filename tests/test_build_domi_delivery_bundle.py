@@ -97,6 +97,7 @@ def test_build_delivery_bundle_contains_exact_pair_runtime_and_platform_installe
 
     checksum = archive.with_name(f"{archive.name}.sha256")
     assert checksum.read_text(encoding="utf-8").endswith(f"  {archive.name}\n")
+    assert b"\r\n" not in checksum.read_bytes()
 
 
 def test_exact_head_native_delivery_archive_contains_the_bound_pair() -> None:
@@ -166,10 +167,24 @@ def test_delivery_payload_tampering_is_rejected(tmp_path: Path) -> None:
         delivery.extractall(extracted)
     root = extracted / archive.stem
     manifest = json.loads((root / "delivery-manifest.json").read_text(encoding="utf-8"))
+    assert b"\r\n" not in (root / "SHA256SUMS").read_bytes()
     assert validate_delivery_payload(root, manifest) is None
 
     (root / "python-wheelhouse" / dependency.name).write_bytes(b"tampered")
     assert validate_delivery_payload(root, manifest) == "delivery_payload_hash_mismatch"
+
+
+def test_delivery_uses_one_cross_platform_builder_and_workflow() -> None:
+    root = Path(__file__).resolve().parents[1]
+    workflow = (
+        root / ".github" / "workflows" / "native-launch-binding-probe.yml"
+    ).read_text(encoding="utf-8")
+
+    assert not (root / ".github" / "workflows" / "build-macos-intel-offline.yml").exists()
+    assert not (root / "scripts" / "build_offline_macos_intel.py").exists()
+    assert "scripts/build_domi_delivery_bundle.py" in workflow
+    assert "delivery_platform: windows-x64" in workflow
+    assert "delivery_platform: macos-x86_64" in workflow
 
 
 def test_delivery_installers_default_to_the_adjacent_exact_product_bundle() -> None:
