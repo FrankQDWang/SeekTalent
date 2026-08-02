@@ -4,6 +4,8 @@ import re
 from collections.abc import Mapping
 from pathlib import Path
 
+import pytest
+
 from seektalent.providers.liepin.browser_boundary_patterns import (
     FORBIDDEN_PROVIDER_OPERATIONS,
     PYTHON_FORBIDDEN_IMPORTS,
@@ -15,6 +17,7 @@ from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 from seektalent.opencli_browser.contracts import (
     OpenCliBrowserConfig,
     OpenCliBrowserError,
+    OpenCliBrowserResult,
 )
 from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_URL
 from seektalent.providers.liepin.liepin_site_adapter import (
@@ -445,6 +448,114 @@ def test_liepin_opencli_policy_rejects_api_ajax_graphql_download_and_export_rout
         "https://www.liepin.com/zhaopin/?redirect=https%3A%2F%2Fapi-c.liepin.com%2Fresume",
     ):
         assert _opencli_tab_url_is_blocked(runner, blocked_url), f"{blocked_url} should be blocked"
+
+
+@pytest.mark.parametrize("click_method", ("_click_liepin_detail_ref", "_click_native_filter_ref"))
+def test_stale_ref_is_not_reissued_inside_one_browser_effect(click_method: str) -> None:
+    class StaleRefAutomation:
+        def __init__(self) -> None:
+            self.click_calls = 0
+            self.state_calls = 0
+
+        def click_ref(self, _ref: str) -> str:
+            self.click_calls += 1
+            raise OpenCliBrowserError("liepin_opencli_stale_ref")
+
+        def run_browser_command(self, _command: str, _args: tuple[str, ...]) -> str:
+            self.state_calls += 1
+            return "https://h.liepin.com/search/getConditionItem"
+
+    browser_config = OpenCliBrowserConfig(
+        session="seektalent-stale-ref",
+        timeout_seconds=10,
+        pacing_enabled=False,
+    )
+    automation = StaleRefAutomation()
+    runner = LiepinSiteAdapter(
+        browser_config=browser_config,
+        site_config=LiepinOpenCliSiteConfig(
+            allowed_hosts=("h.liepin.com",),
+            allowed_start_urls=(LIEPIN_RECRUITER_SEARCH_URL,),
+        ),
+        automation=automation,  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(OpenCliBrowserError) as caught:
+        getattr(runner, click_method)("70")
+
+    assert caught.value.safe_reason_code == "liepin_opencli_stale_ref"
+    assert automation.click_calls == 1
+    assert automation.state_calls == 0
+
+
+@pytest.mark.parametrize("effect", ("fill", "search_click"))
+def test_search_effect_stale_ref_is_not_reissued(
+    effect: str,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    search_url = LIEPIN_RECRUITER_SEARCH_URL
+    search_state = OpenCliBrowserResult(
+        ok=True,
+        action="state",
+        private_output=(
+            f"URL: {search_url}\n"
+            "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+            "[29]<button><span>搜 索</span></button>"
+        ),
+    )
+
+    class SearchAutomation:
+        def wait_for_page_url(self, **_kwargs: object) -> OpenCliBrowserResult:
+            return OpenCliBrowserResult(ok=True, action="wait", private_output=search_url)
+
+    runner = LiepinSiteAdapter(
+        browser_config=OpenCliBrowserConfig(
+            session="seektalent-search-stale-ref",
+            timeout_seconds=10,
+            pacing_enabled=False,
+        ),
+        site_config=LiepinOpenCliSiteConfig(
+            allowed_hosts=("h.liepin.com",),
+            allowed_start_urls=(search_url,),
+            artifact_root=tmp_path,
+        ),
+        automation=SearchAutomation(),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr(runner, "open_liepin_tab", lambda _url: search_state)
+    monkeypatch.setattr(runner, "state", lambda: search_state)
+    monkeypatch.setattr(runner, "_current_url_or_none", lambda: search_url)
+    monkeypatch.setattr(
+        runner,
+        "_clear_liepin_native_filters_if_needed",
+        lambda **_kwargs: search_state,
+    )
+
+    effect_calls = 0
+
+    def fail_effect(*_args: object, **_kwargs: object) -> None:
+        nonlocal effect_calls
+        effect_calls += 1
+        raise OpenCliBrowserError("liepin_opencli_stale_ref")
+
+    if effect == "fill":
+        monkeypatch.setattr(runner, "fill", fail_effect)
+    else:
+        monkeypatch.setattr(runner, "fill", lambda **_kwargs: None)
+        monkeypatch.setattr(runner, "_liepin_search_query_value_from_dom", lambda **_kwargs: "AI Agent")
+        monkeypatch.setattr(runner, "_click_liepin_search_button", fail_effect)
+
+    envelope = runner._search_liepin_cards_once(
+        source_run_id=f"stale-{effect}",
+        query="AI Agent",
+        max_pages=1,
+        max_cards=1,
+        native_filters=None,
+        recovering_search_surface=False,
+    )
+
+    assert envelope["safe_reason_code"] == "liepin_opencli_stale_ref"
+    assert effect_calls == 1
 
 
 def _opencli_tab_url_is_blocked(runner: LiepinSiteAdapter, url: str) -> bool:
