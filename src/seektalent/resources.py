@@ -14,6 +14,7 @@ REQUIRED_PROMPTS = (
     "tui_summary",
     "candidate_feedback",
     "prf_probe_phrase_proposal",
+    "workbench_note_writer",
     "repair_requirements",
     "repair_controller",
     "repair_reflection",

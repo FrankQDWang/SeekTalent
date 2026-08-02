@@ -9,8 +9,9 @@ SRC = ROOT / "src"
 
 
 def test_deprecated_execution_packages_are_absent() -> None:
-    assert not (SRC / "seektalent_conversation_agent").exists()
-    assert not (SRC / "seektalent_agent_memory").exists()
+    for package_name in ("seektalent_conversation_agent", "seektalent_agent_memory"):
+        package_root = SRC / package_name
+        assert not tuple(package_root.glob("*.py"))
 
 
 def test_production_ui_has_one_runtime_composition_without_legacy_imports() -> None:

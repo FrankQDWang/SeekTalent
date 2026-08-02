@@ -23,7 +23,10 @@ def test_inventory_reports_product_dbs_sqlite_siblings_and_debug_roots(tmp_path:
     settings.runtime_control_path.parent.mkdir(parents=True)
     settings.runtime_control_path.write_bytes(b"runtime-control")
     settings.runtime_control_path.with_name(settings.runtime_control_path.name + "-wal").write_bytes(b"wal-bytes")
-    settings.conversation_agent_path.write_bytes(b"conversation")
+    workbench_v2_path = settings.resolve_workspace_path(
+        ".seektalent/workbench_v2.sqlite3"
+    )
+    workbench_v2_path.write_bytes(b"workbench-v2")
     (settings.artifacts_path / "debug" / "2026" / "06" / "17").mkdir(parents=True)
     (settings.artifacts_path / "debug" / "2026" / "06" / "17" / "trace.json").write_text("{}", encoding="utf-8")
     (settings.artifacts_path / "corpus" / "2026" / "06" / "17").mkdir(parents=True)
@@ -40,7 +43,7 @@ def test_inventory_reports_product_dbs_sqlite_siblings_and_debug_roots(tmp_path:
     assert roots["runtime_control_db"].storage_class == "product_db"
     assert roots["runtime_control_db"].protected is True
     assert roots["runtime_control_db"].size_bytes == len(b"runtime-control") + len(b"wal-bytes")
-    assert roots["conversation_agent_db"].storage_class == "product_db"
+    assert roots["workbench_v2_db"].storage_class == "product_db"
     assert roots["liepin_session_store"].storage_class == "browser_state"
     assert roots["corpus_artifacts"].storage_class == "artifact_export"
     assert roots["export_artifacts"].storage_class == "artifact_export"

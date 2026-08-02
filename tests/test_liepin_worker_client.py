@@ -161,6 +161,37 @@ def test_opencli_client_without_cards_source_port_keeps_non_cards_composition(
     assert isinstance(client, LiepinOpenCliWorkerClient)
 
 
+def test_sidecar_site_adapter_connects_to_existing_wtscli_without_lifecycle_ownership(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    runtime = object()
+    daemon = object()
+    connected: list[object] = []
+    monkeypatch.setattr(
+        "seektalent.wtscli_runtime.inspect_wtscli_runtime",
+        lambda: runtime,
+    )
+
+    def connect_existing(received_runtime, **_kwargs):
+        connected.append(received_runtime)
+        return daemon
+
+    monkeypatch.setattr(
+        "seektalent.opencli_browser.daemon_process.connect_existing_opencli_daemon_read_only",
+        connect_existing,
+    )
+
+    site = liepin_client_module.build_liepin_opencli_sidecar_site_adapter(
+        make_settings(workspace_root=str(tmp_path))
+    )
+
+    assert isinstance(site, LiepinSiteAdapter)
+    assert site._lifecycle_supervisor is None
+    assert site._automation._daemon is daemon
+    assert connected == [runtime]
+
+
 def test_opencli_detail_search_routes_nested_cards_through_source_port(
     tmp_path: Path,
 ) -> None:

@@ -12,7 +12,7 @@
   ],
   "verification": [
     "scripts/verify-red-zone.sh",
-    "uv run pytest -q tests/test_liepin_opencli_browser.py tests/test_liepin_opencli_city_filter.py tests/test_liepin_opencli_filter_planning.py",
+    "uv run pytest -q tests/test_liepin_city_picker_contract.py tests/test_liepin_opencli_filter_planning.py tests/test_opencli_daemon_automation.py",
     "uv run pytest -q tests/test_liepin_cards_source_operation.py tests/test_liepin_opencli_workflow.py tests/test_liepin_search_workflow.py tests/test_liepin_runtime_source_lane.py tests/test_liepin_provider_source_composition.py tests/test_liepin_opencli_retriever.py tests/test_liepin_opencli_worker_client.py tests/test_source_port_command_journal.py tests/test_source_port_command_journal_v5.py",
     "uv run ruff check src tests experiments tools",
     "uv run ty check src tests tools"

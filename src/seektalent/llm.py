@@ -33,12 +33,13 @@ OPENAI_NATIVE_JSON_SCHEMA_STAGES = frozenset(
         "scoring",
         "judge",
         "structured_repair",
+        "workbench_conversation",
         "candidate_feedback",
         "prf_probe_phrase_proposal",
     }
 )
 OPENAI_PROMPTED_JSON_STAGES = frozenset({"tui_summary"})
-PLAIN_TEXT_STAGES = frozenset()
+PLAIN_TEXT_STAGES = frozenset({"workbench_note_writer"})
 STRICT_NATIVE_JSON_SCHEMA_REQUIRED_STAGES = frozenset(
     {
         "candidate_feedback",
@@ -56,6 +57,8 @@ STAGE_MODEL_ATTR = {
     "tui_summary": "tui_summary_model_id",
     "candidate_feedback": "candidate_feedback_model_id",
     "prf_probe_phrase_proposal": "prf_probe_phrase_proposal_model_id",
+    "workbench_note_writer": "workbench_note_writer_model_id",
+    "workbench_conversation": "workbench_conversation_model_id",
 }
 TEXT_LLM_BASE_URLS = {
     ("openai_chat_completions_compatible", "bailian_openai_chat_completions", "beijing"): "https://dashscope.aliyuncs.com/compatible-mode/v1",
@@ -237,6 +240,12 @@ def _resolve_stage_reasoning_policy(
         return effort != "off", effort
     if stage == "prf_probe_phrase_proposal":
         effort = settings.prf_probe_phrase_proposal_reasoning_effort
+        return effort != "off", effort
+    if stage == "workbench_note_writer":
+        effort = settings.workbench_note_writer_reasoning_effort
+        return effort != "off", effort
+    if stage == "workbench_conversation":
+        effort = settings.workbench_conversation_reasoning_effort
         return effort != "off", effort
     if stage in {"scoring", "finalize", "tui_summary"}:
         return False, "off"

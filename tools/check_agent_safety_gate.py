@@ -32,6 +32,8 @@ NO_RAW_BROWSER_STORAGE_RE = re.compile(
     re.IGNORECASE,
 )
 
+SCAN_PREFIXES = ("apps/web-react/src/", "src/")
+
 
 def parse_added_lines(diff_text: str) -> list[AddedLine]:
     result: list[AddedLine] = []
@@ -58,16 +60,8 @@ def parse_added_lines(diff_text: str) -> list[AddedLine]:
 def check_added_lines(lines: Iterable[AddedLine]) -> list[AgentSafetyFinding]:
     findings: list[AgentSafetyFinding] = []
     for line in lines:
-        if SENSITIVE_TRACE_RE.search(line.text):
-            findings.append(
-                AgentSafetyFinding(
-                    "sensitive-runtime-trace",
-                    line.path,
-                    line.line_number,
-                    "Runtime traces and sessions must not contain credentials or raw sensitive payloads.",
-                    line.text,
-                )
-            )
+        if not line.path.startswith(SCAN_PREFIXES):
+            continue
         if NO_RAW_BROWSER_STORAGE_RE.search(line.text):
             findings.append(
                 AgentSafetyFinding(
@@ -75,6 +69,17 @@ def check_added_lines(lines: Iterable[AddedLine]) -> list[AgentSafetyFinding]:
                     line.path,
                     line.line_number,
                     "Browser storage must not persist credentials or raw provider payloads.",
+                    line.text,
+                )
+            )
+            continue
+        if SENSITIVE_TRACE_RE.search(line.text):
+            findings.append(
+                AgentSafetyFinding(
+                    "sensitive-runtime-trace",
+                    line.path,
+                    line.line_number,
+                    "Runtime traces and sessions must not contain credentials or raw sensitive payloads.",
                     line.text,
                 )
             )

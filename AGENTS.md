@@ -153,3 +153,56 @@ If two options are equally correct, choose the less abstract one unless the extr
 - Repository-scale maintainability beats local cleverness.
 - Readable Python beats pattern-heavy design.
 - Working code still beats scaffolding, but stable boundaries beat short-term hacks.
+
+## SeekTalent Host Launch And Real E2E Contract
+
+SeekTalent is the product being delivered. Domi is a separate host application owned
+by another team; the installed Domi version is not SeekTalent's source of truth and
+must not be used as the candidate package or as final acceptance evidence.
+
+The release handoff consists of the exact wheel, sdist, and macOS arm64 Domi delivery
+archive under `dist/`. The delivery archive also contains the SeekTalent-owned host
+startup script. The Domi team invokes that script and supplies its own runtime paths:
+
+- `SEEKTALENT_DOMI_JWT` — injected only into the launch process; never commit, copy
+  into this file, print, log, or include in a support package.
+- `DOMI_PYTHON` — the Python executable supplied by the Domi host.
+- `DOMI_NODE` — the Node executable supplied by the Domi host.
+
+The startup script must validate the exact installed receipt, wheel/runtime/bridge
+pair, and the supplied Python/Node paths, then execute the installed SeekTalent
+package in production mode. It must not discover or depend on a particular Domi app
+version, call a Domi Electron API, start `19826` directly, or use a source checkout.
+`create_app(prod)` starts the one SeekTalent-owned lifecycle supervisor; that
+supervisor owns the foreground WTSCLI `19826` child for the SeekTalent lifetime.
+Run-level preparation can observe or request recovery from that same supervisor but
+never creates another daemon start path. Legacy OpenCLI `19825` is left untouched.
+
+The only real E2E acceptance path is:
+
+1. Create a recoverable, non-overwriting backup of the existing candidate install;
+   install the exact delivery archive and verify its manifest, wheel hash, WTSCLI
+   runtime, bridge manifest, extension tree, and receipt.
+2. Confirm `19826` is absent before launch and that legacy `19825` process, port,
+   state, extension, and Chrome profile are unchanged.
+3. Inject `SEEKTALENT_DOMI_JWT`, `DOMI_PYTHON`, and `DOMI_NODE`, then execute the
+   SeekTalent-owned startup script in the foreground. Do not manually start or
+   restart `19826` from a terminal.
+4. Use `chrome:control-chrome` on the visible SeekTalent page. In the visible UI,
+   enter the exact title `AI Agent 工程师` and the complete JD from
+   `/Users/frankqdwang/.codex/memories/extensions/ad_hoc/notes/20260731T134909+0800-seektalent-real-canary-jd.md`,
+   start the task, wait for requirement extraction, and click the real “确认需求”
+   control exactly once.
+5. Continue observing the visible UI until the task has a clear terminal-success
+   state and shows normal candidate output plus at least one details flow. CLI,
+   database, API, `browser-check`, `verify_session`, `main_committed`, and a printed
+   success message are diagnostic evidence only; they cannot establish E2E success.
+6. If the UI reports failure, `needs_attention`, unknown effect, or asks for manual
+   intervention, stop new actions immediately. Reconcile the durable journal first;
+   do not retry, clear a lane, change runs, or replay an uncertain effect. Resume
+   only after a durable no-effect or terminal observation is proven.
+
+The final report may include exact build identity, run/attempt identifiers, safe
+reason codes, counts, owned-tab disposition, and rollback path. It must never include
+the JWT, JD text, candidate names, resumes, DOM, cookies, tokens, complete URLs, or
+raw stderr.

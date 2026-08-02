@@ -132,11 +132,21 @@ def run_operator_health(
 
 def main(argv: Sequence[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Maintain active SeekTalent runtime data.")
-    parser.add_argument("command", choices=("retention", "cleanup", "backup", "health", "support-bundle"))
+    parser.add_argument(
+        "command",
+        choices=("retention", "cleanup", "backup", "health", "support-bundle"),
+    )
     parser.add_argument("--workspace-root", type=Path, default=Path.cwd())
+    parser.add_argument("--runtime-mode", choices=("dev", "prod"), default="prod")
+    parser.add_argument("--runtime-run-id")
+    parser.add_argument("--output-dir", type=Path)
     parser.add_argument("--apply", action="store_true")
     args = parser.parse_args(argv)
-    settings = AppSettings(_env_file=None, workspace_root=str(args.workspace_root))
+    settings = AppSettings(
+        _env_file=None,
+        runtime_mode=args.runtime_mode,
+        workspace_root=str(args.workspace_root),
+    )
     if args.command == "retention":
         result = run_runtime_control_retention(runtime_control_db_path=settings.runtime_control_path, apply=args.apply)
         print(result)
@@ -147,7 +157,12 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif args.command == "health":
         print(run_operator_health(workspace_root=args.workspace_root))
     else:
-        print(create_execution_support_bundle(settings=settings))
+        path = create_execution_support_bundle(
+            settings=settings,
+            runtime_run_id=args.runtime_run_id,
+            output_dir=args.output_dir,
+        )
+        print(f"support_bundle: {path}")
     return 0
 
 

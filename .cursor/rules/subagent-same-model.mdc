@@ -1,0 +1,13 @@
+---
+description: Subagents must use the same model as the parent agent
+alwaysApply: true
+---
+
+# Subagent Model Policy
+
+When launching Task / subagents:
+
+- Default to the **same model as the parent/main agent** for this session.
+- Do **not** switch to a different model (e.g. Opus, Sonnet, GPT) unless the user explicitly asks for a specific model.
+- If the parent is Cursor Grok 4.5, use `cursor-grok-4.5-high` for subagents.
+- Do not terminate a running subagent that is making progress; let it finish unless the user explicitly asks to stop or redirect it.

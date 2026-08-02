@@ -271,9 +271,19 @@ def vacuum_sqlite_database(path: Path) -> SQLiteVacuumResult:
 
 
 def _storage_roots(settings: AppSettings) -> tuple[LocalStorageRootSeed, ...]:
+    workbench_v2_path = settings.resolve_workspace_path(
+        ".seektalent/workbench_v2.sqlite3"
+    )
     liepin_session_store = settings.resolve_workspace_path(settings.liepin_session_store_dir)
     return (
         LocalStorageRootSeed("runtime_control_db", settings.runtime_control_path, "product_db", True, True),
+        LocalStorageRootSeed(
+            "workbench_v2_db",
+            workbench_v2_path,
+            "product_db",
+            True,
+            True,
+        ),
         LocalStorageRootSeed(
             "liepin_db",
             settings.resolve_workspace_path(settings.liepin_connector_db_path),

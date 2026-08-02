@@ -39,9 +39,9 @@ def test_operator_health_reports_db_files_sqlite_siblings_schema_integrity_and_m
     assert runtime.schema_user_version == RUNTIME_CONTROL_SCHEMA_VERSION
     assert runtime.integrity_status == "ok"
     assert runtime.reason_code == "db_ok"
-    assert databases["conversation"].exists is False
-    assert databases["conversation"].status == "warning"
-    assert databases["conversation"].reason_code == "db_missing"
+    assert databases["workbench_v2"].exists is False
+    assert databases["workbench_v2"].status == "warning"
+    assert databases["workbench_v2"].reason_code == "db_missing"
 
 
 def test_operator_health_fails_for_low_disk_preflight_and_unsupported_schema(tmp_path: Path) -> None:
@@ -76,17 +76,20 @@ def test_operator_health_reports_corrupt_database_without_raising(tmp_path: Path
         artifacts_dir=str(tmp_path / "artifacts"),
         llm_cache_dir=str(tmp_path / "cache"),
     )
-    settings.conversation_agent_path.parent.mkdir(parents=True, exist_ok=True)
-    settings.conversation_agent_path.write_bytes(b"not a sqlite database")
+    workbench_v2_path = settings.resolve_workspace_path(
+        ".seektalent/workbench_v2.sqlite3"
+    )
+    workbench_v2_path.parent.mkdir(parents=True, exist_ok=True)
+    workbench_v2_path.write_bytes(b"not a sqlite database")
 
     report = build_operator_health_report(settings, required_free_bytes=1)
     databases = {database.name: database for database in report.databases}
 
     assert report.status == "failed"
-    assert databases["conversation"].status == "failed"
-    assert databases["conversation"].reason_code == "sqlite_open_failed"
-    assert databases["conversation"].integrity_status == "failed"
-    assert databases["conversation"].error
+    assert databases["workbench_v2"].status == "failed"
+    assert databases["workbench_v2"].reason_code == "sqlite_open_failed"
+    assert databases["workbench_v2"].integrity_status == "failed"
+    assert databases["workbench_v2"].error
 
 
 def _create_wal_database(path: Path, *, user_version: int) -> sqlite3.Connection:

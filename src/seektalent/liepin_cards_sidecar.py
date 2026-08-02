@@ -15,7 +15,9 @@ from typing import Literal
 from pydantic import ValidationError
 
 from seektalent.config import AppSettings
-from seektalent.providers.liepin.client import build_liepin_opencli_site_adapter
+from seektalent.providers.liepin.client import (
+    build_liepin_opencli_sidecar_site_adapter,
+)
 from seektalent.providers.liepin.worker_contracts import (
     LiepinBrowserEffectBoundaryError,
 )
@@ -488,9 +490,8 @@ def _ensure_site(site, site_factory: Callable[[], object] | None):
     return (
         site_factory()
         if site_factory is not None
-        else build_liepin_opencli_site_adapter(
-            AppSettings(_env_file=None),
-            cards_operation_executor=None,
+        else build_liepin_opencli_sidecar_site_adapter(
+            AppSettings(_env_file=None)
         )
     )
 

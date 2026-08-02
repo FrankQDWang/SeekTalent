@@ -444,6 +444,47 @@ def build_liepin_opencli_site_adapter(
     lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
 ):
     """Build the real installed-WTSCLI site adapter for its owning process."""
+    if lifecycle_supervisor is None:
+        raise WtsCliLifecycleError("wtscli_supervisor_required")
+    daemon = lifecycle_supervisor.connect_existing()
+    return _compose_liepin_opencli_site_adapter(
+        settings,
+        daemon=daemon,
+        cards_operation_executor=cards_operation_executor,
+        lifecycle_supervisor=lifecycle_supervisor,
+    )
+
+
+def build_liepin_opencli_sidecar_site_adapter(settings: AppSettings):
+    """Connect a source sidecar to the already-supervised WTSCLI daemon."""
+    from seektalent.opencli_browser.daemon_process import (
+        connect_existing_opencli_daemon_read_only,
+    )
+    from seektalent.wtscli_runtime import inspect_wtscli_runtime
+
+    runtime = inspect_wtscli_runtime()
+    daemon = connect_existing_opencli_daemon_read_only(
+        runtime,
+        verify_timeout_seconds=min(
+            2.0,
+            max(0.001, settings.liepin_opencli_timeout_seconds),
+        ),
+    )
+    return _compose_liepin_opencli_site_adapter(
+        settings,
+        daemon=daemon,
+        cards_operation_executor=None,
+        lifecycle_supervisor=None,
+    )
+
+
+def _compose_liepin_opencli_site_adapter(
+    settings: AppSettings,
+    *,
+    daemon,
+    cards_operation_executor,
+    lifecycle_supervisor: WtsCliLifecycleSupervisor | None,
+):
     from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
     from seektalent.opencli_browser.contracts import OpenCliBrowserConfig
     from seektalent.providers.liepin.liepin_site_adapter import (
@@ -468,10 +509,6 @@ def build_liepin_opencli_site_adapter(
         lease_dir=settings.project_root / ".seektalent" / "opencli_leases",
         artifact_root=settings.artifacts_path,
     )
-    if lifecycle_supervisor is None:
-        raise WtsCliLifecycleError("wtscli_supervisor_required")
-    supervisor = lifecycle_supervisor
-    daemon = supervisor.connect_existing()
     return LiepinSiteAdapter(
         browser_config=browser_config,
         site_config=site_config,
@@ -486,7 +523,7 @@ def build_liepin_opencli_site_adapter(
             ),
         ),
         cards_operation_executor=cards_operation_executor,
-        lifecycle_supervisor=supervisor,
+        lifecycle_supervisor=lifecycle_supervisor,
     )
 
 
