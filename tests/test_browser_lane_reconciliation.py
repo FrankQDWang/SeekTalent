@@ -79,6 +79,96 @@ def test_dispatch_without_terminal_stays_fenced_without_revision_churn(
     assert count == 1
 
 
+def test_current_readiness_releases_only_expired_prepare_lane_from_failed_run(
+    tmp_path: Path,
+) -> None:
+    store = _failed_unknown_store(
+        tmp_path,
+        source_operation_kind="verify_session",
+        lane_operation_kind="prepare_readiness",
+    )
+    probes: list[str] = []
+
+    outcome = BrowserLaneReconciliationCoordinator(
+        store=store,
+        prepare_readiness_probe=lambda: probes.append("ready"),
+    ).run_once()
+
+    lane = store.get_browser_lane()
+    operation = store.get_source_operation(
+        "runtime-run-failed",
+        "operation-failed",
+    )
+    assert outcome == "released"
+    assert probes == ["ready"]
+    assert lane is not None
+    assert lane.status == "failed"
+    assert operation.source_operation_disposition == "partial"
+    assert operation.retry_posture == "no_retry"
+    assert store.get_run("runtime-run-failed").status == "failed"
+
+
+def test_current_readiness_does_not_release_cards_unknown(
+    tmp_path: Path,
+) -> None:
+    store = _failed_unknown_store(
+        tmp_path,
+        source_operation_kind="cards",
+        lane_operation_kind="cards",
+    )
+    probes: list[str] = []
+
+    outcome = BrowserLaneReconciliationCoordinator(
+        store=store,
+        prepare_readiness_probe=lambda: probes.append("ready"),
+    ).run_once()
+
+    lane = store.get_browser_lane()
+    operation = store.get_source_operation(
+        "runtime-run-failed",
+        "operation-failed",
+    )
+    assert outcome == "needs_attention"
+    assert probes == []
+    assert lane is not None
+    assert lane.status == "active"
+    assert operation.source_operation_disposition == (
+        "reconciliation_unknown"
+    )
+    assert operation.retry_posture == "reconcile_first"
+
+
+def test_failed_current_readiness_probe_keeps_prepare_lane_fenced(
+    tmp_path: Path,
+) -> None:
+    store = _failed_unknown_store(
+        tmp_path,
+        source_operation_kind="verify_session",
+        lane_operation_kind="prepare_readiness",
+    )
+
+    def fail_probe() -> None:
+        raise RuntimeError("not ready")
+
+    outcome = BrowserLaneReconciliationCoordinator(
+        store=store,
+        prepare_readiness_probe=fail_probe,
+    ).run_once()
+
+    lane = store.get_browser_lane()
+    operation = store.get_source_operation(
+        "runtime-run-failed",
+        "operation-failed",
+    )
+    assert outcome == "needs_attention"
+    assert lane is not None
+    assert lane.status == "active"
+    assert operation.source_operation_disposition == (
+        "reconciliation_unknown"
+    )
+    assert operation.retry_posture == "reconcile_first"
+
+
 def _store_and_journal(tmp_path: Path):
     store = RuntimeControlStore(
         tmp_path / "runtime-control.sqlite3",
@@ -175,3 +265,129 @@ def _store_and_journal(tmp_path: Path):
         "needs_attention"
     )
     return store, session
+
+
+def _failed_unknown_store(
+    tmp_path: Path,
+    *,
+    source_operation_kind: str,
+    lane_operation_kind: str,
+) -> RuntimeControlStore:
+    store = RuntimeControlStore(tmp_path / "runtime-control.sqlite3")
+    store.initialize()
+    store.create_run(
+        RuntimeRunRecord(
+            runtime_run_id="runtime-run-failed",
+            run_intent_id="intent-failed",
+            start_idempotency_key="start-failed",
+            run_kind="primary",
+            approved_requirement_revision_id="approved-failed",
+            status="running",
+            current_stage="runtime",
+            source_ids=["liepin"],
+            created_at="2026-07-30T00:00:00Z",
+            updated_at="2026-07-30T00:00:00Z",
+        )
+    )
+    executor_lease = store.acquire_executor_lease(
+        runtime_run_id="runtime-run-failed",
+        executor_id="executor-failed",
+        acquired_at="2026-07-30T00:00:00Z",
+        lease_expires_at="2026-07-30T00:00:10Z",
+    )
+    accepted = store.accept_source_operation(
+        runtime_run_id="runtime-run-failed",
+        operation_id="operation-failed",
+        source_id="liepin",
+        operation_kind=source_operation_kind,
+        canonical_request_hash="a" * 64,
+        idempotency_key="operation-failed",
+        accepted_requirement_revision_id="approved-failed",
+        runtime_attempt_no=executor_lease.attempt_no,
+        runtime_attempt_authority_ref="authority-failed",
+        runtime_attempt_fence_ref="b" * 64,
+        profile_binding_generation=1,
+        browser_control_scope_id="browser-scope-failed",
+        controller_fence_ref=None,
+        outbox_id="outbox-failed",
+        dispatch_intent_id="intent-failed",
+        dispatch_intent_revision=1,
+        dispatch_intent_digest="c" * 64,
+        dispatch_authorization_ordinal=1,
+        source_operation_acceptance_ref=(
+            "source-acceptance://operation-failed"
+        ),
+        expected_ledger_revision=1,
+        expected_reconciliation_revision=0,
+    )
+    store.record_source_dispatch_ack(
+        runtime_run_id="runtime-run-failed",
+        operation_id="operation-failed",
+        outbox_id=accepted.dispatch.outbox_id,
+        canonical_request_hash="a" * 64,
+        dispatch_intent_id="intent-failed",
+        dispatch_intent_revision=1,
+        dispatch_intent_digest="c" * 64,
+        dispatch_authorization_ordinal=1,
+        expected_outbox_revision=1,
+        accepted_sidecar_generation=1,
+        accepted_sidecar_journal_revision=1,
+        ack_ref="sha256:" + "d" * 64,
+        ack_kind="new_logical_operation",
+        acknowledged_at="2026-07-30T00:00:01Z",
+    )
+    lane = store.try_acquire_browser_lane(
+        lane_key=LIEPIN_BROWSER_LANE,
+        owner_id="owner-failed",
+        owner_process_id=123,
+        process_boot_id="process-failed",
+        runtime_run_id="runtime-run-failed",
+        operation_id="operation-failed",
+        operation_kind=lane_operation_kind,
+        acquired_at="2026-07-30T00:00:00Z",
+        lease_expires_at="2026-07-30T00:00:03Z",
+    )
+    assert lane is not None
+    store.record_owned_source_reconciliation_unknown(
+        runtime_run_id="runtime-run-failed",
+        operation_id="operation-failed",
+        executor_id="executor-failed",
+        attempt_no=executor_lease.attempt_no,
+        expected_ledger_revision=1,
+        expected_reconciliation_revision=0,
+        history_result_ref="sha256:" + "e" * 64,
+        history_result_digest="e" * 64,
+        history_outcome="history_unavailable",
+        history_conclusion=None,
+        dispatch_intent_ref="source-dispatch://operation-failed/1",
+        committed_at="2026-07-30T00:00:02Z",
+    )
+    store.mark_browser_lane_unresolved(
+        lane_key=LIEPIN_BROWSER_LANE,
+        owner_id="owner-failed",
+        fencing_token=lane.fencing_token,
+        failure_code="liepin_browser_lane_reconciliation_required",
+        observed_at="2026-07-30T00:00:02Z",
+    )
+    with sqlite3.connect(store.path) as connection:
+        connection.execute(
+            """
+            UPDATE runtime_control_runs
+            SET status = 'failed', current_stage = 'runtime',
+                stop_reason_code = 'runtime_run_failed',
+                completed_at = '2026-07-30T00:00:04Z',
+                updated_at = '2026-07-30T00:00:04Z'
+            WHERE runtime_run_id = 'runtime-run-failed'
+            """
+        )
+        connection.execute(
+            """
+            UPDATE runtime_control_executor_leases
+            SET status = 'failed',
+                lease_expires_at = '2026-07-30T00:00:03Z',
+                released_at = '2026-07-30T00:00:04Z',
+                reason_code = 'runtime_run_failed'
+            WHERE runtime_run_id = 'runtime-run-failed'
+            """
+        )
+    return store

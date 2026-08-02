@@ -6761,7 +6761,7 @@ def _expired_browser_lane_reconciliation_matches(
     if (
         type(fencing_token) is not int
         or fencing_token < 1
-        or run_row["status"] != "needs_attention"
+        or run_row["status"] not in {"needs_attention", "failed"}
         or _needs_admission.run_has_active_executor_lease(
             conn,
             decision.runtime_run_id,

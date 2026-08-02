@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from hashlib import sha256
+import json
 from pathlib import Path
 import time
 from typing import Literal
@@ -44,8 +46,10 @@ class BrowserLaneReconciliationCoordinator:
         *,
         store: RuntimeControlStore,
         journal_path: Path | None = None,
+        prepare_readiness_probe: Callable[[], None] | None = None,
     ) -> None:
         self.store = store
+        self.prepare_readiness_probe = prepare_readiness_probe
         self.journal_path = (
             journal_path
             or store.path.parent
@@ -93,6 +97,20 @@ class BrowserLaneReconciliationCoordinator:
             history_digest=history_digest,
             observed_at=observed_at,
         )
+        if (
+            decision.decision_kind == "unresolved"
+            and lane.operation_kind == "prepare_readiness"
+            and accepted.operation.operation_kind == "verify_session"
+            and self.prepare_readiness_probe is not None
+        ):
+            try:
+                self.prepare_readiness_probe()
+            except (OSError, RuntimeError, ValueError):
+                return "needs_attention"
+            decision = _decision_from_current_readiness(
+                accepted=accepted,
+                observed_at=observed_at,
+            )
         if (
             decision.decision_kind == "unresolved"
             and accepted.operation.source_operation_disposition
@@ -151,6 +169,57 @@ class BrowserLaneReconciliationCoordinator:
                 deadline=time.monotonic() + 1.0,
             )
         return query, result
+
+
+def _decision_from_current_readiness(
+    *,
+    accepted,
+    observed_at: str,
+) -> SourceOperationReconciliationDecision:
+    evidence = json.dumps(
+        {
+            "schemaVersion": "seektalent.prepare-readiness-observation/v1",
+            "runtimeRunId": accepted.operation.runtime_run_id,
+            "operationId": accepted.operation.operation_id,
+            "observation": "current_bridge_ready",
+            "observedAt": observed_at,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    digest = sha256(evidence).hexdigest()
+    observation_ref = f"prepare-readiness-observation://{digest}"
+    return SourceOperationReconciliationDecision(
+        reconciliation_id=f"prepare-ready-{digest}",
+        runtime_run_id=accepted.operation.runtime_run_id,
+        operation_id=accepted.operation.operation_id,
+        source_id="liepin",
+        operation_kind=accepted.operation.operation_kind,
+        canonical_request_hash=accepted.operation.canonical_request_hash,
+        idempotency_key=accepted.operation.idempotency_key,
+        accepted_requirement_revision_id=(
+            accepted.operation.accepted_requirement_revision_id
+        ),
+        runtime_attempt_no=accepted.operation.runtime_attempt_no,
+        runtime_attempt_authority_ref=(
+            accepted.operation.runtime_attempt_authority_ref
+        ),
+        history_result_ref=observation_ref,
+        history_result_digest=digest,
+        decision_kind="conclusive_observation",
+        history_outcome="matched",
+        history_conclusion="observed_result",
+        dispatch_intent_ref=accepted.operation.dispatch_intent_ref,
+        conclusive_observation_ref=observation_ref,
+        source_operation_disposition="partial",
+        retry_posture="no_retry",
+        expected_ledger_revision=accepted.operation.ledger_revision,
+        expected_reconciliation_revision=(
+            accepted.operation.reconciliation_revision
+        ),
+        committed_at=observed_at,
+    )
 
 
 def _history_query(

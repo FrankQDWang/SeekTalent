@@ -73,6 +73,7 @@ class WorkbenchV2RuntimeQueueRunner:
         poll_interval_seconds: float = DEFAULT_POLL_INTERVAL_SECONDS,
         recovery_interval_seconds: float = DEFAULT_RECOVERY_INTERVAL_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
+        prepare_readiness_probe: Callable[[], None] | None = None,
     ) -> None:
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds must be positive")
@@ -94,7 +95,10 @@ class WorkbenchV2RuntimeQueueRunner:
         )
         self._consecutive_failures = 0
         self._browser_lane_reconciliation = (
-            BrowserLaneReconciliationCoordinator(store=store)
+            BrowserLaneReconciliationCoordinator(
+                store=store,
+                prepare_readiness_probe=prepare_readiness_probe,
+            )
         )
 
     def start(self) -> None:
