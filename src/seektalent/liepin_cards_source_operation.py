@@ -709,6 +709,11 @@ class LiepinCardsSourceOperationExecutor:
             existing=existing,
         )
         if existing is None:
+            try:
+                self._ready_source_process()
+            except (OSError, RuntimeError, SidecarReadinessError):
+                self._report_sidecar_exit()
+                return _cards_readiness_unavailable_result()
             authorization = DispatchAuthorizationV1.create_initial(
                 identity=identity,
                 dispatch_intent_id=f"dispatch-{operation_id}",
@@ -1100,6 +1105,16 @@ class LiepinCardsSourceOperationExecutor:
             existing=existing,
         )
         if existing is None:
+            try:
+                self._ready_source_process()
+            except (OSError, RuntimeError, SidecarReadinessError):
+                self._report_sidecar_exit()
+                return _details_failed_result(
+                    reason="liepin_opencli_status_unavailable",
+                    effect_posture="not_attempted",
+                    rank=None,
+                    action_attempted=None,
+                )
             authorization = DispatchAuthorizationV1.create_initial(
                 identity=identity,
                 dispatch_intent_id=f"dispatch-{operation_id}",
@@ -1665,9 +1680,20 @@ class LiepinCardsSourceOperationExecutor:
         if process is not None:
             process.close()
         try:
+            self._process = _spawn_sidecar(
+                settings=self._settings,
+                journal_path=self._journal_path,
+                artifact_root=self._artifact_root,
+                history_only=False,
+                replay_observed_only=True,
+            )
             ack, terminal = self._exchange(submit)
         except (OSError, RuntimeError, SidecarReadinessError):
             return None
+        finally:
+            process, self._process = self._process, None
+            if process is not None:
+                process.close()
         if not isinstance(terminal, ReceivedLiepinCardsResult):
             return None
         return ack, terminal
@@ -1680,9 +1706,20 @@ class LiepinCardsSourceOperationExecutor:
         if process is not None:
             process.close()
         try:
+            self._process = _spawn_sidecar(
+                settings=self._settings,
+                journal_path=self._journal_path,
+                artifact_root=self._artifact_root,
+                history_only=False,
+                replay_observed_only=True,
+            )
             ack, terminal = self._exchange_details(submit)
         except (OSError, RuntimeError, SidecarReadinessError):
             return None
+        finally:
+            process, self._process = self._process, None
+            if process is not None:
+                process.close()
         if not isinstance(terminal, ReceivedLiepinDetailsResult):
             return None
         return ack, terminal
@@ -1732,6 +1769,7 @@ class LiepinCardsSourceOperationExecutor:
         ):
             if self._process is not None:
                 self._process.close()
+                self._process = None
             self._process = _spawn_sidecar(
                 settings=self._settings,
                 journal_path=self._journal_path,
@@ -1763,6 +1801,7 @@ def _spawn_sidecar(
     journal_path: Path,
     artifact_root: Path,
     history_only: bool,
+    replay_observed_only: bool = False,
     module: str = "seektalent.liepin_cards_sidecar",
     environment_overrides: dict[str, str] | None = None,
 ) -> _SidecarProcess:
@@ -1780,6 +1819,8 @@ def _spawn_sidecar(
     ]
     if history_only:
         command.append("--history-only")
+    elif replay_observed_only:
+        command.append("--replay-observed-only")
     environment = _sidecar_environment(environment_overrides)
     diagnostic_path = (
         journal_path.parent
@@ -2045,6 +2086,24 @@ def _artifact_unavailable_result(observation):
         {
             "status": "failed",
             "cards_seen": observation.cards_seen,
+            "safe_reason_code": reason,
+        },
+        {
+            "ok": False,
+            "action": "extract_structured_liepin_cards",
+            "safe_reason_code": reason,
+            "counts": {},
+            "observation": {},
+        },
+    )
+
+
+def _cards_readiness_unavailable_result():
+    reason = "liepin_opencli_status_unavailable"
+    return (
+        {
+            "status": "failed",
+            "cards_seen": 0,
             "safe_reason_code": reason,
         },
         {

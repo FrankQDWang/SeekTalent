@@ -13,6 +13,7 @@ from seektalent.opencli_browser.reason_codes import (
     OPENCLI_BRIDGE_INTEGRITY_FAILED,
     OPENCLI_BRIDGE_PROTOCOL_MISMATCH,
     OPENCLI_BRIDGE_WRONG_IMPLEMENTATION,
+    OPENCLI_COMMAND_RESULT_UNKNOWN,
     OPENCLI_HELPER_MISSING,
     OPENCLI_DAEMON_NOT_RUNNING,
     OPENCLI_DAEMON_STALE,
@@ -64,6 +65,9 @@ OPENCLI_TO_LIEPIN_REASON = {
     OPENCLI_TIMEOUT: "liepin_opencli_timeout",
     OPENCLI_EXTENSION_DISCONNECTED: "liepin_opencli_extension_disconnected",
     OPENCLI_STATUS_UNAVAILABLE: "liepin_opencli_status_unavailable",
+    OPENCLI_COMMAND_RESULT_UNKNOWN: (
+        "liepin_opencli_command_result_unknown"
+    ),
     OPENCLI_BOOTSTRAP_FAILED: "liepin_opencli_bootstrap_failed",
     OPENCLI_DAEMON_NOT_RUNNING: "liepin_opencli_daemon_not_running",
     OPENCLI_DAEMON_STALE: "liepin_opencli_daemon_stale",

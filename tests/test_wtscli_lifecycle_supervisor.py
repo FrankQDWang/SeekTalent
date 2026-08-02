@@ -422,17 +422,25 @@ export function resolveDaemonLaunchSpec() {
     (browser_dir / "daemon-ownership.js").write_text(
         """
 export const DAEMON_OWNERSHIP_TOKEN_ENV = 'WTSCLI_DAEMON_OWNERSHIP_TOKEN';
-export function prepareDaemonOwnership() { return {token: 'a'.repeat(64)}; }
-export function bindDaemonOwnershipPid() {
-  if (process.env.FAKE_BIND_FAIL === '1') throw new Error('wtscli_bind_failed');
+let record = null;
+export function prepareDaemonOwnership() {
+  record = {token: 'a'.repeat(64)};
+  return record;
 }
-export function removeDaemonOwnershipRecord() {}
+export function bindDaemonOwnershipPid(_token, pid) {
+  if (process.env.FAKE_BIND_FAIL === '1') throw new Error('wtscli_bind_failed');
+  record = {...record, pid};
+}
+export function loadDaemonOwnershipRecord() { return record; }
+export function removeDaemonOwnershipRecord() { record = null; }
 """,
         encoding="utf-8",
     )
     (browser_dir / "daemon-transport.js").write_text(
         """
 import fs from 'node:fs';
+let readyObserved = false;
+let transientInjected = false;
 function readHealth() {
   if (process.env.FAKE_ORPHAN_DAEMON === '1') {
     return {state: 'ready', status: {pid: process.pid, bridgeBuildId: process.env.FAKE_ORPHAN_BUILD_ID || 'exact-build'}};
@@ -440,7 +448,19 @@ function readHealth() {
   try { return JSON.parse(fs.readFileSync(process.env.FAKE_HEALTH_PATH, 'utf8')); }
   catch { return {state: 'stopped', status: null}; }
 }
-export async function getDaemonHealth() { return readHealth(); }
+export async function getDaemonHealth() {
+  const health = readHealth();
+  if (process.env.FAKE_TRANSIENT_AFTER_READY === '1' && health.state === 'ready') {
+    if (!readyObserved) {
+      readyObserved = true;
+    } else if (!transientInjected) {
+      transientInjected = true;
+      fs.writeFileSync(process.env.FAKE_TRANSIENT_MARKER, 'injected');
+      throw new Error('transient_health_timeout');
+    }
+  }
+  return health;
+}
 export async function requestDaemonShutdown() {
   const health = readHealth();
   if (process.env.FAKE_SHUTDOWN_MARKER) fs.writeFileSync(process.env.FAKE_SHUTDOWN_MARKER, 'called');
@@ -524,6 +544,73 @@ def test_sidecar_restarts_the_same_foreground_daemon_after_child_crash(tmp_path:
             process.wait(timeout=5)
         assert process.returncode == 0
         assert json.loads(status_path.read_text(encoding="utf-8"))["state"] == "stopped"
+
+
+def test_sidecar_does_not_latch_foreign_owner_after_owned_health_timeout(
+    tmp_path: Path,
+) -> None:
+    package_dir = _write_fake_sidecar_package(tmp_path)
+    status_path = tmp_path / "status.json"
+    lock_path = tmp_path / "lock.json"
+    health_path = tmp_path / "health.json"
+    transient_marker = tmp_path / "transient-injected"
+    node_text = shutil.which("node")
+    if node_text is None:
+        pytest.skip("Node runtime is unavailable")
+    sidecar = (
+        Path(__file__).parents[1]
+        / "src"
+        / "seektalent"
+        / "wtscli_lifecycle_sidecar.mjs"
+    )
+    process = subprocess.Popen(
+        [
+            str(Path(node_text)),
+            str(sidecar),
+            "--package-dir",
+            str(package_dir),
+            "--status-path",
+            str(status_path),
+            "--lock-path",
+            str(lock_path),
+            "--bridge-build-id",
+            "exact-build",
+        ],
+        env={
+            **os.environ,
+            "FAKE_HEALTH_PATH": str(health_path),
+            "FAKE_CHILD_SCRIPT": str(package_dir / "daemon-child.mjs"),
+            "FAKE_TRANSIENT_AFTER_READY": "1",
+            "FAKE_TRANSIENT_MARKER": str(transient_marker),
+        },
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        initial = _wait_for_status(
+            status_path,
+            predicate=lambda value: value.get("state") == "ready",
+        )
+        daemon_pid = initial["daemonPid"]
+        _wait_for_status(
+            status_path,
+            predicate=lambda value: transient_marker.exists()
+            and value.get("state") == "ready",
+            timeout=3,
+        )
+        recovered = json.loads(status_path.read_text(encoding="utf-8"))
+        assert recovered["daemonPid"] == daemon_pid
+        assert recovered["reasonCode"] is None
+        assert recovered["restartCount"] == 0
+    finally:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+        assert process.returncode == 0
 
 
 def test_sidecar_stops_after_bounded_restart_budget_and_keeps_first_cause(

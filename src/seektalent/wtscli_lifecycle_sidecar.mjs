@@ -144,8 +144,19 @@ async function inspectHealth() {
     }
     return health;
   } catch {
+    if (ownedDaemonStillAuthoritative()) {
+      return { state: "warming", status: null };
+    }
     return { state: "foreign", status: null };
   }
+}
+
+function ownedDaemonStillAuthoritative() {
+  if (!daemonOwned || child === null || child.exitCode !== null || daemonToken === null) {
+    return false;
+  }
+  const record = ownership.loadDaemonOwnershipRecord?.();
+  return record?.token === daemonToken && record?.pid === child.pid;
 }
 
 function handleChildExit(code, signal) {

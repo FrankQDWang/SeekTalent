@@ -186,7 +186,7 @@ class OpenCliDaemonClient:
                 self._raise_command_error(status, payload)
             if status < 200 or status >= 300 or payload.get("id") != command_id:
                 self._verified = False
-                raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE)
+                raise OpenCliBrowserError(OPENCLI_COMMAND_RESULT_UNKNOWN)
             return OpenCliDaemonResult(
                 command_id=command_id,
                 data=payload.get("data"),
@@ -279,11 +279,20 @@ class OpenCliDaemonClient:
                 raise OpenCliBrowserError(
                     OPENCLI_STATUS_UNAVAILABLE
                 ) from exc
-        except OpenCliBrowserError:
+        except OpenCliBrowserError as exc:
+            if method == "POST":
+                raise OpenCliBrowserError(
+                    OPENCLI_COMMAND_RESULT_UNKNOWN
+                ) from exc
             raise
         except (OSError, socket.timeout, http.client.HTTPException) as exc:
             self._verified = False
-            raise OpenCliBrowserError(OPENCLI_DAEMON_NOT_RUNNING) from exc
+            reason = (
+                OPENCLI_COMMAND_RESULT_UNKNOWN
+                if method == "POST"
+                else OPENCLI_DAEMON_NOT_RUNNING
+            )
+            raise OpenCliBrowserError(reason) from exc
         finally:
             if connection is not None:
                 with suppress(OSError):

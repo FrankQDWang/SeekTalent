@@ -87,14 +87,26 @@ def _serve(
     journal_session = None
     session = None
     try:
+        if args.history_only:
+            session = serve_sidecar_handshake(
+                __import__("sys").stdin.buffer,
+                __import__("sys").stdout.buffer,
+                liepin_cards_sidecar_identity(),
+            )
+            _serve_history(session, args.journal)
+            return 0
+        if args.replay_observed_only and not args.journal.is_file():
+            raise RuntimeError("liepin_source_replay_journal_missing")
+        site = (
+            None
+            if args.replay_observed_only
+            else _build_site(site_factory)
+        )
         session = serve_sidecar_handshake(
             __import__("sys").stdin.buffer,
             __import__("sys").stdout.buffer,
             liepin_cards_sidecar_identity(),
         )
-        if args.history_only:
-            _serve_history(session, args.journal)
-            return 0
         journal = (
             open_command_journal(args.journal)
             if args.journal.exists()
@@ -105,7 +117,6 @@ def _serve(
         cards_artifacts = args.artifacts
         details_artifacts = args.artifacts.parent / "liepin-details-results"
         locator_root = args.artifacts.parent / "liepin-details-locators"
-        site = None
         while True:
             try:
                 messages = session.receive_liepin_source_messages(
@@ -126,7 +137,7 @@ def _serve(
                     received=received,
                     cards_artifacts=cards_artifacts,
                     site=site,
-                    site_factory=site_factory,
+                    replay_observed_only=args.replay_observed_only,
                     fault_hook=fault_hook,
                 )
             elif isinstance(received, ReceivedLiepinDetailsSubmit):
@@ -138,7 +149,7 @@ def _serve(
                     details_artifacts=details_artifacts,
                     locator_root=locator_root,
                     site=site,
-                    site_factory=site_factory,
+                    replay_observed_only=args.replay_observed_only,
                     fault_hook=fault_hook,
                 )
             else:
@@ -178,7 +189,7 @@ def _handle_cards_submit(
     received: ReceivedLiepinCardsSubmit,
     cards_artifacts: Path,
     site,
-    site_factory: Callable[[], object] | None,
+    replay_observed_only: bool,
     fault_hook: Callable[[str], None] | None,
 ):
     submit = received.payload
@@ -271,6 +282,15 @@ def _handle_cards_submit(
             ),
         )
         return site
+    if replay_observed_only:
+        _send_cards_reconcile(
+            session,
+            frame_session,
+            received,
+            submit.identity,
+            "accepted_no_dispatch",
+        )
+        return site
     dispatch = journal_session.record_dispatch_intent(
         run_id=submit.identity.run_id,
         operation_id=submit.identity.operation_id,
@@ -279,7 +299,6 @@ def _handle_cards_submit(
         durable_dispatch_intent_ref=dispatch_ref,
     )
     _inject_fault(fault_hook, "after_dispatch_intent")
-    site = _ensure_site(site, site_factory)
     try:
         artifact = _execute_cards(site, submit)
     except LiepinBrowserEffectBoundaryError as exc:
@@ -333,7 +352,7 @@ def _handle_details_submit(
     details_artifacts: Path,
     locator_root: Path,
     site,
-    site_factory: Callable[[], object] | None,
+    replay_observed_only: bool,
     fault_hook: Callable[[str], None] | None,
 ):
     submit = received.payload
@@ -428,6 +447,15 @@ def _handle_details_submit(
             ),
         )
         return site
+    if replay_observed_only:
+        _send_details_reconcile(
+            session,
+            frame_session,
+            received,
+            submit.identity,
+            "accepted_no_dispatch",
+        )
+        return site
     dispatch = journal_session.record_dispatch_intent(
         run_id=submit.identity.run_id,
         operation_id=submit.identity.operation_id,
@@ -436,7 +464,6 @@ def _handle_details_submit(
         durable_dispatch_intent_ref=dispatch_ref,
     )
     _inject_fault(fault_hook, "after_dispatch_intent")
-    site = _ensure_site(site, site_factory)
     try:
         artifact = _execute_details(site, submit, locator_root=locator_root)
     except LiepinBrowserEffectBoundaryError as exc:
@@ -484,9 +511,7 @@ def _handle_details_submit(
     return site
 
 
-def _ensure_site(site, site_factory: Callable[[], object] | None):
-    if site is not None:
-        return site
+def _build_site(site_factory: Callable[[], object] | None):
     return (
         site_factory()
         if site_factory is not None
@@ -591,6 +616,7 @@ def _execute_cards(site, submit) -> LiepinCardsArtifactV1:
     )
     status = envelope.get("status")
     safe_reason = envelope.get("safe_reason_code") or envelope.get("stop_reason")
+    _raise_if_command_result_unknown(safe_reason)
     cards_seen = envelope.get("cards_seen")
     cards: tuple[dict[str, object], ...] = ()
     result_status = "failed"
@@ -655,6 +681,7 @@ def _execute_details(
     )
     status = effect.get("status")
     safe_reason = effect.get("safe_reason_code")
+    _raise_if_command_result_unknown(safe_reason)
     result_status = "failed"
     if status in {"succeeded", "partial"}:
         result_status = "succeeded" if status == "succeeded" else "partial"
@@ -683,6 +710,16 @@ def _execute_details(
         },
         strict=True,
     )
+
+
+def _raise_if_command_result_unknown(safe_reason: object) -> None:
+    if safe_reason in {
+        "opencli_command_result_unknown",
+        "liepin_opencli_command_result_unknown",
+    }:
+        raise LiepinBrowserEffectBoundaryError(
+            "liepin_opencli_command_result_unknown"
+        )
 
 
 def _serve_history(session, journal_path: Path) -> None:
@@ -847,7 +884,9 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
     parser.add_argument("--journal", type=Path, required=True)
     parser.add_argument("--artifacts", type=Path, required=True)
-    parser.add_argument("--history-only", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--history-only", action="store_true")
+    mode.add_argument("--replay-observed-only", action="store_true")
     return parser
 
 

@@ -34,6 +34,7 @@ from seektalent.opencli_browser.daemon_transport import (
 )
 from seektalent.opencli_browser.fault_isolation import isolated_call
 from seektalent.opencli_browser.reason_codes import (
+    OPENCLI_COMMAND_RESULT_UNKNOWN,
     OPENCLI_DAEMON_NOT_RUNNING,
     OPENCLI_FORBIDDEN_COMMAND,
     OPENCLI_OWNED_TAB_MISSING,
@@ -75,6 +76,7 @@ class OpenCliBrowserAutomation:
         self._retiring_tabs: dict[OpenCliTabKind, _RetiringOwnedTab] = {}
         self._owned_tab_allocation_counts: dict[OpenCliTabKind, int] = {}
         self._timing_recorder = timing_recorder
+        self._command_result_unknown = False
 
     @property
     def daemon_enabled(self) -> bool:
@@ -716,6 +718,8 @@ class OpenCliBrowserAutomation:
         label: str,
         timeout_seconds: float | None = None,
     ) -> OpenCliDaemonResult:
+        if self._command_result_unknown:
+            raise OpenCliBrowserError(OPENCLI_COMMAND_RESULT_UNKNOWN)
         daemon = self._require_daemon()
         argv = ("daemon", label)
         started = time.perf_counter()
@@ -731,6 +735,8 @@ class OpenCliBrowserAutomation:
             return result
         except OpenCliBrowserError as exc:
             safe_reason_code = exc.safe_reason_code
+            if safe_reason_code == OPENCLI_COMMAND_RESULT_UNKNOWN:
+                self._command_result_unknown = True
             raise
         finally:
             self._record_timing(

@@ -5,6 +5,10 @@ from collections.abc import Mapping
 
 import pytest
 
+from seektalent.failure_interpretation import (
+    LIEPIN_FAILURE_POLICIES,
+    public_source_problem_code,
+)
 from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
 from seektalent.opencli_browser.contracts import (
     OpenCliBrowserConfig,
@@ -17,6 +21,7 @@ from seektalent.opencli_browser.controlled_tab_lock import (
 )
 from seektalent.opencli_browser.daemon_transport import OpenCliDaemonResult
 from seektalent.opencli_browser.reason_codes import (
+    OPENCLI_COMMAND_RESULT_UNKNOWN,
     OPENCLI_EXTENSION_DISCONNECTED,
     OPENCLI_OWNED_TAB_MISSING,
     OPENCLI_PAGE_NOT_READY,
@@ -26,6 +31,7 @@ from seektalent.opencli_browser.reason_codes import (
 )
 from seektalent.providers.liepin.liepin_opencli_policy import (
     liepin_broker_tab_session,
+    liepin_reason_from_opencli_reason,
 )
 
 
@@ -970,6 +976,86 @@ def test_controlled_tab_lock_failures_do_not_change_the_primary_action_result() 
     assert browser._owned_tabs[owned_tab.page_id].idle_deadline_at == 123456  # noqa: SLF001
 
 
+@pytest.mark.parametrize(
+    ("failure_stage", "expected_operations", "primary_raises"),
+    [
+        ("unlock", ["evaluate"], True),
+        ("click", ["evaluate", "click"], True),
+        ("relock", ["evaluate", "click", "evaluate"], False),
+    ],
+)
+def test_command_result_unknown_latches_all_later_daemon_commands(
+    failure_stage: str,
+    expected_operations: list[str],
+    primary_raises: bool,
+) -> None:
+    class UnknownResultDaemon(RecordingDaemon):
+        armed = False
+
+        def command(
+            self,
+            action: str,
+            params: Mapping[str, object],
+            *,
+            timeout_seconds: float,
+        ) -> OpenCliDaemonResult:
+            stage = None
+            if action == "browser-operation":
+                operation = params.get("operation")
+                code = str(params.get("code") or "")
+                if operation == "click":
+                    stage = "click"
+                elif operation == "evaluate" and "setAutomationActive(true)" in code:
+                    stage = "unlock"
+                elif operation == "evaluate" and "setAutomationActive(false)" in code:
+                    stage = "relock"
+            result = super().command(
+                action,
+                params,
+                timeout_seconds=timeout_seconds,
+            )
+            if self.armed and stage == failure_stage:
+                raise OpenCliBrowserError(OPENCLI_COMMAND_RESULT_UNKNOWN)
+            return result
+
+    daemon = UnknownResultDaemon()
+    browser = automation(daemon)
+    browser.activate_control_scope("lane-key")
+    browser.open_owned_tab(
+        host_page="host-1",
+        url="https://example.com/search",
+        tab_kind="search",
+    )
+    daemon.calls.clear()
+    daemon.armed = True
+
+    if primary_raises:
+        with pytest.raises(OpenCliBrowserError) as raised:
+            browser.click_ref("7")
+        assert raised.value.safe_reason_code == OPENCLI_COMMAND_RESULT_UNKNOWN
+    else:
+        assert browser.click_ref("7") == '{"ok": true}'
+
+    assert [
+        params["operation"]
+        for action, params, _timeout in daemon.calls
+        if action == "browser-operation"
+    ] == expected_operations
+    original_call_count = len(daemon.calls)
+
+    with pytest.raises(OpenCliBrowserError) as raised:
+        browser.click_ref("7")
+    assert raised.value.safe_reason_code == OPENCLI_COMMAND_RESULT_UNKNOWN
+    assert len(daemon.calls) == original_call_count
+
+    replacement = RecordingDaemon()
+    browser.replace_daemon(replacement)  # type: ignore[arg-type]
+    with pytest.raises(OpenCliBrowserError) as raised:
+        browser.activate_control_scope("replacement-lane")
+    assert raised.value.safe_reason_code == OPENCLI_COMMAND_RESULT_UNKNOWN
+    assert replacement.calls == []
+
+
 def test_controlled_tab_lock_failure_does_not_replace_the_primary_action_error() -> None:
     class BrokenActionAndLockDaemon(RecordingDaemon):
         def command(
@@ -1012,3 +1098,22 @@ def test_daemon_automation_rejects_malformed_semantic_find_results() -> None:
         automation(MissingTargetDaemon()).run_browser_command("click", ("--role", "button", "--name", "搜索"))
 
     assert raised.value.safe_reason_code == "opencli_status_unavailable"
+
+
+def test_command_and_source_reconciliation_unknown_require_no_retry() -> None:
+    command_reason = liepin_reason_from_opencli_reason(
+        OPENCLI_COMMAND_RESULT_UNKNOWN
+    )
+
+    assert command_reason == "liepin_opencli_command_result_unknown"
+    for reason in (
+        command_reason,
+        "liepin_cards_reconciliation_unknown",
+        "liepin_details_reconciliation_unknown",
+    ):
+        policy = LIEPIN_FAILURE_POLICIES[reason]
+        assert (
+            public_source_problem_code(reason)
+            == "liepin_browser_lane_reconciliation_required"
+        )
+        assert policy.legacy_lane_retryable_metadata is False

@@ -208,6 +208,21 @@ _LIEPIN_FAILURE_POLICY_ENTRIES = (
         "liepin_browser_lane_reconciliation_required",
         legacy_lane_retryable_metadata=False,
     ),
+    _policy(
+        "liepin_opencli_command_result_unknown",
+        "liepin_browser_lane_reconciliation_required",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_cards_reconciliation_unknown",
+        "liepin_browser_lane_reconciliation_required",
+        legacy_lane_retryable_metadata=False,
+    ),
+    _policy(
+        "liepin_details_reconciliation_unknown",
+        "liepin_browser_lane_reconciliation_required",
+        legacy_lane_retryable_metadata=False,
+    ),
     _policy("liepin_browser_account_mismatch", "source_account_mismatch"),
     _policy(
         "liepin_opencli_backend_disabled",

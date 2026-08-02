@@ -25,7 +25,6 @@ from seektalent.opencli_browser.reason_codes import (
     OPENCLI_BRIDGE_PROTOCOL_MISMATCH,
     OPENCLI_BRIDGE_WRONG_IMPLEMENTATION,
     OPENCLI_COMMAND_RESULT_UNKNOWN,
-    OPENCLI_DAEMON_NOT_RUNNING,
     OPENCLI_FORBIDDEN_COMMAND,
     OPENCLI_FOREIGN_OWNER,
     OPENCLI_SELECTOR_NOT_FOUND,
@@ -404,7 +403,7 @@ def test_daemon_client_does_not_retry_post_disconnected_before_response() -> Non
             timeout_seconds=3,
         )
 
-    assert captured.value.safe_reason_code == OPENCLI_DAEMON_NOT_RUNNING
+    assert captured.value.safe_reason_code == OPENCLI_COMMAND_RESULT_UNKNOWN
     assert len(connections) == 2
     assert [
         request[0]

@@ -11,7 +11,10 @@ from types import SimpleNamespace
 import pytest
 
 from seektalent.config import AppSettings
-from seektalent.sidecar_handshake_protocol import SidecarReadinessError
+from seektalent.sidecar_handshake_protocol import (
+    SidecarReadinessError,
+    SidecarReadinessReason,
+)
 from seektalent.source_port.liepin_cards_contract import (
     LiepinCardsArtifactV1,
     LiepinCardsObservationV1,
@@ -23,6 +26,10 @@ from seektalent.source_port.liepin_cards_artifacts import (
     read_liepin_cards_artifact,
     write_liepin_cards_artifact,
 )
+from seektalent.source_port.liepin_details_contract import (
+    LiepinDetailsOperationRequestV1,
+    stable_liepin_details_operation_id,
+)
 from seektalent.liepin_cards_source_operation import (
     LiepinCardsSourceOperationExecutor,
     _HistoryUnknown,
@@ -33,6 +40,7 @@ from seektalent.liepin_cards_source_operation import (
 )
 from seektalent.liepin_cards_sidecar import (
     _execute_cards,
+    _execute_details,
     _serve,
     _terminal_observation_digest,
 )
@@ -59,7 +67,10 @@ from seektalent.source_port.operation_dispatch import (
 from seektalent.source_port.verify_session_contract import (
     VerifySessionRequestV1,
 )
-from seektalent_runtime_control.errors import RuntimeControlError
+from seektalent_runtime_control.errors import (
+    RuntimeControlError,
+    RuntimeControlLookupError,
+)
 from seektalent_runtime_control.browser_lane import LIEPIN_BROWSER_LANE
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_runtime_control.checkpoint_v2 import checkpoint_projection
@@ -107,6 +118,24 @@ def _request(**updates: object) -> LiepinCardsOperationRequestV1:
     return LiepinCardsOperationRequestV1.model_validate(payload, strict=True)
 
 
+def _details_request(**updates: object) -> LiepinDetailsOperationRequestV1:
+    payload: dict[str, object] = {
+        "contract_version": "seektalent.source.liepin-details.request/v1",
+        "runtime_run_id": "runtime_run_1",
+        "source_lane_run_id": (
+            "runtime_run_1:source:1:liepin:round:1:lane:1"
+        ),
+        "query_instance_id": "query-1",
+        "card_ref": "70",
+        "rank": 1,
+        "open_mode": "cached_locator",
+        "provider_candidate_key_hash": "a" * 64,
+        "expected_provider_candidate_key_hash": "a" * 64,
+    }
+    payload.update(updates)
+    return LiepinDetailsOperationRequestV1.model_validate(payload, strict=True)
+
+
 def test_cards_operation_identity_and_hash_are_stable_across_delivery_attempts() -> None:
     request = _request()
 
@@ -152,6 +181,101 @@ def test_cards_operation_deadline_uses_browser_effect_budget(
     )
 
     assert identity.deadline.value == 120_000
+
+
+def test_new_cards_operation_requires_ready_effect_sidecar_before_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _seed_running_store(tmp_path)
+    executor = LiepinCardsSourceOperationExecutor(
+        settings=AppSettings(
+            _env_file=None,
+            workspace_root=str(tmp_path),
+            runtime_control_path=str(store.path),
+        ),
+        store=store,
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-1",
+        attempt_no=1,
+        accepted_requirement_revision_id="approved-1",
+        runtime_attempt_authority_ref="runtime_attempt_authority_ref_1",
+    )
+    request = _request(
+        runtime_run_id="runtime_run_1",
+        source_lane_run_id=(
+            "runtime_run_1:source:1:liepin:round:1:lane:1"
+        ),
+    )
+    history_queries: list[str] = []
+
+    def fail_readiness():
+        raise SidecarReadinessError(SidecarReadinessReason.CHILD_EXIT)
+
+    monkeypatch.setattr(executor, "_ready_source_process", fail_readiness)
+    monkeypatch.setattr(
+        executor,
+        "_query_terminal_history_safely",
+        lambda *_args: history_queries.append("history") or None,
+    )
+
+    envelope, structured = executor._execute(request)
+
+    operation_id = stable_liepin_cards_operation_id(request)
+    with pytest.raises(RuntimeControlLookupError):
+        store.get_source_operation("runtime_run_1", operation_id)
+    assert store.list_pending_source_dispatches() == []
+    assert history_queries == []
+    assert envelope["safe_reason_code"] == "liepin_opencli_status_unavailable"
+    assert structured["ok"] is False
+    lane = store.get_browser_lane()
+    assert lane is not None
+    assert lane.status == "completed"
+
+
+def test_new_details_operation_requires_ready_effect_sidecar_before_acceptance(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _seed_running_store(tmp_path)
+    executor = LiepinCardsSourceOperationExecutor(
+        settings=AppSettings(
+            _env_file=None,
+            workspace_root=str(tmp_path),
+            runtime_control_path=str(store.path),
+        ),
+        store=store,
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-1",
+        attempt_no=1,
+        accepted_requirement_revision_id="approved-1",
+        runtime_attempt_authority_ref="runtime_attempt_authority_ref_1",
+    )
+    request = _details_request()
+    history_queries: list[str] = []
+
+    def fail_readiness():
+        raise SidecarReadinessError(SidecarReadinessReason.CHILD_EXIT)
+
+    monkeypatch.setattr(executor, "_ready_source_process", fail_readiness)
+    monkeypatch.setattr(
+        executor,
+        "_query_terminal_history_safely",
+        lambda *_args: history_queries.append("history") or None,
+    )
+
+    envelope, structured = executor._execute_details(request)
+
+    operation_id = stable_liepin_details_operation_id(request)
+    with pytest.raises(RuntimeControlLookupError):
+        store.get_source_operation("runtime_run_1", operation_id)
+    assert store.list_pending_source_dispatches() == []
+    assert history_queries == []
+    assert envelope["safe_reason_code"] == "liepin_opencli_status_unavailable"
+    assert structured["ok"] is False
+    lane = store.get_browser_lane()
+    assert lane is not None
+    assert lane.status == "completed"
 
 
 def test_prepare_readiness_is_durable_source_operation_under_browser_lane(
@@ -780,8 +904,13 @@ def test_observed_history_replay_closes_stale_process_before_exact_redelivery(
     monkeypatch,
 ) -> None:
     executor = object.__new__(LiepinCardsSourceOperationExecutor)
-    closed = []
-    executor._process = SimpleNamespace(close=lambda: closed.append(True))
+    closed: list[str] = []
+    executor._settings = SimpleNamespace()
+    executor._journal_path = Path("journal.sqlite3")
+    executor._artifact_root = Path("artifacts")
+    executor._process = SimpleNamespace(
+        close=lambda: closed.append("stale")
+    )
     request = _request()
     identity = _identity(request)
     ack = LiepinCardsAcceptedAckV1(
@@ -818,11 +947,17 @@ def test_observed_history_replay_closes_stale_process_before_exact_redelivery(
         "_exchange",
         lambda _submit: (ack, terminal),
     )
+    monkeypatch.setattr(
+        "seektalent.liepin_cards_source_operation._spawn_sidecar",
+        lambda **_kwargs: SimpleNamespace(
+            close=lambda: closed.append("replay")
+        ),
+    )
 
     replayed = executor._replay_observed_terminal(SimpleNamespace())
 
     assert replayed == (ack, terminal)
-    assert closed == [True]
+    assert closed == ["stale", "replay"]
     assert executor._process is None
 
 
@@ -1073,9 +1208,50 @@ def test_supervised_sidecar_fault_matrix_persists_phase_before_effect(
     assert effect_count == expected_effects
 
 
+def test_effect_sidecar_requires_site_before_handshake_or_journal(
+    tmp_path: Path,
+) -> None:
+    settings = AppSettings(
+        _env_file=None,
+        workspace_root=str(Path(__file__).parents[1]),
+    )
+    journal_path = tmp_path / "journal.sqlite3"
+    process = None
+    try:
+        with pytest.raises(SidecarReadinessError):
+            process = _spawn_sidecar(
+                settings=settings,
+                journal_path=journal_path,
+                artifact_root=tmp_path / "artifacts",
+                history_only=False,
+                module="tests.test_liepin_cards_source_operation",
+                environment_overrides={
+                    "SEEKTALENT_TEST_EFFECT_COUNTER": str(
+                        tmp_path / "effect-count"
+                    ),
+                    "SEEKTALENT_TEST_SITE_FACTORY_FAIL": "1",
+                },
+            )
+    finally:
+        if process is not None:
+            process.close()
+
+    assert not journal_path.exists()
+    assert not (tmp_path / "effect-count").exists()
+
+
+@pytest.mark.parametrize(
+    ("effect_status", "expected_reason"),
+    [
+        ("browser_error", "liepin_opencli_stale_control_fence"),
+        ("command_unknown", "liepin_opencli_command_result_unknown"),
+    ],
+)
 def test_cards_browser_failure_after_dispatch_intent_emits_only_safe_diagnostic(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    effect_status: str,
+    expected_reason: str,
 ) -> None:
     settings = AppSettings(
         _env_file=None,
@@ -1112,7 +1288,7 @@ def test_cards_browser_failure_after_dispatch_intent_emits_only_safe_diagnostic(
         module="tests.test_liepin_cards_source_operation",
         environment_overrides={
             "SEEKTALENT_TEST_EFFECT_COUNTER": str(counter_path),
-            "SEEKTALENT_TEST_EFFECT_STATUS": "browser_error",
+            "SEEKTALENT_TEST_EFFECT_STATUS": effect_status,
         },
     )
     try:
@@ -1127,13 +1303,38 @@ def test_cards_browser_failure_after_dispatch_intent_emits_only_safe_diagnostic(
     assert diagnostic is not None
     assert diagnostic.boundary == "cards_effect"
     assert diagnostic.operation_kind == "cards"
-    assert diagnostic.safe_reason_code == "liepin_opencli_stale_control_fence"
+    assert diagnostic.safe_reason_code == expected_reason
     with sqlite3.connect(journal_path) as connection:
         phase = connection.execute(
             "SELECT phase FROM source_history_heads"
         ).fetchone()
     assert phase == ("dispatch_intent",)
     assert counter_path.read_text(encoding="utf-8") == "1"
+
+
+def test_details_command_unknown_is_not_persisted_as_terminal_failure(
+    tmp_path: Path,
+) -> None:
+    class Site:
+        def _execute_liepin_details_sidecar_effect(self, **_kwargs):
+            return {
+                "status": "failed",
+                "safe_reason_code": "opencli_command_result_unknown",
+                "action_attempted": 1,
+                "effect_posture": "attempted",
+            }
+
+    with pytest.raises(LiepinBrowserEffectBoundaryError) as raised:
+        _execute_details(
+            Site(),
+            SimpleNamespace(request=_details_request()),
+            locator_root=tmp_path,
+        )
+
+    assert (
+        raised.value.safe_reason_code
+        == "liepin_opencli_command_result_unknown"
+    )
 
 
 def test_large_non_diagnostic_sidecar_stderr_neither_blocks_nor_becomes_diagnostic(
@@ -1338,6 +1539,11 @@ def test_terminal_with_unavailable_artifact_is_source_scoped_and_never_reexecute
         lambda _submit: (effects.append("effect") or ack, terminal),
     )
     monkeypatch.setattr(
+        executor,
+        "_ready_source_process",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
         "seektalent.liepin_cards_source_operation.read_liepin_cards_artifact",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(artifact_error),
     )
@@ -1397,6 +1603,11 @@ def test_history_transport_failure_is_source_scoped_and_durably_reconcile_first(
         raise OSError("transport unavailable")
 
     monkeypatch.setattr(executor, "_exchange", fail_exchange)
+    monkeypatch.setattr(
+        executor,
+        "_ready_source_process",
+        lambda: SimpleNamespace(),
+    )
     monkeypatch.setattr(
         executor,
         "_query_terminal_history",
@@ -1468,6 +1679,11 @@ def test_lost_sidecar_journal_cannot_readmit_reconciled_operation_effect(
             transport_attempts.append("initial")
             or (_ for _ in ()).throw(OSError("initial transport loss"))
         ),
+    )
+    monkeypatch.setattr(
+        executor,
+        "_ready_source_process",
+        lambda: SimpleNamespace(),
     )
     monkeypatch.setattr(
         executor,
@@ -1857,7 +2073,11 @@ class _SidecarHarnessSite:
             "safe_reason_code": (
                 None
                 if self._status == "succeeded"
-                else "liepin_test_observed_failure"
+                else (
+                    "opencli_command_result_unknown"
+                    if self._status == "command_unknown"
+                    else "liepin_test_observed_failure"
+                )
             ),
         }
         cards = (
@@ -1873,7 +2093,11 @@ class _SidecarHarnessSite:
                 safe_reason_code=(
                     None
                     if self._status != "failed"
-                    else "liepin_test_observed_failure"
+                    else (
+                        "opencli_command_result_unknown"
+                        if self._status == "command_unknown"
+                        else "liepin_test_observed_failure"
+                    )
                 ),
             ),
         )
@@ -1895,10 +2119,12 @@ def _run_sidecar_harness() -> int:
             fault_marker.write_text(point, encoding="utf-8")
             os._exit(86)
 
-    return _serve(
-        site_factory=lambda: _SidecarHarnessSite(counter_path, status),
-        fault_hook=fault,
-    )
+    def build_site():
+        if os.environ.get("SEEKTALENT_TEST_SITE_FACTORY_FAIL") == "1":
+            raise RuntimeError("test sidecar site unavailable")
+        return _SidecarHarnessSite(counter_path, status)
+
+    return _serve(site_factory=build_site, fault_hook=fault)
 
 
 if __name__ == "__main__":
