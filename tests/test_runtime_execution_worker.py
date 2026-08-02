@@ -9,6 +9,7 @@ from types import SimpleNamespace
 
 import pytest
 
+import seektalent_runtime_control.worker as worker_module
 from seektalent.models import RequirementSheet
 from seektalent_runtime_control.models import (
     RuntimeControlEvent,
@@ -232,6 +233,46 @@ def test_heartbeat_failure_aborts_blocked_executor_and_records_visible_failure()
     from seektalent_runtime_control.errors import RuntimeControlError
 
     asyncio.run(scenario())
+
+
+def test_completed_executor_wins_a_simultaneous_stale_heartbeat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from seektalent_runtime_control.errors import RuntimeControlError
+
+    class _StaleAfterInitialHeartbeatStore(_FakeRuntimeControlStore):
+        def heartbeat_executor_lease(self, **kwargs) -> RuntimeExecutorLease:
+            if self.heartbeats:
+                raise RuntimeControlError("runtime_executor_stale")
+            return super().heartbeat_executor_lease(**kwargs)
+
+    original_wait = asyncio.wait
+
+    async def _wait_until_both_complete(tasks, *, return_when):
+        assert return_when is asyncio.FIRST_COMPLETED
+        await asyncio.gather(*tasks, return_exceptions=True)
+        return set(tasks), set()
+
+    monkeypatch.setattr(worker_module.asyncio, "wait", _wait_until_both_complete)
+    store = _StaleAfterInitialHeartbeatStore(
+        claims=[_claim(run=_run(), executor_id="worker-exec-race")]
+    )
+    worker = RuntimeExecutionWorker(
+        store=store,
+        executor=_FakeRuntimeExecutor(result=_run(status="completed")),
+        executor_id_factory=lambda: "worker-exec-race",
+        lease_seconds=0.03,
+        heartbeat_interval_seconds=0.005,
+    )
+
+    try:
+        result = asyncio.run(worker.run_once())
+    finally:
+        monkeypatch.setattr(worker_module.asyncio, "wait", original_wait)
+
+    assert result is not None
+    assert result.status == "completed"
+    assert store.failure_events == []
 
 
 def test_heartbeat_active_leases_only_renews_current_worker_executor(tmp_path) -> None:

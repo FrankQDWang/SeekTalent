@@ -47,9 +47,11 @@ class BrowserLaneReconciliationCoordinator:
         store: RuntimeControlStore,
         journal_path: Path | None = None,
         prepare_readiness_probe: Callable[[], None] | None = None,
+        orphaned_owned_tab_absent: Callable[[str], bool] | None = None,
     ) -> None:
         self.store = store
         self.prepare_readiness_probe = prepare_readiness_probe
+        self.orphaned_owned_tab_absent = orphaned_owned_tab_absent
         self.journal_path = (
             journal_path
             or store.path.parent
@@ -126,7 +128,27 @@ class BrowserLaneReconciliationCoordinator:
             == "reconciliation_unknown"
             and accepted.operation.retry_posture == "reconcile_first"
         ):
-            return "needs_attention"
+            if (
+                decision.history_conclusion != "dispatch_not_observed"
+                or accepted.operation.operation_kind
+                not in {"cards", "details"}
+                or self.orphaned_owned_tab_absent is None
+            ):
+                return "needs_attention"
+            try:
+                owned_tab_absent = self.orphaned_owned_tab_absent(
+                    accepted.operation.operation_kind,
+                )
+            except (OSError, RuntimeError, ValueError):
+                return "needs_attention"
+            if owned_tab_absent is not True:
+                return "needs_attention"
+            decision = _decision_from_expired_owned_scope(
+                decision=decision,
+                accepted=accepted,
+                history_digest=history_digest,
+                observed_at=observed_at,
+            )
         try:
             self.store.commit_no_owner_source_reconciliation(
                 decision,
@@ -228,6 +250,52 @@ def _decision_from_current_readiness(
             accepted.operation.reconciliation_revision
         ),
         committed_at=observed_at,
+    )
+
+
+def _decision_from_expired_owned_scope(
+    *,
+    decision: SourceOperationReconciliationDecision,
+    accepted,
+    history_digest: str,
+    observed_at: str,
+) -> SourceOperationReconciliationDecision:
+    if decision.dispatch_intent_ref is None:
+        raise RuntimeControlError(
+            "browser_lane_dispatch_intent_missing"
+        )
+    evidence = json.dumps(
+        {
+            "schemaVersion": (
+                "seektalent.orphaned-browser-scope-observation/v1"
+            ),
+            "runtimeRunId": accepted.operation.runtime_run_id,
+            "operationId": accepted.operation.operation_id,
+            "operationKind": accepted.operation.operation_kind,
+            "browserControlScopeId": (
+                accepted.expectation.browser_control_scope_id
+            ),
+            "observation": "owned_tab_absent_after_lane_expiry",
+            "sourceHistoryDigest": history_digest,
+            "observedAt": observed_at,
+        },
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    digest = sha256(evidence).hexdigest()
+    observation_ref = f"browser-scope-observation://{digest}"
+    return replace(
+        decision,
+        reconciliation_id=f"browser-scope-absent-{digest[:48]}",
+        history_result_ref=observation_ref,
+        history_result_digest=digest,
+        decision_kind="conclusive_observation",
+        history_outcome="matched",
+        history_conclusion="observed_failure",
+        conclusive_observation_ref=observation_ref,
+        source_operation_disposition="failed",
+        retry_posture="no_retry",
     )
 
 

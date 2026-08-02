@@ -58,7 +58,7 @@ def test_staging_installer_uses_published_package_and_isolated_runtime() -> None
     assert 'export HOME="$STAGING_ROOT/home"' in script
     assert "run_seektalent_staging.py" in script
     assert "install_staging_browser_bridge.py" in script
-    assert "b05374d5d1834cda297701f7dc7a8caf756cac3c" in script
+    assert "66bf6aaab1751c10bfee0f091a0ad31efc2bb453" in script
     assert 'WTSCLI_NPM_VERSION="10.9.2"' in script
     assert '(cd "${WTSCLI_ROOT}" && "${WTSCLI_NPM[@]}" ci --ignore-scripts)' in script
     assert 'npm --prefix "${WTSCLI_ROOT}" ci' not in script

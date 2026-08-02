@@ -10,7 +10,7 @@ from typing import Any
 
 
 WTSCLI_VERSION = "0.1.0"
-WTSCLI_FORK_COMMIT = "b05374d5d1834cda297701f7dc7a8caf756cac3c"
+WTSCLI_FORK_COMMIT = "66bf6aaab1751c10bfee0f091a0ad31efc2bb453"
 WTSCLI_UPSTREAM_COMMIT = "cad35e7a6a5ff3f7d6b859bfa4c45195c0390260"
 WTSCLI_BUILD_ID = f"seektalent-wtscli-{WTSCLI_VERSION}+{WTSCLI_FORK_COMMIT[:12]}"
 WTSCLI_EXTENSION_ID = "aijmoehobdolindhgdljiaiimngpghcn"

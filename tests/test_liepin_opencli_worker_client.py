@@ -91,6 +91,38 @@ def test_opencli_worker_forwards_runtime_request_to_deterministic_retriever() ->
     assert retriever.calls[0].requirement_sheet == {"job_title": "数据开发专家"}
 
 
+def test_opencli_worker_renders_liepin_site_keywords_from_runtime_terms() -> None:
+    retriever = FakeRetriever(calls=[])
+    client = LiepinOpenCliWorkerClient(
+        retriever=retriever,
+        connection_id="liepin-opencli",
+        provider_account_hash="local-opencli",
+    )
+
+    asyncio.run(
+        client.search(
+            SearchRequest(
+                query_terms=["AI Agent", "Multi-Agent"],
+                query_role="primary",
+                keyword_query='"AI Agent" Multi-Agent',
+                adapter_notes=[],
+                runtime_constraints=[],
+                fetch_mode="detail",
+                page_size=2,
+                provider_context={
+                    "liepin_requirement_sheet_json": '{"job_title":"AI Agent 工程师"}',
+                    "liepin_max_cards": "10",
+                    "liepin_max_pages": "1",
+                },
+            ),
+            round_no=1,
+            trace_id="run-site-query",
+        )
+    )
+
+    assert retriever.calls[0].keyword_query == "AI Agent Multi-Agent"
+
+
 def test_opencli_worker_private_claim_route_forwards_same_ledger_and_logical_provenance() -> None:
     class ClaimAwareRetriever(FakeRetriever):
         def __init__(self) -> None:

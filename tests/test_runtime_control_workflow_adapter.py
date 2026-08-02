@@ -311,6 +311,65 @@ def test_workflow_adapter_records_runtime_run_failed_after_start_ack(tmp_path: P
     }
 
 
+def test_source_pre_dispatch_rejection_applies_pending_cancel(
+    tmp_path: Path,
+) -> None:
+    from seektalent_runtime_control.commands import RuntimeCommandService
+    from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
+    from seektalent_runtime_control.store import RuntimeControlStore
+
+    store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    store.initialize()
+    command_service = RuntimeCommandService(
+        store=store,
+        now=lambda: "2026-06-08T00:00:04.000000Z",
+    )
+    executor = WorkflowRuntimeExecutor(
+        store=store,
+        command_service=command_service,
+        runtime_factory=lambda *, source_registry=None: (
+            CancelAtSourceBoundaryRuntime(command_service)
+        ),
+        runtime_run_id_factory=lambda: "runtime_run_cancelled",
+        executor_id_factory=lambda: "executor_1",
+        now=_clock(
+            "2026-06-08T00:00:00.000000Z",
+            "2026-06-08T00:00:01.000000Z",
+            "2026-06-08T00:00:02.000000Z",
+            "2026-06-08T00:00:03.000000Z",
+            "2026-06-08T00:00:05.000000Z",
+            "2026-06-08T00:00:06.000000Z",
+        ),
+    )
+
+    run = asyncio.run(
+        executor.start_workflow(
+            conversation_id="agent_conv_1",
+            workbench_session_id=None,
+            approved_requirement=_approved_requirement(),
+            job_title="Senior Python Engineer",
+            jd_text="Build search systems.",
+            notes=None,
+            source_ids=["cts"],
+        )
+    )
+
+    assert run.status == "cancelled"
+    assert store.get_run(run.runtime_run_id).status == "cancelled"
+    commands = store.list_commands(runtime_run_id=run.runtime_run_id)
+    assert len(commands) == 1
+    assert commands[0].status == "applied"
+    events = store.list_events(
+        runtime_run_id=run.runtime_run_id,
+        after_seq=0,
+        limit=20,
+    ).events
+    assert "runtime_run_failed" not in {
+        event.event_type for event in events
+    }
+    assert events[-1].event_type == "runtime_run_cancelled"
+
+
 def test_browser_lane_contention_yields_same_durable_run_then_completes(
     tmp_path: Path,
 ) -> None:
@@ -552,6 +611,24 @@ class PostStartFailingRuntime:
     async def run_async(self, **kwargs):
         kwargs["runtime_start_callback"]("workflow_run_1")
         raise RuntimeError("runtime failed after start ack")
+
+
+class CancelAtSourceBoundaryRuntime:
+    def __init__(self, command_service) -> None:
+        self.command_service = command_service
+
+    async def run_async(self, **kwargs):
+        from seektalent_runtime_control.errors import RuntimeControlError
+
+        kwargs["runtime_start_callback"]("workflow_run_cancelled")
+        self.command_service.request_cancel(
+            runtime_run_id="runtime_run_cancelled",
+            requested_by="test",
+            idempotency_key="cancel-at-source-boundary",
+        )
+        raise RuntimeControlError(
+            "source_operation_run_not_dispatchable"
+        )
 
 
 class BrowserBusyRuntime:

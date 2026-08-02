@@ -10,7 +10,13 @@ import seektalent.liepin_verify_session_gate as gate_module
 from seektalent.liepin_verify_session_gate import (
     ProductionLiepinVerifySessionGate,
     _normalized_boundary_reason,
+    _orphaned_owned_tab_absent,
     _raise_reason,
+)
+from seektalent.opencli_browser.daemon_transport import OpenCliDaemonResult
+from seektalent.opencli_browser.contracts import OpenCliBrowserError
+from seektalent.providers.liepin.liepin_opencli_policy import (
+    LIEPIN_DETAIL_TAB_SESSION,
 )
 from seektalent.providers.liepin.client import LiepinWorkerModeError
 from seektalent.providers.liepin.browser_environment import (
@@ -164,6 +170,133 @@ def test_production_gate_has_no_public_mutating_prepare(
     assert connect_calls == []
     assert probe_calls == []
     assert daemon.closed is False
+
+
+def test_orphaned_detail_probe_only_lists_the_owned_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = object()
+    calls: list[tuple[str, dict[str, object], float]] = []
+
+    class _TabDaemon:
+        closed = False
+
+        def command(
+            self,
+            action: str,
+            params: dict[str, object],
+            *,
+            timeout_seconds: float,
+        ) -> OpenCliDaemonResult:
+            calls.append((action, params, timeout_seconds))
+            return OpenCliDaemonResult(
+                command_id="read-only-tab-list",
+                data=[],
+            )
+
+        def close(self) -> None:
+            self.closed = True
+
+    daemon = _TabDaemon()
+    monkeypatch.setattr(
+        gate_module,
+        "inspect_wtscli_runtime",
+        lambda: runtime,
+    )
+    monkeypatch.setattr(
+        gate_module,
+        "_check_environment",
+        lambda actual: BrowserBridgeEnvironmentStatus(
+            ok=actual is runtime,
+            liepin_enabled=True,
+            reason_code="wtscli_ready",
+            message="ready",
+            action="continue",
+            extension_dir=Path("/installed/chrome-extension/wtscli"),
+        ),
+    )
+    monkeypatch.setattr(
+        gate_module,
+        "connect_existing_opencli_daemon_read_only",
+        lambda actual, *, verify_timeout_seconds: (
+            daemon
+            if actual is runtime and verify_timeout_seconds > 0
+            else None
+        ),
+    )
+
+    assert _orphaned_owned_tab_absent(
+        make_settings(
+            liepin_opencli_timeout_seconds=11,
+            liepin_opencli_window_mode="foreground",
+        ),
+        "details",
+    ) is True
+    assert calls == [
+        (
+            "tabs",
+            {
+                "op": "list",
+                "session": LIEPIN_DETAIL_TAB_SESSION,
+                "surface": "browser",
+                "windowMode": "foreground",
+            },
+            2.0,
+        )
+    ]
+    assert daemon.closed is True
+
+
+def test_orphaned_tab_probe_reports_the_canonical_status_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runtime = object()
+
+    class _MalformedTabDaemon:
+        def command(
+            self,
+            _action: str,
+            _params: dict[str, object],
+            *,
+            timeout_seconds: float,
+        ) -> OpenCliDaemonResult:
+            assert timeout_seconds > 0
+            return OpenCliDaemonResult(
+                command_id="read-only-tab-list",
+                data={"unexpected": True},
+            )
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(gate_module, "inspect_wtscli_runtime", lambda: runtime)
+    monkeypatch.setattr(
+        gate_module,
+        "_check_environment",
+        lambda actual: BrowserBridgeEnvironmentStatus(
+            ok=actual is runtime,
+            liepin_enabled=True,
+            reason_code="wtscli_ready",
+            message="ready",
+            action="continue",
+            extension_dir=Path("/installed/chrome-extension/wtscli"),
+        ),
+    )
+    monkeypatch.setattr(
+        gate_module,
+        "connect_existing_opencli_daemon_read_only",
+        lambda actual, *, verify_timeout_seconds: (
+            _MalformedTabDaemon()
+            if actual is runtime and verify_timeout_seconds > 0
+            else None
+        ),
+    )
+
+    with pytest.raises(
+        OpenCliBrowserError,
+        match="liepin_opencli_status_unavailable",
+    ):
+        _orphaned_owned_tab_absent(make_settings(), "details")
 
 
 def test_mutating_prepare_connects_daemon_before_full_environment_probe(

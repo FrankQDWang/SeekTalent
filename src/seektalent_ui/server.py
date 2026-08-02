@@ -19,7 +19,10 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from seektalent.config import AppSettings, load_process_env
 from seektalent.dev_mode import DevModeStatus, build_dev_mode_env_diagnostics
-from seektalent.liepin_verify_session_gate import _observe_session
+from seektalent.liepin_verify_session_gate import (
+    _observe_session,
+    _orphaned_owned_tab_absent,
+)
 from seektalent.wtscli_runtime import BootstrapError
 from seektalent.runtime.lifecycle import cleanup_runtime_artifacts
 from seektalent.source_adapters import build_source_enabled_runtime
@@ -106,6 +109,16 @@ def create_app(
         executor=app.state.workbench_v2_runtime_executor,
         prepare_readiness_probe=(
             (lambda: _observe_session(app_settings))
+            if app_settings.liepin_worker_mode == "opencli"
+            else None
+        ),
+        orphaned_owned_tab_absent=(
+            (
+                lambda operation_kind: _orphaned_owned_tab_absent(
+                    app_settings,
+                    operation_kind,
+                )
+            )
             if app_settings.liepin_worker_mode == "opencli"
             else None
         ),

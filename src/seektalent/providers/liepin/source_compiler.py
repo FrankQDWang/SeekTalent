@@ -40,7 +40,10 @@ def compile_liepin_source_query_intents(
             search_request = SearchRequest(
                 query_terms=list(intent.query_terms),
                 query_role="primary" if intent.query_role == "exploit" else "expansion",
-                keyword_query=intent.keyword_query,
+                keyword_query=render_liepin_keyword_query(
+                    intent.query_terms,
+                    logical_keyword_query=intent.keyword_query,
+                ),
                 adapter_notes=[item.detail for item in query_unsupported if item.detail],
                 runtime_constraints=[],
                 fetch_mode="detail",
@@ -67,6 +70,15 @@ def compile_liepin_source_query_intents(
             )
             unsupported_filters.extend(query_unsupported)
     return LiepinCompiledQueryBundle(queries=tuple(queries), unsupported_filters=tuple(unsupported_filters))
+
+
+def render_liepin_keyword_query(
+    query_terms: tuple[str, ...] | list[str],
+    *,
+    logical_keyword_query: str,
+) -> str:
+    query = " ".join(term.strip() for term in query_terms if term.strip())
+    return query or logical_keyword_query
 
 
 def _unsupported_filters(

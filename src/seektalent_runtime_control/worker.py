@@ -110,6 +110,9 @@ class RuntimeExecutionWorker:
                 {executor_task, heartbeat_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
+            if executor_task in done:
+                stop_heartbeat.set()
+                return await executor_task
             if heartbeat_task in done:
                 try:
                     heartbeat_task.result()

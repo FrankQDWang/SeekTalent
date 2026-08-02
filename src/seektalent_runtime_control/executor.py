@@ -486,6 +486,30 @@ class WorkflowRuntimeExecutor:
                 attempt_no=attempt_no,
             )
         except (RuntimeError, ValueError, OSError) as exc:
+            if (
+                isinstance(exc, RuntimeControlError)
+                and exc.reason_code
+                == "source_operation_run_not_dispatchable"
+                and self.command_service is not None
+                and self.store.get_run(run.runtime_run_id).status
+                in {"cancellation_requested", "pause_requested"}
+            ):
+                if liepin_operation_executor is not None:
+                    self._close_source_executor_after_failure(
+                        liepin_operation_executor,
+                        runtime_run_id=run.runtime_run_id,
+                        primary_error=exc,
+                    )
+                applied = (
+                    self.command_service.apply_lifecycle_command_at_safe_boundary(
+                        runtime_run_id=run.runtime_run_id,
+                        executor_id=executor_id,
+                        attempt_no=attempt_no,
+                        safe_boundary="source_operation_pre_dispatch",
+                    )
+                )
+                if applied is not None:
+                    return self.store.get_run(run.runtime_run_id)
             if liepin_operation_executor is not None:
                 self._close_source_executor_after_failure(
                     liepin_operation_executor,

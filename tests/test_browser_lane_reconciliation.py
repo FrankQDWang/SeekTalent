@@ -196,6 +196,70 @@ def test_current_readiness_does_not_release_cards_unknown(
     assert operation.retry_posture == "reconcile_first"
 
 
+def test_expired_detail_unknown_releases_after_owned_tab_is_conclusively_absent(
+    tmp_path: Path,
+) -> None:
+    store = _failed_unknown_store(
+        tmp_path,
+        source_operation_kind="details",
+        lane_operation_kind="details",
+    )
+    journal = create_command_journal(
+        store.path.parent
+        / "source-port"
+        / "liepin-cards-journal.sqlite3"
+    )
+    session = journal.start()
+    accepted = session.record_accepted(
+        AcceptedCommand(
+            run_id="runtime-run-failed",
+            operation_id="operation-failed",
+            source="liepin",
+            operation_kind="details",
+            idempotency_key="operation-failed",
+            request_hash="a" * 64,
+            attempt_no=1,
+            accepted_requirement_revision_id="approved-failed",
+            runtime_attempt_fence_ref="b" * 64,
+            authorized_dispatch_intent_id="intent-failed",
+            authorized_dispatch_intent_revision=1,
+            authorized_dispatch_intent_digest="c" * 64,
+            profile_binding_generation=1,
+            browser_control_scope_id="browser-scope-failed",
+            controller_fence_ref=None,
+        )
+    )
+    session.record_dispatch_intent(
+        run_id="runtime-run-failed",
+        operation_id="operation-failed",
+        expected_head_journal_revision=accepted.revision,
+        durable_dispatch_intent_ref="source-dispatch://operation-failed/1",
+    )
+    session.close()
+    journal.close()
+    probes: list[str] = []
+
+    outcome = BrowserLaneReconciliationCoordinator(
+        store=store,
+        orphaned_owned_tab_absent=lambda operation_kind: (
+            probes.append(operation_kind) or True
+        ),
+    ).run_once()
+
+    lane = store.get_browser_lane()
+    operation = store.get_source_operation(
+        "runtime-run-failed",
+        "operation-failed",
+    )
+    assert outcome == "released"
+    assert probes == ["details"]
+    assert lane is not None
+    assert lane.status == "failed"
+    assert operation.source_operation_disposition == "failed"
+    assert operation.retry_posture == "no_retry"
+    assert operation.conclusive_observation_ref is not None
+
+
 def test_failed_current_readiness_probe_keeps_prepare_lane_fenced(
     tmp_path: Path,
 ) -> None:

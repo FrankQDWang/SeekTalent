@@ -10,7 +10,7 @@ VENV="${STAGING_ROOT}/venv"
 BIN_DIR="${STAGING_ROOT}/bin"
 RUNTIME_DIR="${STAGING_ROOT}/runtime"
 WTSCLI_REPOSITORY="https://github.com/FrankQDWang/wtscli.git"
-WTSCLI_COMMIT="b05374d5d1834cda297701f7dc7a8caf756cac3c"
+WTSCLI_COMMIT="66bf6aaab1751c10bfee0f091a0ad31efc2bb453"
 WTSCLI_NPM_VERSION="10.9.2"
 
 fail() {

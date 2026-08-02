@@ -74,6 +74,7 @@ class WorkbenchV2RuntimeQueueRunner:
         recovery_interval_seconds: float = DEFAULT_RECOVERY_INTERVAL_SECONDS,
         monotonic: Callable[[], float] = time.monotonic,
         prepare_readiness_probe: Callable[[], None] | None = None,
+        orphaned_owned_tab_absent: Callable[[str], bool] | None = None,
     ) -> None:
         if poll_interval_seconds <= 0:
             raise ValueError("poll_interval_seconds must be positive")
@@ -98,6 +99,7 @@ class WorkbenchV2RuntimeQueueRunner:
             BrowserLaneReconciliationCoordinator(
                 store=store,
                 prepare_readiness_probe=prepare_readiness_probe,
+                orphaned_owned_tab_absent=orphaned_owned_tab_absent,
             )
         )
 

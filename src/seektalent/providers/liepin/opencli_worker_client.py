@@ -13,6 +13,7 @@ from seektalent.providers.liepin.opencli_retriever import (
     LiepinOpenCliResumeRequest,
     LiepinOpenCliResumeRetriever,
 )
+from seektalent.providers.liepin.source_compiler import render_liepin_keyword_query
 from seektalent.providers.liepin.worker_contracts import (
     LiepinDetailOpenRequest,
     LiepinDetailOpenResponse,
@@ -136,7 +137,10 @@ class LiepinOpenCliWorkerClient:
                 self._search_resumes_sync,
                 LiepinOpenCliResumeRequest(
                     source_run_id=trace_id,
-                    keyword_query=request.keyword_query or " ".join(request.query_terms),
+                    keyword_query=render_liepin_keyword_query(
+                        request.query_terms,
+                        logical_keyword_query=request.keyword_query,
+                    ),
                     query_terms=tuple(request.query_terms),
                     target_resumes=request.page_size,
                     max_cards=_positive_int(

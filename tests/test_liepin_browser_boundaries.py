@@ -6,18 +6,19 @@ from pathlib import Path
 
 import pytest
 
+from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
+from seektalent.opencli_browser.contracts import (
+    OpenCliBrowserConfig,
+    OpenCliBrowserError,
+    OpenCliBrowserResult,
+)
+from seektalent.providers.liepin import liepin_site_adapter as liepin_site_adapter_module
 from seektalent.providers.liepin.browser_boundary_patterns import (
     FORBIDDEN_PROVIDER_OPERATIONS,
     PYTHON_FORBIDDEN_IMPORTS,
     TYPESCRIPT_FORBIDDEN_OPERATION_MARKERS,
     TYPESCRIPT_PROVIDER_ACTION_FORBIDDEN_OPERATION_MARKERS,
     TYPESCRIPT_SESSION_LIFECYCLE_ALLOWED_OPERATION_MARKERS,
-)
-from seektalent.opencli_browser.automation import OpenCliBrowserAutomation
-from seektalent.opencli_browser.contracts import (
-    OpenCliBrowserConfig,
-    OpenCliBrowserError,
-    OpenCliBrowserResult,
 )
 from seektalent.providers.liepin.liepin_opencli_policy import LIEPIN_RECRUITER_SEARCH_URL
 from seektalent.providers.liepin.liepin_site_adapter import (
@@ -537,6 +538,11 @@ def test_search_effect_stale_ref_is_not_reissued(
         effect_calls += 1
         raise OpenCliBrowserError("liepin_opencli_stale_ref")
 
+    monkeypatch.setattr(
+        runner,
+        "_liepin_search_query_value_from_dom",
+        lambda **_kwargs: "数据开发",
+    )
     if effect == "fill":
         monkeypatch.setattr(runner, "fill", fail_effect)
     else:
@@ -555,6 +561,295 @@ def test_search_effect_stale_ref_is_not_reissued(
 
     assert envelope["safe_reason_code"] == "liepin_opencli_stale_ref"
     assert effect_calls == 1
+
+
+def test_search_rejects_unchanged_results_after_the_settle_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    search_url = LIEPIN_RECRUITER_SEARCH_URL
+    stale_result_state = OpenCliBrowserResult(
+        ok=True,
+        action="state",
+        private_output=(
+            f"URL: {search_url}\n"
+            "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+            "[29]<button><span>搜 索</span></button>\n"
+            "<div id=resultList class=detail-resume-card-wrap>\n"
+            "[70]<button>查看简历</button>\n"
+            "某候选人 30岁 工作 5 年 当前职位 数据开发\n"
+            "</div>"
+        ),
+    )
+
+    class SearchAutomation:
+        def wait_for_page_url(self, **_kwargs: object) -> OpenCliBrowserResult:
+            return OpenCliBrowserResult(ok=True, action="wait", private_output=search_url)
+
+    runner = LiepinSiteAdapter(
+        browser_config=OpenCliBrowserConfig(
+            session="seektalent-search-stale-results",
+            timeout_seconds=10,
+            pacing_enabled=False,
+        ),
+        site_config=LiepinOpenCliSiteConfig(
+            allowed_hosts=("h.liepin.com",),
+            allowed_start_urls=(search_url,),
+            artifact_root=tmp_path,
+            search_navigation_timeout_seconds=1,
+        ),
+        automation=SearchAutomation(),  # type: ignore[arg-type]
+    )
+    monkeypatch.setattr(runner, "open_liepin_tab", lambda _url: stale_result_state)
+    state_calls = 0
+
+    def observe_state() -> OpenCliBrowserResult:
+        nonlocal state_calls
+        state_calls += 1
+        return stale_result_state
+
+    clock = [0.0]
+    monkeypatch.setattr(
+        liepin_site_adapter_module.time,
+        "monotonic",
+        lambda: clock[0],
+    )
+    monkeypatch.setattr(
+        liepin_site_adapter_module.time,
+        "sleep",
+        lambda seconds: clock.__setitem__(0, clock[0] + seconds),
+    )
+    monkeypatch.setattr(runner, "state", observe_state)
+    monkeypatch.setattr(runner, "_current_url_or_none", lambda: search_url)
+    monkeypatch.setattr(runner, "get_url", lambda: OpenCliBrowserResult(ok=True, action="get_url", private_output=search_url))
+    monkeypatch.setattr(
+        runner,
+        "_clear_liepin_native_filters_if_needed",
+        lambda **_kwargs: stale_result_state,
+    )
+    filled = False
+
+    def fill_search(**_kwargs: object) -> None:
+        nonlocal filled
+        filled = True
+
+    monkeypatch.setattr(runner, "fill", fill_search)
+    monkeypatch.setattr(
+        runner,
+        "_liepin_search_query_value_from_dom",
+        lambda **_kwargs: "AI Agent" if filled else "数据开发",
+    )
+    monkeypatch.setattr(runner, "_click_liepin_search_button", lambda _text: None)
+    extraction_calls = 0
+
+    def extract_stale_cards(**_kwargs: object) -> OpenCliBrowserResult:
+        nonlocal extraction_calls
+        extraction_calls += 1
+        return OpenCliBrowserResult(
+            ok=True,
+            action="extract_structured_liepin_cards",
+            observation={"cards": ({"ref": "70", "provider_rank": 1},)},
+        )
+
+    monkeypatch.setattr(runner, "extract_structured_liepin_cards", extract_stale_cards)
+
+    envelope = runner._search_liepin_cards_once(
+        source_run_id="stale-search-results",
+        query="AI Agent",
+        max_pages=1,
+        max_cards=1,
+        native_filters=None,
+        recovering_search_surface=False,
+    )
+
+    assert envelope["safe_reason_code"] == "liepin_opencli_results_not_ready"
+    assert envelope["cards_seen"] == 0
+    assert extraction_calls == 0
+    assert state_calls > 2
+    assert clock[0] >= 1
+
+
+def test_search_reuses_ready_results_when_the_exact_query_is_already_applied(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    search_url = LIEPIN_RECRUITER_SEARCH_URL
+    ready_state = OpenCliBrowserResult(
+        ok=True,
+        action="state",
+        private_output=(
+            f"URL: {search_url}\n"
+            "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+            "[29]<button><span>搜 索</span></button>\n"
+            "<div id=resultList class=detail-resume-card-wrap>\n"
+            "[70]<button>查看简历</button>\n"
+            "某候选人 30岁 工作 5 年 当前职位 AI Agent 开发\n"
+            "</div>"
+        ),
+    )
+
+    class SearchAutomation:
+        def wait_for_page_url(self, **_kwargs: object) -> OpenCliBrowserResult:
+            return OpenCliBrowserResult(ok=True, action="wait", private_output=search_url)
+
+    runner = LiepinSiteAdapter(
+        browser_config=OpenCliBrowserConfig(
+            session="seektalent-search-reuse-ready-results",
+            timeout_seconds=10,
+            pacing_enabled=False,
+        ),
+        site_config=LiepinOpenCliSiteConfig(
+            allowed_hosts=("h.liepin.com",),
+            allowed_start_urls=(search_url,),
+            artifact_root=tmp_path,
+            search_navigation_timeout_seconds=1,
+        ),
+        automation=SearchAutomation(),  # type: ignore[arg-type]
+    )
+    effect_calls = 0
+
+    def record_effect(*_args: object, **_kwargs: object) -> None:
+        nonlocal effect_calls
+        effect_calls += 1
+
+    monkeypatch.setattr(runner, "open_liepin_tab", lambda _url: ready_state)
+    monkeypatch.setattr(runner, "state", lambda: ready_state)
+    monkeypatch.setattr(runner, "_current_url_or_none", lambda: search_url)
+    monkeypatch.setattr(
+        runner,
+        "_clear_liepin_native_filters_if_needed",
+        lambda **_kwargs: ready_state,
+    )
+    monkeypatch.setattr(
+        runner,
+        "_liepin_search_query_value_from_dom",
+        lambda **_kwargs: "AI Agent",
+    )
+    monkeypatch.setattr(runner, "fill", record_effect)
+    monkeypatch.setattr(runner, "_click_liepin_search_button", record_effect)
+    monkeypatch.setattr(
+        runner,
+        "extract_structured_liepin_cards",
+        lambda **_kwargs: OpenCliBrowserResult(
+            ok=True,
+            action="extract_structured_liepin_cards",
+            observation={"cards": ({"ref": "70", "provider_rank": 1},)},
+        ),
+    )
+
+    envelope = runner._search_liepin_cards_once(
+        source_run_id="reuse-ready-search-results",
+        query="AI Agent",
+        max_pages=1,
+        max_cards=1,
+        native_filters=None,
+        recovering_search_surface=False,
+    )
+
+    assert envelope.get("safe_reason_code") is None
+    assert envelope["cards_seen"] == 1
+    assert effect_calls == 0
+
+
+def test_search_refreshes_browser_state_after_fill_before_click(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    search_url = LIEPIN_RECRUITER_SEARCH_URL
+
+    def search_state(card_ref: str, title: str) -> OpenCliBrowserResult:
+        return OpenCliBrowserResult(
+            ok=True,
+            action="state",
+            private_output=(
+                f"URL: {search_url}\n"
+                "[26]<input type=search autocomplete=off role=combobox id=rc_select_1 />\n"
+                "[29]<button><span>搜 索</span></button>\n"
+                "<div id=resultList class=detail-resume-card-wrap>\n"
+                f"[{card_ref}]<button>查看简历 {title}</button>\n"
+                "</div>"
+            ),
+        )
+
+    initial_state = search_state("70", "数据开发")
+    changed_state = search_state("71", "AI Agent")
+
+    class SearchAutomation:
+        def wait_for_page_url(self, **_kwargs: object) -> OpenCliBrowserResult:
+            return OpenCliBrowserResult(ok=True, action="wait", private_output=search_url)
+
+    runner = LiepinSiteAdapter(
+        browser_config=OpenCliBrowserConfig(
+            session="seektalent-search-refresh-after-fill",
+            timeout_seconds=10,
+            pacing_enabled=False,
+        ),
+        site_config=LiepinOpenCliSiteConfig(
+            allowed_hosts=("h.liepin.com",),
+            allowed_start_urls=(search_url,),
+            artifact_root=tmp_path,
+            search_navigation_timeout_seconds=1,
+        ),
+        automation=SearchAutomation(),  # type: ignore[arg-type]
+    )
+    filled = False
+    state_refreshed_after_fill = False
+    clicked = False
+
+    def observe_state() -> OpenCliBrowserResult:
+        nonlocal state_refreshed_after_fill
+        if filled and not clicked:
+            state_refreshed_after_fill = True
+        return changed_state if clicked else initial_state
+
+    def fill_search(**_kwargs: object) -> None:
+        nonlocal filled
+        filled = True
+
+    def click_search(_text: str) -> None:
+        nonlocal clicked
+        if not state_refreshed_after_fill:
+            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+        clicked = True
+
+    monkeypatch.setattr(runner, "open_liepin_tab", lambda _url: initial_state)
+    monkeypatch.setattr(runner, "state", observe_state)
+    monkeypatch.setattr(runner, "_current_url_or_none", lambda: search_url)
+    monkeypatch.setattr(runner, "get_url", lambda: OpenCliBrowserResult(ok=True, action="get_url", private_output=search_url))
+    monkeypatch.setattr(
+        runner,
+        "_clear_liepin_native_filters_if_needed",
+        lambda **_kwargs: initial_state,
+    )
+    monkeypatch.setattr(runner, "fill", fill_search)
+    monkeypatch.setattr(
+        runner,
+        "_liepin_search_query_value_from_dom",
+        lambda **_kwargs: "AI Agent" if filled else "数据开发",
+    )
+    monkeypatch.setattr(runner, "_click_liepin_search_button", click_search)
+    monkeypatch.setattr(
+        runner,
+        "extract_structured_liepin_cards",
+        lambda **_kwargs: OpenCliBrowserResult(
+            ok=True,
+            action="extract_structured_liepin_cards",
+            observation={"cards": ({"ref": "71", "provider_rank": 1},)},
+        ),
+    )
+
+    envelope = runner._search_liepin_cards_once(
+        source_run_id="refresh-after-fill",
+        query="AI Agent",
+        max_pages=1,
+        max_cards=1,
+        native_filters=None,
+        recovering_search_surface=False,
+    )
+
+    assert envelope.get("safe_reason_code") is None
+    assert envelope["cards_seen"] == 1
+    assert state_refreshed_after_fill is True
 
 
 @pytest.mark.parametrize(

@@ -40,6 +40,8 @@ from seektalent.source_port.verify_session_contract import (
 )
 from seektalent.providers.liepin.liepin_opencli_policy import (
     LIEPIN_BROWSER_CONTROL_KEY,
+    LIEPIN_DETAIL_TAB_SESSION,
+    LIEPIN_SEARCH_TAB_SESSION,
 )
 from seektalent.wtscli_lifecycle_supervisor import (
     WtsCliLifecycleError,
@@ -104,6 +106,46 @@ def _observe_session(settings: AppSettings) -> None:
             _raise_reason(safe_liepin_reason(probe.safe_reason))
     finally:
         daemon.close()
+
+
+def _orphaned_owned_tab_absent(
+    settings: AppSettings,
+    operation_kind: str,
+) -> bool:
+    session = {
+        "cards": LIEPIN_SEARCH_TAB_SESSION,
+        "details": LIEPIN_DETAIL_TAB_SESSION,
+    }.get(operation_kind)
+    if session is None:
+        raise ValueError("orphaned_browser_operation_kind_invalid")
+    runtime = inspect_wtscli_runtime()
+    environment_status = _check_environment(runtime)
+    if not environment_status.ok:
+        _raise_reason(_environment_reason(environment_status))
+    timeout_seconds = min(
+        2.0,
+        max(0.001, settings.liepin_opencli_timeout_seconds),
+    )
+    daemon = connect_existing_opencli_daemon_read_only(
+        runtime,
+        verify_timeout_seconds=timeout_seconds,
+    )
+    try:
+        result = daemon.command(
+            "tabs",
+            {
+                "op": "list",
+                "session": session,
+                "surface": "browser",
+                "windowMode": settings.liepin_opencli_window_mode,
+            },
+            timeout_seconds=timeout_seconds,
+        )
+    finally:
+        daemon.close()
+    if not isinstance(result.data, list):
+        raise OpenCliBrowserError("liepin_opencli_status_unavailable")
+    return len(result.data) == 0
 
 
 def _prepare_session_mutating(

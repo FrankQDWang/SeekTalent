@@ -7,6 +7,32 @@ from seektalent.runtime.source_filters import RuntimeFilterIntent, RuntimeLocati
 from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
 
 
+def test_liepin_source_compiler_renders_plain_site_keywords_from_logical_terms() -> None:
+    intent = RuntimeSourceQueryIntent(
+        round_no=1,
+        source_kind="liepin",
+        query_role="exploit",
+        lane_type="exploit",
+        query_instance_id="query-1",
+        query_fingerprint="fp-1",
+        term_group_key="term-group-agent",
+        primary_anchor_family_id="role.agent-engineer",
+        non_anchor_term_family_ids=("skill.multi-agent",),
+        query_terms=("AI Agent", "Multi-Agent"),
+        keyword_query='"AI Agent" Multi-Agent',
+        requested_count=10,
+        provider_scan_limit=10,
+        source_plan_version="test",
+        filter_intents=(),
+        location_intent=None,
+        age_intent=None,
+    )
+
+    compiled = compile_liepin_source_query_intents((intent,))
+
+    assert compiled.queries[0].search_request.keyword_query == "AI Agent Multi-Agent"
+
+
 def test_liepin_source_compiler_passes_native_filters_to_provider_context() -> None:
     intent = RuntimeSourceQueryIntent(
         round_no=1,

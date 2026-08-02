@@ -23,7 +23,7 @@ if [[ ! -x "$domi_python" || ! -x "$domi_node" ]]; then
   exit 1
 fi
 
-wtscli_fork_commit="b05374d5d1834cda297701f7dc7a8caf756cac3c"
+wtscli_fork_commit="66bf6aaab1751c10bfee0f091a0ad31efc2bb453"
 temp_root="$(mktemp -d "${TMPDIR:-/tmp}/seektalent-native-arm64.XXXXXX")"
 trap 'rm -rf "$temp_root"' EXIT
 export PYINSTALLER_CONFIG_DIR="$temp_root/pyinstaller-cache"
