@@ -26,6 +26,7 @@ fi
 wtscli_fork_commit="b05374d5d1834cda297701f7dc7a8caf756cac3c"
 temp_root="$(mktemp -d "${TMPDIR:-/tmp}/seektalent-native-arm64.XXXXXX")"
 trap 'rm -rf "$temp_root"' EXIT
+export PYINSTALLER_CONFIG_DIR="$temp_root/pyinstaller-cache"
 
 wtscli_source="$temp_root/wtscli-fork"
 wtscli_bundle="$temp_root/wtscli-browser-bridge"

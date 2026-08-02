@@ -185,3 +185,4 @@ def test_apple_silicon_native_evidence_has_a_local_entrypoint() -> None:
     assert "tests/test_build_domi_delivery_bundle.py" in script
     assert "tests/test_packaged_sidecar_artifact.py" in script
     assert "tests/test_installed_slot_lease.py" in script
+    assert 'export PYINSTALLER_CONFIG_DIR="$temp_root/pyinstaller-cache"' in script

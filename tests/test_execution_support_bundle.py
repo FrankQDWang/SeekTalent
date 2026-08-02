@@ -39,6 +39,7 @@ def test_support_bundle_is_allowlisted_local_and_private(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("SEEKTALENT_INSTALL_HOME", str(tmp_path))
+    monkeypatch.setattr("seektalent.support_bundle._local_port_open", lambda _port: False)
     settings = make_settings(
         workspace_root=str(tmp_path),
         runtime_mode="prod",
