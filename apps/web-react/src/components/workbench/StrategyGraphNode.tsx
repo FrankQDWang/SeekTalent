@@ -55,7 +55,7 @@ export function StrategyGraphNode({ item }: { item: StrategyTimelineNode }) {
 
   return (
     <article
-      aria-label={`${item.displayTitle}: ${node.summary}`}
+      aria-label={`${item.displayTitle}: ${node.summary ?? ""}`}
       className="strategy-graph-node"
       data-kind={node.kind}
       data-source={node.sourceKind}

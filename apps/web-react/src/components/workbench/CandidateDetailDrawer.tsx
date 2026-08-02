@@ -443,7 +443,10 @@ function jobIntentionSection(
 
 function timelineSection(
   title: string,
-  items: AgentWorkbenchCandidateDetailResponse["workExperience"],
+  items:
+    | AgentWorkbenchCandidateDetailResponse["workExperience"]
+    | null
+    | undefined,
   formatItem: (item: NonNullable<typeof items>[number]) => string[],
 ): AgentWorkbenchCandidateDetailResponse["sections"][number] | null {
   const normalizedItems = (items ?? []).flatMap(formatItem);
@@ -486,7 +489,7 @@ function formatEducationExperienceItem(
 }
 
 function skillsSection(
-  skills: AgentWorkbenchCandidateDetailResponse["skills"],
+  skills: AgentWorkbenchCandidateDetailResponse["skills"] | null | undefined,
 ): AgentWorkbenchCandidateDetailResponse["sections"][number] | null {
   const items = (skills ?? []).filter((skill): skill is string =>
     Boolean(skill),
