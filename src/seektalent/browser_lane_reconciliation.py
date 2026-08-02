@@ -98,7 +98,16 @@ class BrowserLaneReconciliationCoordinator:
             observed_at=observed_at,
         )
         if (
-            decision.decision_kind == "unresolved"
+            (
+                decision.decision_kind == "unresolved"
+                or (
+                    decision.decision_kind == "no_dispatch_proved"
+                    and accepted.operation.source_operation_disposition
+                    == "reconciliation_unknown"
+                    and accepted.operation.retry_posture
+                    == "reconcile_first"
+                )
+            )
             and lane.operation_kind == "prepare_readiness"
             and accepted.operation.operation_kind == "verify_session"
             and self.prepare_readiness_probe is not None
