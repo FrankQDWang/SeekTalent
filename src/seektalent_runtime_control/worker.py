@@ -6,6 +6,7 @@ from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from threading import Event
 from typing import Protocol
 from uuid import uuid4
 
@@ -75,9 +76,10 @@ class RuntimeExecutionWorker:
         if claim is None:
             return None
 
-        stop_heartbeat = asyncio.Event()
+        stop_heartbeat = Event()
         heartbeat_task = asyncio.create_task(
-            self._heartbeat_claimed_lease(
+            asyncio.to_thread(
+                self._heartbeat_claimed_lease,
                 runtime_run_id=claim.runtime_run.runtime_run_id,
                 executor_id=claim.lease.executor_id,
                 attempt_no=claim.lease.attempt_no,
@@ -91,6 +93,7 @@ class RuntimeExecutionWorker:
                 executor_id=claim.lease.executor_id,
                 attempt_no=claim.lease.attempt_no,
             )
+            await asyncio.sleep(0)
             workflow_input = _workflow_input(self.store.get_snapshot(runtime_run_id=claim.runtime_run.runtime_run_id))
             executor_task = asyncio.create_task(
                 self.executor.execute_claimed_run(
@@ -169,8 +172,7 @@ class RuntimeExecutionWorker:
                 with suppress(Exception):
                     heartbeat_task.result()
             else:
-                heartbeat_task.cancel()
-                with suppress(asyncio.CancelledError):
+                with suppress(Exception):
                     await heartbeat_task
 
     def heartbeat_active_leases(self, *, now: str | None = None, executor_id: str | None = None) -> int:
@@ -194,21 +196,20 @@ class RuntimeExecutionWorker:
     def recover_expired_leases(self, *, now: str | None = None) -> list[RuntimeExecutorLease]:
         return self.store.expire_executor_leases(now=now or self.now())
 
-    async def _heartbeat_claimed_lease(
+    def _heartbeat_claimed_lease(
         self,
         *,
         runtime_run_id: str,
         executor_id: str,
         attempt_no: int,
-        stop_event: asyncio.Event,
+        stop_event: Event,
     ) -> None:
-        while True:
-            try:
-                await asyncio.wait_for(stop_event.wait(), timeout=self.heartbeat_interval_seconds)
-            except TimeoutError:
-                self._heartbeat_lease(runtime_run_id=runtime_run_id, executor_id=executor_id, attempt_no=attempt_no)
-                continue
-            return
+        while not stop_event.wait(self.heartbeat_interval_seconds):
+            self._heartbeat_lease(
+                runtime_run_id=runtime_run_id,
+                executor_id=executor_id,
+                attempt_no=attempt_no,
+            )
 
     def _heartbeat_lease(self, *, runtime_run_id: str, executor_id: str, attempt_no: int) -> None:
         heartbeat_at = self.now()

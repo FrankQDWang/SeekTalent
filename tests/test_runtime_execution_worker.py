@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Sequence
 from multiprocessing import get_context
 from queue import Empty
@@ -132,6 +133,36 @@ def test_run_once_renews_claimed_lease_while_executor_is_blocked_longer_than_ttl
         assert {heartbeat["executor_id"] for heartbeat in store.heartbeats} == {"worker-exec-ttl"}
 
     asyncio.run(scenario())
+
+
+def test_run_once_renews_claimed_lease_while_executor_blocks_event_loop() -> None:
+    class SynchronouslyBlockingRuntimeExecutor(_FakeRuntimeExecutor):
+        async def execute_claimed_run(self, **kwargs) -> RuntimeRunRecord:
+            self.calls.append(
+                {**kwargs, "source_ids": list(kwargs["source_ids"])}
+            )
+            time.sleep(0.06)
+            return self.result
+
+    run = _run()
+    store = _FakeRuntimeControlStore(
+        claims=[_claim(run=run, executor_id="worker-exec-sync-block")]
+    )
+    worker = RuntimeExecutionWorker(
+        store=store,
+        executor=SynchronouslyBlockingRuntimeExecutor(
+            result=_run(status="completed")
+        ),
+        executor_id_factory=lambda: "worker-exec-sync-block",
+        lease_seconds=0.03,
+        heartbeat_interval_seconds=0.005,
+    )
+
+    result = asyncio.run(worker.run_once())
+
+    assert result is not None
+    assert result.status == "completed"
+    assert len(store.heartbeats) >= 2
 
 
 def test_run_once_stops_heartbeat_and_records_visible_failure_when_executor_raises() -> None:
