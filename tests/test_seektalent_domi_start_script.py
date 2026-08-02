@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -163,6 +164,48 @@ def test_start_script_executes_only_the_validated_installed_shim(
         str(domi_node),
         "workbench",
         "--host",
+    ]
+    assert "test-jwt-not-a-real-credential" not in result.stdout
+    assert "test-jwt-not-a-real-credential" not in result.stderr
+
+
+def test_start_script_accepts_domi_python_path_with_spaces(tmp_path: Path) -> None:
+    capture = tmp_path / "capture.txt"
+    home, domi_python, domi_node = _exact_install(tmp_path, capture)
+    host_runtime = tmp_path / "Domi Host Runtime"
+    host_runtime.mkdir()
+    spaced_python = host_runtime / "python"
+    spaced_python.write_text(
+        f"#!/bin/sh\nexec {shlex.quote(str(domi_python))} \"$@\"\n",
+        encoding="utf-8",
+    )
+    spaced_python.chmod(0o755)
+    env = os.environ.copy()
+    env.update(
+        {
+            "HOME": str(home),
+            "SEEKTALENT_INSTALL_HOME": str(home),
+            "SEEKTALENT_DOMI_JWT": "test-jwt-not-a-real-credential",
+            "DOMI_PYTHON": str(spaced_python),
+            "DOMI_NODE": str(domi_node),
+        }
+    )
+
+    result = subprocess.run(
+        ["sh", str(SCRIPT)],
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert capture.read_text(encoding="utf-8").splitlines() == [
+        "test-jwt-not-a-real-credential",
+        str(spaced_python),
+        str(domi_node),
+        "workbench",
+        "",
     ]
     assert "test-jwt-not-a-real-credential" not in result.stdout
     assert "test-jwt-not-a-real-credential" not in result.stderr

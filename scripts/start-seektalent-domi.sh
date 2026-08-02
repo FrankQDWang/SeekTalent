@@ -44,7 +44,7 @@ if ! "${domi_python}" "${runtime_verifier}" validate-receipt \
   exit 1
 fi
 
-product_version="$(${domi_python} -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["productVersion"])' "${receipt}")" \
+product_version="$("${domi_python}" -c 'import json,sys; print(json.load(open(sys.argv[1], encoding="utf-8"))["productVersion"])' "${receipt}")" \
   || fail "seektalent_receipt_invalid" "The installed SeekTalent receipt cannot be read."
 release_prefix="${seektalent_root}/python-prefix/${product_version}"
 if [ -d "${release_prefix}/Lib/site-packages" ]; then
