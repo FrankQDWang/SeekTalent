@@ -4,6 +4,7 @@ import hashlib
 import json
 from pathlib import Path
 
+import seektalent.domi_host_runtime as domi_host_runtime
 from seektalent.domi_host_runtime import (
     HostRuntimeIdentity,
     validate_delivery_runtime_contract,
@@ -125,3 +126,19 @@ def test_dev_product_runtime_requires_domi_node_without_local_fallback() -> None
     assert 'domi_node="${DOMI_NODE:-${SEEKTALENT_DOMI_NODE:-}}"' in script
     assert "Domi Node 22.14.0 is required" in script
     assert 'SEEKTALENT_WTSCLI_NODE="$(command -v node' not in script
+
+
+def test_windows_runtime_probe_keeps_and_normalizes_host_architecture(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(domi_host_runtime.platform_module, "system", lambda: "Windows")
+    monkeypatch.setattr(domi_host_runtime.platform_module, "machine", lambda: "")
+    monkeypatch.setenv("PROCESSOR_ARCHITECTURE", "AMD64")
+    monkeypatch.delenv("PROCESSOR_ARCHITEW6432", raising=False)
+
+    assert domi_host_runtime._host_platform() == (
+        "windows",
+        "x64",
+        "windows-x64",
+    )
+    assert domi_host_runtime._sanitized_environment()["PROCESSOR_ARCHITECTURE"] == "AMD64"

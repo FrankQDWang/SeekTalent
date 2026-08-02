@@ -273,6 +273,12 @@ def validate_delivery_payload(
 def _host_platform() -> tuple[str, str, str]:
     system = platform_module.system().lower()
     machine = platform_module.machine().lower()
+    if system == "windows" and not machine:
+        machine = (
+            os.environ.get("PROCESSOR_ARCHITEW6432")
+            or os.environ.get("PROCESSOR_ARCHITECTURE")
+            or ""
+        ).lower()
     if system == "darwin":
         os_family = "macos"
     elif system == "windows":
@@ -321,7 +327,18 @@ def _node_version(node: Path) -> str:
 
 
 def _sanitized_environment() -> dict[str, str]:
-    allowed = ("PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TMP", "TEMP", "TMPDIR")
+    allowed = (
+        "PATH",
+        "SYSTEMROOT",
+        "WINDIR",
+        "COMSPEC",
+        "PATHEXT",
+        "PROCESSOR_ARCHITECTURE",
+        "PROCESSOR_ARCHITEW6432",
+        "TMP",
+        "TEMP",
+        "TMPDIR",
+    )
     return {key: os.environ[key] for key in allowed if key in os.environ}
 
 
