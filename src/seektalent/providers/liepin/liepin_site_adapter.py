@@ -2728,15 +2728,14 @@ class LiepinSiteAdapter:
         events: list[dict[str, object]],
     ) -> OpenCliBrowserResult:
         state = current_state
-        reconcile_city_picker_before_retry = False
-        picker_effect_started = False
-        def mark_picker_effect_started() -> None:
-            nonlocal picker_effect_started
-            picker_effect_started = True
+        filter_effect_started = False
+
+        def mark_filter_effect_started() -> None:
+            nonlocal filter_effect_started
+            filter_effect_started = True
+
         for attempt_index in range(3):
-            clicked_option = False
-            picker_effect_started = False
-            city_retry_authorized_by_reconciliation = False
+            filter_effect_started = False
             city_option_ref: str | None = None
             exact_city_filter = filter_name == "city" and section in {"current", "expected"}
             city_picker_active = False
@@ -2756,12 +2755,6 @@ class LiepinSiteAdapter:
                         }
                     )
                     return state
-                if exact_city_filter and reconcile_city_picker_before_retry:
-                    picker_state = city_picker.picker_open_state(self, section=section)
-                    if picker_state == "unavailable":
-                        raise OpenCliBrowserError("liepin_opencli_status_unavailable")
-                    city_picker_active = picker_state == "open"
-                    reconcile_city_picker_before_retry = False
                 force_city_picker = exact_city_filter and attempt_index > 0 and not city_picker_active
                 if not city_picker_active and (
                     force_city_picker
@@ -2776,8 +2769,7 @@ class LiepinSiteAdapter:
                             control_ref = native_filter_control_ref_in_section(state_text, section=section)
                     else:
                         control_ref = native_filter_control_ref_in_section(state_text, section=section)
-                    if exact_city_filter:
-                        mark_picker_effect_started()
+                    mark_filter_effect_started()
                     if control_ref is not None:
                         self._click_native_filter_ref(control_ref)
                     else:
@@ -2807,17 +2799,15 @@ class LiepinSiteAdapter:
                 if city_picker_active:
                     state, city_option_ref, pending_confirm, confirm_ref = city_picker.resolve_picker_action(
                         self, section=section, label=label, state=state, state_text=state_text,
-                        events=events, before_effect=mark_picker_effect_started,
+                        events=events, before_effect=mark_filter_effect_started,
                     )
                     state_text = _opencli_result_text(state)
                 if not pending_confirm:
-                    if exact_city_filter:
-                        mark_picker_effect_started()
+                    mark_filter_effect_started()
                     if city_option_ref is not None:
                         self._click_native_filter_ref(city_option_ref)
                     else:
                         self._click_native_filter_option(label, state_text=state_text, section=section)
-                    clicked_option = True
                     if exact_city_filter:
                         state, reconciliation, confirm_ref = (
                             city_picker.reconcile_city_filter_effect(
@@ -2830,9 +2820,6 @@ class LiepinSiteAdapter:
                         )
                         state_text = _opencli_result_text(state)
                         pending_confirm = reconciliation == "selected"
-                        city_retry_authorized_by_reconciliation = (
-                            reconciliation == "open_unselected"
-                        )
                     else:
                         state = self.state()
                         events.append(
@@ -2847,7 +2834,7 @@ class LiepinSiteAdapter:
                             raise OpenCliBrowserError(state.safe_reason_code)
                         state_text = _opencli_result_text(state)
                 if pending_confirm and confirm_ref is not None:
-                    mark_picker_effect_started()
+                    mark_filter_effect_started()
                     self._click_native_filter_ref(confirm_ref)
                     events.append(
                         dict(action_kind="confirm_native_city_filter", filter="city", section=section, value=label, ok=True)
@@ -2862,9 +2849,6 @@ class LiepinSiteAdapter:
                         )
                     )
                     state_text = _opencli_result_text(state)
-                    city_retry_authorized_by_reconciliation = (
-                        reconciliation == "open_unselected"
-                    )
                 if not native_filter_selection_applied(state_text, section=section, label=label):
                     events.append(
                         {
@@ -2913,33 +2897,10 @@ class LiepinSiteAdapter:
                 )
                 return state
             except OpenCliBrowserError as exc:
-                if (
-                    filter_name == "schoolTypes"
-                    and clicked_option
-                    and exc.safe_reason_code == "liepin_opencli_filter_unapplied"
-                ):
-                    raise
-                if (
-                    exact_city_filter
-                    and picker_effect_started
-                    and exc.safe_reason_code == "liepin_opencli_filter_unapplied"
-                    and not city_retry_authorized_by_reconciliation
-                ):
+                if filter_effect_started:
                     raise
                 if exc.safe_reason_code not in RETRYABLE_NATIVE_FILTER_REASONS or attempt_index == 2:
                     raise
-                reconcile_city_picker_before_retry = reconcile_city_picker_before_retry or (
-                    exact_city_filter
-                    and picker_effect_started
-                    and (
-                        exc.safe_reason_code
-                        in {"liepin_opencli_status_unavailable", "liepin_opencli_timeout"}
-                        or (
-                            exc.safe_reason_code == "liepin_opencli_filter_unapplied"
-                            and city_retry_authorized_by_reconciliation
-                        )
-                    )
-                )
                 events.append(
                     {
                         "action_kind": "apply_native_filter_retry",

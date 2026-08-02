@@ -558,6 +558,64 @@ def test_search_effect_stale_ref_is_not_reissued(
     assert effect_calls == 1
 
 
+@pytest.mark.parametrize(
+    "reason",
+    (
+        "liepin_opencli_filter_unapplied",
+        "liepin_opencli_stale_ref",
+        "liepin_opencli_selector_not_found",
+        "liepin_opencli_status_unavailable",
+        "liepin_opencli_timeout",
+    ),
+)
+def test_native_filter_effect_failure_does_not_repeat_selection(
+    reason: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = LiepinSiteAdapter(
+        browser_config=OpenCliBrowserConfig(
+            session="seektalent-filter-stale-ref",
+            timeout_seconds=10,
+            pacing_enabled=False,
+        ),
+        site_config=LiepinOpenCliSiteConfig(
+            allowed_hosts=("h.liepin.com",),
+            allowed_start_urls=(LIEPIN_RECRUITER_SEARCH_URL,),
+        ),
+        automation=object(),  # type: ignore[arg-type]
+    )
+    state = OpenCliBrowserResult(ok=True, action="state", private_output="filter-ready")
+    monkeypatch.setattr(
+        "seektalent.providers.liepin.liepin_site_adapter.native_filter_selection_applied",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "seektalent.providers.liepin.liepin_site_adapter.native_filter_option_visible_in_section",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(runner, "state", lambda: state)
+    selection_calls = 0
+
+    def fail_selection(*_args: object, **_kwargs: object) -> None:
+        nonlocal selection_calls
+        selection_calls += 1
+        raise OpenCliBrowserError(reason)
+
+    monkeypatch.setattr(runner, "_click_native_filter_option", fail_selection)
+
+    with pytest.raises(OpenCliBrowserError) as caught:
+        runner._select_liepin_native_filter(
+            filter_name="experience",
+            section="experience",
+            label="5-10年",
+            current_state=state,
+            events=[],
+        )
+
+    assert caught.value.safe_reason_code == reason
+    assert selection_calls == 1
+
+
 def _opencli_tab_url_is_blocked(runner: LiepinSiteAdapter, url: str) -> bool:
     try:
         runner._validate_tab_new_url(url)
