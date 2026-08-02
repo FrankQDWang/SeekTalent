@@ -441,6 +441,8 @@ async def run_liepin_logical_query_bundle(
             logical_result = (
                 result if logical_result is None else merge_liepin_card_lane_results(logical_result, result)
             )
+            if _reconciliation_required_reason((result,)) is not None:
+                break
             captured_detail_count = sum(len(item.candidate_store_updates) for item in target_results)
             if captured_detail_count >= logical_target_total:
                 break
@@ -456,6 +458,10 @@ async def run_liepin_logical_query_bundle(
     if settings.liepin_worker_mode == "opencli" or context.backend_mode == "opencli":
         for index, logical_query in enumerate(logical_queries, start=1):
             logical_results[index] = await run_logical_query(index, logical_query)
+            if _reconciliation_required_reason(
+                (logical_results[index],)
+            ) is not None:
+                break
     else:
         tasks: dict[int, asyncio.Task[RuntimeSourceLaneResult]] = {}
         async with asyncio.TaskGroup() as task_group:
@@ -496,9 +502,25 @@ def merge_liepin_card_lane_results(
     candidate_updates.update(second.candidate_store_updates)
     normalized_updates = dict(first.normalized_store_updates)
     normalized_updates.update(second.normalized_store_updates)
-    status: RuntimeSourceLaneStatus = "completed" if candidate_updates else second.status
-    stop_reason_code = None if candidate_updates else (second.stop_reason_code or first.stop_reason_code)
-    blocked_reason_code = None if candidate_updates else (second.blocked_reason_code or first.blocked_reason_code)
+    reconciliation_reason = _reconciliation_required_reason(
+        (first, second)
+    )
+    if reconciliation_reason is not None:
+        status: RuntimeSourceLaneStatus = "blocked"
+        stop_reason_code = reconciliation_reason
+        blocked_reason_code = reconciliation_reason
+    elif candidate_updates:
+        status = "completed"
+        stop_reason_code = None
+        blocked_reason_code = None
+    else:
+        status = second.status
+        stop_reason_code = (
+            second.stop_reason_code or first.stop_reason_code
+        )
+        blocked_reason_code = (
+            second.blocked_reason_code or first.blocked_reason_code
+        )
     return RuntimeSourceLaneResult(
         runtime_run_id=first.runtime_run_id,
         source_plan_id=first.source_plan_id,
@@ -523,7 +545,11 @@ def merge_liepin_card_lane_results(
         candidate_query_attributions=first.candidate_query_attributions + second.candidate_query_attributions,
         blocked_reason_code=blocked_reason_code,
         stop_reason_code=stop_reason_code,
-        retryable=first.retryable or second.retryable,
+        retryable=(
+            False
+            if reconciliation_reason is not None
+            else first.retryable or second.retryable
+        ),
         safe_error_summary=first.safe_error_summary or second.safe_error_summary,
         error_ref=first.error_ref or second.error_ref,
     )
@@ -606,12 +632,32 @@ def _outcome_status(target_results: Collection[RuntimeSourceLaneResult]):
 
 
 def _shared_safe_reason(target_results: Collection[RuntimeSourceLaneResult]) -> str | None:
+    reconciliation_reason = _reconciliation_required_reason(
+        target_results
+    )
+    if reconciliation_reason is not None:
+        return reconciliation_reason
     reasons = {
         reason
         for result in target_results
         if (reason := result.stop_reason_code or result.blocked_reason_code) is not None
     }
     return reasons.pop() if len(reasons) == 1 else None
+
+
+def _reconciliation_required_reason(
+    results: Collection[RuntimeSourceLaneResult],
+) -> str | None:
+    for result in results:
+        for reason in (
+            result.stop_reason_code,
+            result.blocked_reason_code,
+        ):
+            if public_source_problem_code(reason) == (
+                "liepin_browser_lane_reconciliation_required"
+            ):
+                return reason
+    return None
 
 
 def _liepin_executed_query_package(

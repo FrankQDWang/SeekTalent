@@ -1482,6 +1482,57 @@ def test_liepin_opencli_bundle_continues_after_one_query_fill_verification_failu
     assert result.status == "completed"
 
 
+def test_liepin_opencli_bundle_stops_after_reconciliation_unknown() -> None:
+    class ReconciliationUnknownWorker(FakeWorker):
+        def __init__(self) -> None:
+            super().__init__()
+            self.query_ids: list[str] = []
+
+        async def search(
+            self,
+            request: SearchRequest,
+            *,
+            round_no: int,
+            trace_id: str,
+            provider_account_hash: str | None = None,
+        ) -> SearchResult:
+            self.query_ids.append(
+                str(request.provider_context["query_instance_id"])
+            )
+            if len(self.query_ids) == 1:
+                raise LiepinWorkerModeError(
+                    "Liepin detail result requires reconciliation.",
+                    code="liepin_details_reconciliation_unknown",
+                )
+            return await super().search(
+                request,
+                round_no=round_no,
+                trace_id=trace_id,
+                provider_account_hash=provider_account_hash,
+            )
+
+    worker = ReconciliationUnknownWorker()
+    result = asyncio.run(
+        _run_fixture_two_query_liepin_bundle(
+            worker,
+            opencli_serial=True,
+        )
+    )
+
+    assert worker.query_ids == ["primary-1"]
+    assert result.status == "blocked"
+    assert result.blocked_reason_code == (
+        "liepin_details_reconciliation_unknown"
+    )
+    assert result.stop_reason_code == (
+        "liepin_details_reconciliation_unknown"
+    )
+    assert result.retryable is False
+    assert [item.status for item in result.query_execution_outcomes] == [
+        "blocked"
+    ]
+
+
 def test_liepin_bundle_builds_one_worker_for_all_logical_queries(monkeypatch) -> None:
     worker = FakeWorker()
     build_calls: list[object] = []
