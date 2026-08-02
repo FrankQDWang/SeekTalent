@@ -413,6 +413,51 @@ def test_daemon_client_does_not_retry_post_disconnected_before_response() -> Non
     assert all(connection.closed for connection in connections)
 
 
+@pytest.mark.parametrize(
+    "operation",
+    ("state", "get-url", "find-semantic", "find-css", "wait"),
+)
+def test_daemon_client_does_not_treat_read_only_post_disconnect_as_unknown_effect(
+    operation: str,
+) -> None:
+    class DisconnectingPostConnection(_Connection):
+        def getresponse(self) -> _Response:
+            if self.requests[-1][0] == "POST":
+                raise http.client.RemoteDisconnected("read result was not delivered")
+            return super().getresponse()
+
+    connections: list[_Connection] = []
+
+    def factory(*_args: object) -> _Connection:
+        connection: _Connection
+        if connections:
+            connection = DisconnectingPostConnection(status_payload=_status())
+        else:
+            connection = _Connection(status_payload=_status())
+        connections.append(connection)
+        return connection
+
+    client = OpenCliDaemonClient(
+        requirement=_requirement(),
+        connection_factory=factory,
+    )
+
+    with pytest.raises(OpenCliBrowserError) as captured:
+        client.command(
+            "browser-operation",
+            {"operation": operation, "session": "scope_a"},
+            timeout_seconds=3,
+        )
+
+    assert captured.value.safe_reason_code == OPENCLI_STATUS_UNAVAILABLE
+    assert [
+        request[0]
+        for connection in connections
+        for request in connection.requests
+    ] == ["GET", "POST"]
+    assert all(connection.closed for connection in connections)
+
+
 def test_daemon_client_conservatively_normalizes_fractional_idle_deadline_milliseconds() -> None:
     connection = _Connection(status_payload=_status(), idle_deadline_at=123456.75)
     client = OpenCliDaemonClient(

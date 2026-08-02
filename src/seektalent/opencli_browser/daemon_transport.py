@@ -61,6 +61,10 @@ OpenCliDaemonAction = Literal[
 _ALLOWED_DAEMON_ACTIONS = frozenset(
     {"browser-operation", "exec", "navigate", "tabs", "screenshot", "insert-text", "cdp", "control"}
 )
+_READ_ONLY_BROWSER_OPERATIONS = frozenset(
+    {"state", "get-url", "find-semantic", "find-css", "wait"}
+)
+_READ_ONLY_TAB_OPERATIONS = frozenset({"find", "list"})
 _RESERVED_COMMAND_FIELDS = frozenset(
     {"id", "action", "timeout", "deadlineAt", "contextId", "preferredContextId"}
 )
@@ -173,26 +177,32 @@ class OpenCliDaemonClient:
             "deadlineAt": deadline_at,
             **({"contextId": self.context_id} if self.context_id else {}),
         }
-        with self._lock:
-            if not self._verified:
-                self._verify_bridge(timeout_seconds=min(timeout_seconds, 2.0))
-            status, payload, _owner_hash = self._request_json(
-                "POST",
-                "/command",
-                body=body,
-                timeout_seconds=_command_response_timeout(timeout_seconds),
-            )
-            if payload.get("ok") is not True:
-                self._raise_command_error(status, payload)
-            if status < 200 or status >= 300 or payload.get("id") != command_id:
-                self._verified = False
-                raise OpenCliBrowserError(OPENCLI_COMMAND_RESULT_UNKNOWN)
-            return OpenCliDaemonResult(
-                command_id=command_id,
-                data=payload.get("data"),
-                page=_optional_string(payload.get("page")),
-                idle_deadline_at=_optional_int(payload.get("idleDeadlineAt")),
-            )
+        read_only = _is_read_only_command(action, params)
+        try:
+            with self._lock:
+                if not self._verified:
+                    self._verify_bridge(timeout_seconds=min(timeout_seconds, 2.0))
+                status, payload, _owner_hash = self._request_json(
+                    "POST",
+                    "/command",
+                    body=body,
+                    timeout_seconds=_command_response_timeout(timeout_seconds),
+                )
+                if payload.get("ok") is not True:
+                    self._raise_command_error(status, payload)
+                if status < 200 or status >= 300 or payload.get("id") != command_id:
+                    self._verified = False
+                    raise OpenCliBrowserError(OPENCLI_COMMAND_RESULT_UNKNOWN)
+                return OpenCliDaemonResult(
+                    command_id=command_id,
+                    data=payload.get("data"),
+                    page=_optional_string(payload.get("page")),
+                    idle_deadline_at=_optional_int(payload.get("idleDeadlineAt")),
+                )
+        except OpenCliBrowserError as exc:
+            if read_only and exc.safe_reason_code == OPENCLI_COMMAND_RESULT_UNKNOWN:
+                raise OpenCliBrowserError(OPENCLI_STATUS_UNAVAILABLE) from exc
+            raise
 
     def _verify_bridge(
         self,
@@ -366,6 +376,18 @@ def _load_daemon_ownership(
 def _command_response_timeout(command_timeout_seconds: float) -> float:
     grace_seconds = min(1.0, max(0.05, command_timeout_seconds * 0.1))
     return command_timeout_seconds + grace_seconds
+
+
+def _is_read_only_command(
+    action: OpenCliDaemonAction,
+    params: Mapping[str, object],
+) -> bool:
+    operation = params.get("operation")
+    if action == "browser-operation":
+        return operation in _READ_ONLY_BROWSER_OPERATIONS
+    if action == "tabs":
+        return params.get("op") in _READ_ONLY_TAB_OPERATIONS
+    return action == "screenshot"
 
 
 def _json_object_loads_with_unique_keys(raw: bytes) -> dict[str, object]:

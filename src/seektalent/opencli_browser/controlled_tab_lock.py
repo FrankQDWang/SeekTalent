@@ -4,7 +4,7 @@ from functools import cache
 from importlib.resources import files
 
 
-CONTROLLED_TAB_HELPER_TIMEOUT_SECONDS = 0.25
+CONTROLLED_TAB_HELPER_TIMEOUT_SECONDS = 5.0
 
 _LOCK_NAME = "__seektalentControlledTabLockV1"
 _DEADLINE_NAME = "__seektalentControlledTabLockDeadlineAt"

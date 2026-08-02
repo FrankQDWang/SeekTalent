@@ -897,6 +897,52 @@ def test_controlled_tab_lock_is_reinstalled_after_navigation() -> None:
     assert install_call[2] == CONTROLLED_TAB_HELPER_TIMEOUT_SECONDS
 
 
+def test_controlled_tab_lock_allows_a_bounded_cold_extension_wakeup() -> None:
+    minimum_cold_wakeup_seconds = 2.0
+
+    class ColdExtensionDaemon(RecordingDaemon):
+        def command(
+            self,
+            action: str,
+            params: Mapping[str, object],
+            *,
+            timeout_seconds: float,
+        ) -> OpenCliDaemonResult:
+            result = super().command(
+                action,
+                params,
+                timeout_seconds=timeout_seconds,
+            )
+            if (
+                action == "browser-operation"
+                and params.get("operation") == "evaluate"
+                and "seektalent-controlled-tab-lock-v1" in str(params.get("code"))
+                and timeout_seconds < minimum_cold_wakeup_seconds
+            ):
+                raise OpenCliBrowserError(OPENCLI_COMMAND_RESULT_UNKNOWN)
+            return result
+
+    daemon = ColdExtensionDaemon()
+    browser = automation(daemon)
+    browser.activate_control_scope("lane-key")
+
+    browser.open_owned_tab(
+        host_page="host-1",
+        url="https://example.com/search",
+        tab_kind="search",
+    )
+
+    assert browser.run_browser_command("state", ()).startswith("URL: https://h.liepin.com")
+    install_call = next(
+        call
+        for call in daemon.calls
+        if call[0] == "browser-operation"
+        and call[1].get("operation") == "evaluate"
+        and "seektalent-controlled-tab-lock-v1" in str(call[1].get("code"))
+    )
+    assert install_call[2] >= minimum_cold_wakeup_seconds
+
+
 def test_controlled_tab_lock_recovers_when_an_action_replaces_the_document() -> None:
     class NavigatingDaemon(RecordingDaemon):
         relock_seen = False
