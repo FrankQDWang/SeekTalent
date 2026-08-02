@@ -4,7 +4,7 @@ from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from inspect import Parameter, signature
 import logging
-from typing import Literal, Protocol, runtime_checkable
+from typing import Literal, Protocol
 from uuid import uuid4
 
 from seektalent.config import AppSettings
@@ -29,6 +29,7 @@ from seektalent_runtime_control.requirements import ApprovedRequirementRevision
 from seektalent_runtime_control.recovery_state import RecoveryStateAssembler
 from seektalent_runtime_control.store import RuntimeCheckpointLoadFailure, RuntimeControlStore
 from seektalent.wtscli_lifecycle_supervisor import WtsCliLifecycleSupervisor
+from seektalent.source_contracts import SourceRegistry
 
 SourceContext = dict[str, str | int | bool | None]
 SourceContextProvider = Callable[[Sequence[str], AppSettings | None], SourceContext | None]
@@ -39,14 +40,8 @@ class RuntimeFactory(Protocol):
     def __call__(
         self,
         *,
-        source_operation_executor: object | None,
-        wtscli_lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
+        source_registry: SourceRegistry | None,
     ) -> object: ...
-
-
-@runtime_checkable
-class RuntimeLike(Protocol):
-    async def run_async(self, **kwargs: object) -> object: ...
 
 
 class WorkflowRuntimeExecutor:
@@ -71,10 +66,9 @@ class WorkflowRuntimeExecutor:
         self.store = store
         self.settings = settings
         self.runtime_factory: RuntimeFactory = runtime_factory or (
-            lambda *, source_operation_executor, wtscli_lifecycle_supervisor=None: _build_default_runtime(
+            lambda *, source_registry: _build_default_runtime(
                 settings,
-                source_operation_executor=source_operation_executor,
-                wtscli_lifecycle_supervisor=wtscli_lifecycle_supervisor,
+                source_registry=source_registry,
             )
         )
         self.runtime_run_id_factory = runtime_run_id_factory or (lambda: f"rtrun_{uuid4().hex}")
@@ -247,7 +241,7 @@ class WorkflowRuntimeExecutor:
             run_status="starting",
         )
         runtime_started = False
-        cards_operation_executor = None
+        liepin_operation_executor = None
         if (
             self.settings is not None
             and "liepin" in resolved_source_ids
@@ -257,7 +251,7 @@ class WorkflowRuntimeExecutor:
                 LiepinCardsSourceOperationExecutor,
             )
 
-            cards_operation_executor = LiepinCardsSourceOperationExecutor(
+            liepin_operation_executor = LiepinCardsSourceOperationExecutor(
                 settings=self.settings,
                 store=self.store,
                 runtime_run_id=run.runtime_run_id,
@@ -282,19 +276,26 @@ class WorkflowRuntimeExecutor:
             and resume_checkpoint.safe_boundary
             == "after_finalization_commit"
         ):
-            if cards_operation_executor is not None:
-                cards_operation_executor.close()
+            if liepin_operation_executor is not None:
+                liepin_operation_executor.close()
             return self._settle_completed_run(
                 runtime_run_id=run.runtime_run_id,
                 executor_id=executor_id,
                 attempt_no=attempt_no,
             )
-        runtime = self._build_runtime(
-            source_operation_executor=cards_operation_executor,
-        )
-        if not isinstance(runtime, RuntimeLike):
-            if cards_operation_executor is not None:
-                cards_operation_executor.close()
+        source_registry = None
+        if self.settings is not None:
+            from seektalent.source_adapters import build_default_source_registry
+
+            source_registry = build_default_source_registry(
+                self.settings,
+                liepin_operation_executor=liepin_operation_executor,
+            )
+        runtime = self._build_runtime(source_registry=source_registry)
+        run_async = getattr(runtime, "run_async", None)
+        if not callable(run_async):
+            if liepin_operation_executor is not None:
+                liepin_operation_executor.close()
             raise RuntimeControlError("runtime_adapter_invalid")
         detail_claim_revision, detail_claim_payload_hash = (
             self.store.get_detail_claim_revision(runtime_run_id=run.runtime_run_id)
@@ -332,8 +333,8 @@ class WorkflowRuntimeExecutor:
                 getattr(artifacts, "run_state", {})
             )
             source_operation_ids = (
-                cards_operation_executor.checkpoint_operation_ids()
-                if cards_operation_executor is not None
+                liepin_operation_executor.checkpoint_operation_ids()
+                if liepin_operation_executor is not None
                 else ()
             )
             checkpoint = self.store.write_checkpoint_v2(
@@ -363,8 +364,8 @@ class WorkflowRuntimeExecutor:
                 ),
                 source_operation_ids=source_operation_ids,
             )
-            if cards_operation_executor is not None:
-                cards_operation_executor.checkpoint_committed(
+            if liepin_operation_executor is not None:
+                liepin_operation_executor.checkpoint_committed(
                     source_operation_ids
                 )
             self.store.append_executor_event(
@@ -471,11 +472,11 @@ class WorkflowRuntimeExecutor:
                     .assemble(resume_checkpoint)
                     .model_dump(mode="json")
                 )
-            await runtime.run_async(**runtime_kwargs)
+            await run_async(**runtime_kwargs)
         except BrowserLaneBusyError as exc:
-            if cards_operation_executor is not None:
+            if liepin_operation_executor is not None:
                 self._close_source_executor_after_failure(
-                    cards_operation_executor,
+                    liepin_operation_executor,
                     runtime_run_id=run.runtime_run_id,
                     primary_error=exc,
                 )
@@ -485,9 +486,9 @@ class WorkflowRuntimeExecutor:
                 attempt_no=attempt_no,
             )
         except (RuntimeError, ValueError, OSError) as exc:
-            if cards_operation_executor is not None:
+            if liepin_operation_executor is not None:
                 self._close_source_executor_after_failure(
-                    cards_operation_executor,
+                    liepin_operation_executor,
                     runtime_run_id=run.runtime_run_id,
                     primary_error=exc,
                 )
@@ -538,16 +539,16 @@ class WorkflowRuntimeExecutor:
                 )
             raise
         except BaseException as exc:
-            if cards_operation_executor is not None:
+            if liepin_operation_executor is not None:
                 self._close_source_executor_after_failure(
-                    cards_operation_executor,
+                    liepin_operation_executor,
                     runtime_run_id=run.runtime_run_id,
                     primary_error=exc,
                 )
             raise
 
-        if cards_operation_executor is not None:
-            cards_operation_executor.close()
+        if liepin_operation_executor is not None:
+            liepin_operation_executor.close()
         return self._settle_completed_run(
             runtime_run_id=run.runtime_run_id,
             executor_id=executor_id,
@@ -685,16 +686,9 @@ class WorkflowRuntimeExecutor:
     def _build_runtime(
         self,
         *,
-        source_operation_executor: object | None,
+        source_registry: SourceRegistry | None,
     ) -> object:
-        if self.wtscli_lifecycle_supervisor is None:
-            return self.runtime_factory(
-                source_operation_executor=source_operation_executor,
-            )
-        return self.runtime_factory(
-            source_operation_executor=source_operation_executor,
-            wtscli_lifecycle_supervisor=self.wtscli_lifecycle_supervisor,
-        )
+        return self.runtime_factory(source_registry=source_registry)
 
     def _load_resume_checkpoint(
         self,
@@ -764,8 +758,7 @@ class WorkflowRuntimeExecutor:
 def _build_default_runtime(
     settings: AppSettings | None,
     *,
-    source_operation_executor: object | None = None,
-    wtscli_lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
+    source_registry: SourceRegistry | None = None,
 ) -> object:
     if settings is None:
         raise ValueError("settings is required")
@@ -773,8 +766,7 @@ def _build_default_runtime(
 
     return build_source_enabled_runtime(
         settings,
-        source_operation_executor=source_operation_executor,
-        wtscli_lifecycle_supervisor=wtscli_lifecycle_supervisor,
+        source_registry=source_registry,
     )
 
 

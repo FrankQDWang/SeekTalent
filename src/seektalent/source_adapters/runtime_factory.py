@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from seektalent.config import AppSettings
 from seektalent.core.retrieval.service import RetrievalService
 from seektalent.evaluation import AsyncJudgeLimiter
-from seektalent.wtscli_lifecycle_supervisor import WtsCliLifecycleSupervisor
+from seektalent.source_contracts import SourceRegistry
 
 if TYPE_CHECKING:
     from seektalent.source_adapters.runtime_composition import WorkflowRuntime
@@ -17,8 +17,7 @@ def build_source_enabled_runtime(
     retrieval_service: RetrievalService | None = None,
     judge_limiter: AsyncJudgeLimiter | None = None,
     eval_remote_logging: bool = True,
-    source_operation_executor: object | None = None,
-    wtscli_lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None,
+    source_registry: SourceRegistry | None = None,
 ) -> WorkflowRuntime:
     from seektalent.source_adapters.runtime_composition import (
         build_source_enabled_runtime as _build_source_enabled_runtime,
@@ -29,26 +28,22 @@ def build_source_enabled_runtime(
         retrieval_service=retrieval_service
         or _build_provider_retrieval_service(
             settings,
-            source_operation_executor=source_operation_executor,
-            wtscli_lifecycle_supervisor=wtscli_lifecycle_supervisor,
+            source_id="cts",
         ),
         judge_limiter=judge_limiter,
         eval_remote_logging=eval_remote_logging,
-        liepin_cards_operation_executor=source_operation_executor,
-        wtscli_lifecycle_supervisor=wtscli_lifecycle_supervisor,
+        source_registry=source_registry,
     )
 
 
 def _build_provider_retrieval_service(
     settings: AppSettings,
     *,
-    source_operation_executor: object | None,
-    wtscli_lifecycle_supervisor: WtsCliLifecycleSupervisor | None,
+    source_id: str,
 ) -> RetrievalService:
     from seektalent.source_adapters.runtime_composition import build_provider_retrieval_service
 
     return build_provider_retrieval_service(
         settings,
-        liepin_source_operation_executor=source_operation_executor,
-        wtscli_lifecycle_supervisor=wtscli_lifecycle_supervisor,
+        source_id=source_id,
     )

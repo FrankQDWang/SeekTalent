@@ -117,7 +117,6 @@ def test_provider_registry_creates_live_store_for_opencli(tmp_path: Path) -> Non
         settings,
         "liepin",
         liepin_worker_client=worker,
-        liepin_source_operation_executor=object(),
     )
 
     assert provider.name == "liepin"

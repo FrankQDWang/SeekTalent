@@ -76,6 +76,7 @@ from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 from seektalent.tracing import RunTracer, json_sha256
 from tests.settings_factory import make_settings
+from tests.source_registry_fakes import install_source_execution_fakes
 
 
 def _workflow_runtime(*args: Any, **kwargs: Any) -> WorkflowRuntime:
@@ -3665,7 +3666,11 @@ def test_run_async_reuses_one_detail_open_claim_ledger_across_round_contexts(
 
         return {"cts": cts_adapter}
 
-    cast(Any, runtime).source_round_adapter_provider = source_round_adapters
+    install_source_execution_fakes(
+        runtime,
+        source_ids=("cts",),
+        round_adapter_provider=source_round_adapters,
+    )
     progress_events = []
 
     artifacts = runtime.run(

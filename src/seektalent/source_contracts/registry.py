@@ -1,8 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
+from typing import TYPE_CHECKING
 
 from seektalent.source_contracts.contracts import RegisteredSource, SourcePlan
+
+if TYPE_CHECKING:
+    from seektalent.runtime.orchestrator import RuntimeSourceRoundContext, WorkflowRuntime
+    from seektalent.runtime.source_round_dispatch import SourceRoundAdapter
+    from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
+    from seektalent.source_contracts.first_page_expansion import SourceFirstPageExpander
 
 
 class SourceRegistry:
@@ -74,3 +81,31 @@ class SourceRegistry:
                 )
             )
         return tuple(plans)
+
+    def build_round_adapters(
+        self,
+        *,
+        source_ids: Sequence[str],
+        runtime: "WorkflowRuntime",
+        context: "RuntimeSourceRoundContext",
+    ) -> Mapping[str, "SourceRoundAdapter"]:
+        adapters: dict[str, SourceRoundAdapter] = {}
+        for source in self.enabled_sources(source_ids):
+            if source.build_round_adapter is None:
+                raise ValueError(f"source_round_adapter_required:{source.source_id}")
+            adapters[source.source_id] = source.build_round_adapter(runtime, context)
+        return adapters
+
+    def build_first_page_expanders(
+        self,
+        *,
+        source_ids: Sequence[str],
+        detail_open_claim_ledger: "DetailOpenClaimLedger",
+    ) -> Mapping[str, "SourceFirstPageExpander"]:
+        expanders: dict[str, SourceFirstPageExpander] = {}
+        for source in self.enabled_sources(source_ids):
+            if source.build_first_page_expander is not None:
+                expanders[source.source_id] = source.build_first_page_expander(
+                    detail_open_claim_ledger
+                )
+        return expanders

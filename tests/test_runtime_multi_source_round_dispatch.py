@@ -73,6 +73,7 @@ from seektalent.runtime.source_lanes import (
 from seektalent.runtime.source_query_intent import RuntimeSourceQueryPolicy, build_runtime_source_query_intents
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
+from tests.source_registry_fakes import install_source_execution_fakes
 
 
 def test_retrieval_runtime_does_not_import_provider_modules() -> None:
@@ -383,11 +384,15 @@ def test_runtime_multi_source_round_uses_adapter_query_policy_for_liepin(tmp_pat
 
     runtime = WorkflowRuntime(
         settings,
-        source_round_adapter_provider=source_round_adapters,
         source_query_policy_provider=lambda source_plan: default_source_query_policies(
             settings=settings,
             source_plan=source_plan,
         ),
+    )
+    install_source_execution_fakes(
+        runtime,
+        source_ids=("cts", "liepin"),
+        round_adapter_provider=source_round_adapters,
     )
     run_state = _run_state()
     tracer = RunTracer(tmp_path / "trace")
@@ -1230,7 +1235,11 @@ def test_first_round_partial_browser_source_with_new_candidates_still_blocks(tmp
 
     runtime = WorkflowRuntime(
         make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"),
-        source_round_adapter_provider=source_round_adapters,
+    )
+    install_source_execution_fakes(
+        runtime,
+        source_ids=("liepin",),
+        round_adapter_provider=source_round_adapters,
     )
     run_state = _run_state()
     tracer = RunTracer(tmp_path / "trace")
@@ -1280,7 +1289,11 @@ def test_rejected_round_persists_terminal_receipts_before_exit(tmp_path) -> None
 
     runtime = WorkflowRuntime(
         make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts"),
-        source_round_adapter_provider=source_round_adapters,
+    )
+    install_source_execution_fakes(
+        runtime,
+        source_ids=("cts", "liepin"),
+        round_adapter_provider=source_round_adapters,
     )
     run_state = _run_state()
     checkpoint_receipts: list[list[tuple[str, str, bool]]] = []

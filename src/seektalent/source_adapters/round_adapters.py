@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from collections.abc import Mapping
 from dataclasses import replace
 
 import httpx
@@ -8,15 +7,11 @@ import httpx
 from seektalent.core.retrieval.provider_contract import ProviderSearchError
 from seektalent.models import QueryOutcomeThresholds
 from seektalent.runtime.orchestrator import RuntimeSourceRoundContext, WorkflowRuntime
-from seektalent.source_contracts.first_page_expansion import SourceFirstPageExpander
-from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
-from seektalent.sources.liepin.runtime_lane import run_liepin_first_page_expansion
 from seektalent.runtime.source_query_intent import (
     RuntimeSourceQueryIntent,
     query_package_from_provider_query,
 )
 from seektalent.runtime.source_round_dispatch import (
-    SourceRoundAdapter,
     SourceRoundAdapterResult,
     SourceRoundDispatchRequest,
     SourceRoundDispatchStatus,
@@ -33,38 +28,6 @@ from .evidence import _record_source_provider_results_from_lane, _source_lane_re
 _SOURCE_ROUND_STATUSES: dict[str, SourceRoundDispatchStatus] = {
     "blocked": "blocked", "completed": "completed", "failed": "failed", "partial": "partial"
 }
-
-
-def default_source_first_page_expander_provider(runtime: WorkflowRuntime,
-        detail_open_claim_ledger: DetailOpenClaimLedger) -> Mapping[str, SourceFirstPageExpander]:
-    async def expand_liepin(request):
-        return await run_liepin_first_page_expansion(settings=runtime.settings, request=request,
-            detail_open_claim_ledger=detail_open_claim_ledger,
-            cards_operation_executor=runtime.source_operation_executor)
-    return {"liepin": expand_liepin}
-
-
-def default_source_round_adapter_provider(
-    runtime: WorkflowRuntime,
-    context: RuntimeSourceRoundContext,
-) -> Mapping[str, SourceRoundAdapter]:
-    adapters: dict[str, SourceRoundAdapter] = {}
-    for source_id in context.source_plan_by_source:
-        if source_id == "cts":
-            adapters[source_id] = lambda request, source_id=source_id: _run_cts_source_round(
-                runtime=runtime,
-                context=context,
-                request=request,
-                source_id=source_id,
-            )
-        elif source_id == "liepin":
-            adapters[source_id] = lambda request, source_id=source_id: _run_liepin_source_round(
-                runtime=runtime,
-                context=context,
-                request=request,
-                source_id=source_id,
-            )
-    return adapters
 
 
 async def _run_cts_source_round(
@@ -181,6 +144,7 @@ async def _run_liepin_source_round(
     context: RuntimeSourceRoundContext,
     request: SourceRoundDispatchRequest,
     source_id: str,
+    cards_operation_executor: object | None = None,
 ) -> SourceRoundAdapterResult:
     source_plan = context.source_plan_by_source[source_id]
     safe_posture = dict(source_plan.safe_posture)
@@ -220,7 +184,7 @@ async def _run_liepin_source_round(
         source_budget_policy=source_plan.source_budget_policy,
         liepin_context=context.source_context,
         detail_open_claim_ledger=context.detail_open_claim_ledger,
-        cards_operation_executor=runtime.source_operation_executor,
+        cards_operation_executor=cards_operation_executor,
     )
     _record_source_provider_results_from_lane(
         runtime=runtime,

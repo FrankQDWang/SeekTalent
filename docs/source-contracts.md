@@ -35,6 +35,12 @@ Runtime production code must follow these rules:
 - Do not define two-source-only public contracts such as `Literal["cts", "liepin"]`.
 - Do not contain `opencli` or `liepin_opencli` reason-code literals.
 - Dispatch source behavior through source maps, selected source plans, and source adapter entry points.
+- `SourceRegistry` is the only production dispatch entry for card, detail, round,
+  and first-page continuation execution. `WorkflowRuntime` receives the registry;
+  it does not receive a provider client, browser executor, or alternate runner.
+- The registered Liepin source closes over its run-scoped Source Operation
+  Executor. The generic provider registry cannot construct the production
+  OpenCLI route.
 
 ## Provider Rules
 

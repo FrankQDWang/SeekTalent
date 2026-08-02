@@ -23,7 +23,7 @@ def test_resume_fails_closed_for_legacy_checkpoint_without_continuation_state(tm
     runtime = ResumeAwareRuntime()
     executor = WorkflowRuntimeExecutor(
         store=store,
-        runtime_factory=lambda *, source_operation_executor=None: runtime,
+        runtime_factory=lambda *, source_registry=None: runtime,
         runtime_run_id_factory=lambda: "runtime-run-hitl",
         now=_clock(
             "2026-06-17T00:00:00.000000Z",
@@ -163,7 +163,7 @@ def test_resume_failure_releases_lease_without_calling_runtime_when_checkpoint_i
     runtime = RuntimeMustNotRun()
     executor = WorkflowRuntimeExecutor(
         store=store,
-        runtime_factory=lambda *, source_operation_executor=None: runtime,
+        runtime_factory=lambda *, source_registry=None: runtime,
         runtime_run_id_factory=lambda: f"runtime-run-{checkpoint_mode}",
         now=_clock(
             "2026-06-17T01:00:00.000000Z",

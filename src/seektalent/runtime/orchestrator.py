@@ -113,7 +113,6 @@ from seektalent.runtime.errors import BrowserLaneBusyError
 from seektalent.normalization import normalize_resume
 from seektalent.prompting import PromptRegistry
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
-from seektalent.source_contracts.first_page_expansion import SourceFirstPageExpander
 from seektalent.source_contracts.first_page_expansion import SourceFirstPageExpansionResult
 from seektalent.progress import ProgressCallback, ProgressEvent
 from seektalent.artifacts.lifecycle import RuntimeArtifactLifecycleRef
@@ -168,6 +167,7 @@ from seektalent.runtime.runtime_reports import (
 from seektalent.runtime.services import build_runtime_services
 from seektalent.runtime.source_lanes import (
     RuntimeDetailEnrichmentResult,
+    RuntimeSourceBudgetPolicy,
     RuntimeSourceLaneEvent,
     RuntimeSourceLaneEventType,
     RuntimeSourceLanePlan,
@@ -179,7 +179,6 @@ from seektalent.runtime.source_lanes import (
     build_runtime_source_plan,
     merge_source_lane_result_updates,
     rebuild_candidate_identities,
-    runtime_source_lane_result_from_source_result,
 )
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch, build_logical_query_dispatches
 from seektalent.runtime.query_identity import (
@@ -208,7 +207,6 @@ from seektalent.runtime.retrieval_runtime import (
 )
 from seektalent.runtime.rescue_router import RescueDecision, RescueInputs, SkippedRescueLane, choose_rescue_lane
 from seektalent.runtime.source_round_dispatch import (
-    SourceRoundAdapter,
     SourceRoundAdapterResult,
     SourceRoundDispatchRequest,
     SourceRoundDispatchResult,
@@ -232,9 +230,6 @@ from seektalent.runtime.scoring_runtime import (
 )
 from seektalent.runtime.stop_reasons import normalize_stop_reason
 from seektalent.source_contracts import (
-    SourceBudget,
-    SourceLaneRequest as ContractSourceLaneRequest,
-    SourceLaneResult as ContractSourceLaneResult,
     SourcePlan as ContractSourcePlan,
     SourceRegistry,
     RuntimeQueryCandidateAttribution,
@@ -359,11 +354,6 @@ class RuntimeSourceRoundContext:
     detail_open_claim_ledger: DetailOpenClaimLedger
 
 
-RuntimeSourceRoundAdapterProvider = Callable[
-    ["WorkflowRuntime", RuntimeSourceRoundContext],
-    Mapping[str, SourceRoundAdapter],
-]
-RuntimeSourceFirstPageExpanderProvider = Callable[["WorkflowRuntime", DetailOpenClaimLedger], Mapping[str, SourceFirstPageExpander]]
 RuntimeSourceQueryPolicyProvider = Callable[
     [tuple[RuntimeSourceLanePlan, ...]],
     Mapping[SourceKind, RuntimeSourceQueryPolicy],
@@ -375,7 +365,6 @@ RuntimeCheckpointCallback = Callable[[object], None]
 RuntimeDetailClaimCallback = Callable[[object], None]
 RuntimeRoundBoundaryCallback = Callable[[int], RequirementSheet | None]
 RuntimeSourceLaneRunner = Callable[[RuntimeSourceLanePlan], Awaitable[RuntimeSourceLaneResult]]
-RuntimeSourceLaneRequestRunner = Callable[[RuntimeSourceLaneRequest, object | None], Awaitable[RuntimeSourceLaneResult]]
 
 
 class _UnavailableRetrievalProvider:
@@ -515,22 +504,14 @@ class WorkflowRuntime:
         settings: AppSettings,
         *,
         source_registry: SourceRegistry | None = None,
-        source_lane_request_runner: RuntimeSourceLaneRequestRunner | None = None,
-        source_round_adapter_provider: RuntimeSourceRoundAdapterProvider | None = None,
-        source_first_page_expander_provider: RuntimeSourceFirstPageExpanderProvider | None = None,
         source_query_policy_provider: RuntimeSourceQueryPolicyProvider | None = None,
-        source_operation_executor: object | None = None,
         retrieval_service: RetrievalService | None = None,
         judge_limiter: AsyncJudgeLimiter | None = None,
         eval_remote_logging: bool = True,
     ) -> None:
         self.settings = settings
         self.source_registry = source_registry
-        self.source_lane_request_runner = source_lane_request_runner
-        self.source_round_adapter_provider = source_round_adapter_provider
-        self.source_first_page_expander_provider = source_first_page_expander_provider
         self.source_query_policy_provider = source_query_policy_provider
-        self.source_operation_executor = source_operation_executor
         self.judge_limiter = judge_limiter
         self.eval_remote_logging = eval_remote_logging
         self.prompts = PromptRegistry(settings.prompt_dir)
@@ -642,25 +623,24 @@ class WorkflowRuntime:
     def run_source_lane(
         self,
         request: RuntimeSourceLaneRequest,
-        *,
-        source_client: object | None = None,
     ) -> RuntimeSourceLaneResult:
-        return asyncio.run(
-            self.run_source_lane_async(
-                request,
-                source_client=source_client,
-            )
-        )
+        return asyncio.run(self.run_source_lane_async(request))
 
     async def run_source_lane_async(
         self,
         request: RuntimeSourceLaneRequest,
-        *,
-        source_client: object | None = None,
     ) -> RuntimeSourceLaneResult:
-        if self.source_lane_request_runner is None:
+        if self.source_registry is None:
+            raise ValueError("source_registry_required")
+        source = self.source_registry.get(request.source)
+        runner = (
+            source.run_detail_lane
+            if request.lane_mode == "detail"
+            else source.run_card_lane
+        )
+        if runner is None:
             raise ValueError(f"Unsupported source lane request source: {request.source}")
-        return await self.source_lane_request_runner(request, source_client)
+        return await runner(request)
 
     async def run_source_round_for_testing(
         self,
@@ -699,7 +679,7 @@ class WorkflowRuntime:
         source_by_id = {source.source_id: source for source in selected}
         source_order = {plan.source_id: index for index, plan in enumerate(source_plan)}
         query_terms = _source_query_terms_from_logical_queries(logical_queries)
-        tasks: dict[str, asyncio.Task[ContractSourceLaneResult]] = {}
+        tasks: dict[str, asyncio.Task[RuntimeSourceLaneResult]] = {}
         async with asyncio.TaskGroup() as task_group:
             for plan in source_plan:
                 source = source_by_id[plan.source_id]
@@ -720,10 +700,9 @@ class WorkflowRuntime:
         raw_candidate_count = 0
         for plan in source_plan:
             source_result = tasks[plan.source_id].result()
-            runtime_result = runtime_source_lane_result_from_source_result(source_result)
             apply_source_lane_result(
                 run_state=run_state,
-                result=runtime_result,
+                result=source_result,
                 source_order=source_order,
             )
             result_candidates = tuple(source_result.candidate_store_updates.values())
@@ -732,12 +711,12 @@ class WorkflowRuntime:
             raw_candidate_count += raw_count
             source_results.append(
                 SourceRoundAdapterResult(
-                    source=source_result.source_id,
+                    source=source_result.source,
                     status=_source_round_status_from_lane_status(source_result.status),
                     candidates=result_candidates,
                     raw_candidate_count=raw_count,
                     safe_reason_code=source_result.stop_reason_code or source_result.blocked_reason_code,
-                    lane_result=runtime_result,
+                    lane_result=source_result,
                 )
             )
 
@@ -755,10 +734,10 @@ class WorkflowRuntime:
         round_no: int,
         query_terms: tuple[str, ...],
         progress_callback: ProgressCallback | None,
-    ) -> ContractSourceLaneRequest:
+    ) -> RuntimeSourceLaneRequest:
         plan_terms = plan.query_intents or query_terms or self._source_lane_query_terms(run_state)
-        return ContractSourceLaneRequest(
-            source_id=plan.source_id,
+        return RuntimeSourceLaneRequest(
+            source=plan.source_id,
             lane_mode=plan.lane_mode,
             runtime_run_id=plan.runtime_run_id,
             source_plan_id=plan.source_plan_id,
@@ -768,7 +747,11 @@ class WorkflowRuntime:
             notes=run_state.input_truth.notes,
             requirement_sheet=run_state.requirement_sheet,
             source_query_terms=tuple(plan_terms),
-            budget=plan.budget,
+            source_budget_policy=RuntimeSourceBudgetPolicy(
+                card_target=plan.budget.card_target,
+                detail_target=plan.budget.detail_target,
+                scan_limit=plan.budget.scan_limit,
+            ),
             progress_callback=progress_callback,
         )
 
@@ -778,7 +761,6 @@ class WorkflowRuntime:
         base_run_artifacts: RunArtifacts,
         base_finalization_revision: int,
         detail_lane_request: RuntimeSourceLaneRequest,
-        source_client: object | None = None,
     ) -> RuntimeDetailEnrichmentResult:
         if base_run_artifacts.run_state is None:
             raise RunStageError("source_lanes", "Approved detail enrichment requires base run state.")
@@ -795,7 +777,7 @@ class WorkflowRuntime:
             raise RunStageError("source_lanes", "Approved detail lease is bound to a different runtime run.")
 
         run_state = base_run_artifacts.run_state
-        lane_result = await self.run_source_lane_async(detail_lane_request, source_client=source_client)
+        lane_result = await self.run_source_lane_async(detail_lane_request)
         selected_sources = base_run_artifacts.finalization_revision.selected_source_kinds or (
             detail_lane_request.source,
         )
@@ -1431,7 +1413,6 @@ class WorkflowRuntime:
         source_context: Mapping[str, str | int | bool | None] | None,
         progress_callback: ProgressCallback | None = None,
     ) -> tuple[list[ScoredCandidate], str, int, TerminalControllerRound | None]:
-        del source_context
         source_order = {lane.source: index for index, lane in enumerate(source_plan)}
         lane_tasks: dict[str, asyncio.Task[RuntimeSourceLaneResult]] = {}
         async with asyncio.TaskGroup() as task_group:
@@ -1444,6 +1425,7 @@ class WorkflowRuntime:
                             run_state=run_state,
                             tracer=tracer,
                             progress_callback=progress_callback,
+                            source_context=source_context,
                         ),
                     )
                 )
@@ -1556,13 +1538,14 @@ class WorkflowRuntime:
         run_state: RunState,
         tracer: RunTracer,
         progress_callback: ProgressCallback | None,
+        source_context: Mapping[str, str | int | bool | None] | None,
     ) -> RuntimeSourceLaneResult:
         if self.source_registry is None:
             raise RunStageError("source_lanes", "source_registry_required")
         source = self.source_registry.get(lane.source)
-        source_result = await source.run_card_lane(
-            ContractSourceLaneRequest(
-                source_id=lane.source,
+        return await source.run_card_lane(
+            RuntimeSourceLaneRequest(
+                source=lane.source,
                 lane_mode=lane.lane_mode,
                 runtime_run_id=tracer.run_id,
                 source_plan_id=lane.source_plan_id,
@@ -1572,15 +1555,15 @@ class WorkflowRuntime:
                 notes=run_state.input_truth.notes,
                 requirement_sheet=run_state.requirement_sheet,
                 source_query_terms=self._source_lane_query_terms(run_state),
-                budget=SourceBudget(
+                source_budget_policy=RuntimeSourceBudgetPolicy(
                     card_target=lane.source_budget_policy.card_target,
                     detail_target=lane.source_budget_policy.detail_target,
                     scan_limit=lane.source_budget_policy.scan_limit,
                 ),
+                source_context=source_context,
                 progress_callback=progress_callback,
             )
         )
-        return runtime_source_lane_result_from_source_result(source_result)
 
     async def _run_source_lane_safely(
         self,
@@ -1879,10 +1862,12 @@ class WorkflowRuntime:
             tracer=tracer,
             detail_open_claim_ledger=detail_open_claim_ledger,
         )
-        source_adapters = (
-            self.source_round_adapter_provider(self, round_context)
-            if self.source_round_adapter_provider is not None
-            else {}
+        if self.source_registry is None:
+            raise RunStageError("source_lanes", "source_registry_required")
+        source_adapters = self.source_registry.build_round_adapters(
+            source_ids=tuple(lane.source for lane in source_plan),
+            runtime=self,
+            context=round_context,
         )
         pre_round_seen_resume_ids = frozenset(run_state.seen_resume_ids)
         dispatch_result = await dispatch_source_rounds(
@@ -2445,10 +2430,11 @@ class WorkflowRuntime:
             )
             pre_round_top_ids = set(run_state.top_pool_ids)
             pre_round_seen_resume_ids = set(run_state.seen_resume_ids)
-            source_expanders = (
-                self.source_first_page_expander_provider(self, detail_open_claim_ledger)
-                if self.source_first_page_expander_provider is not None
-                else {}
+            if self.source_registry is None:
+                raise RunStageError("source_lanes", "source_registry_required")
+            source_expanders = self.source_registry.build_first_page_expanders(
+                source_ids=tuple(lane.source for lane in source_plan),
+                detail_open_claim_ledger=detail_open_claim_ledger,
             )
             assert_first_page_expanders_registered(source_plan=source_plan, expanders=source_expanders)
             try:

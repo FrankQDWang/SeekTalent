@@ -14,7 +14,6 @@ from seektalent.providers.liepin.client import (
     is_live_liepin_worker_mode,
 )
 from seektalent.providers.liepin.store import LiepinStore
-from seektalent.wtscli_lifecycle_supervisor import WtsCliLifecycleSupervisor
 
 
 @dataclass(frozen=True)
@@ -23,8 +22,6 @@ class ProviderAdapterBuildContext:
     liepin_worker_client: LiepinWorkerClient | None = None
     liepin_store: LiepinStore | None = None
     liepin_connection_safety_resolver: ProviderConnectionSafetyResolver | None = None
-    liepin_source_operation_executor: object | None = None
-    wtscli_lifecycle_supervisor: WtsCliLifecycleSupervisor | None = None
 
 
 @dataclass(frozen=True)
@@ -80,35 +77,20 @@ def _build_liepin_provider_adapter(context: ProviderAdapterBuildContext) -> Prov
         raise ValueError("Liepin provider cannot be selected while liepin_worker_mode is disabled.")
     if (
         settings.liepin_worker_mode == "opencli"
-        and context.liepin_source_operation_executor is None
+        and context.liepin_worker_client is None
     ):
-        raise RuntimeError("liepin_source_operation_executor_required")
+        raise RuntimeError("liepin_opencli_requires_registered_source_port")
     store = context.liepin_store
     if store is None and is_live_liepin_worker_mode(settings.liepin_worker_mode):
         store = LiepinStore(settings.resolve_workspace_path(settings.liepin_connector_db_path))
     return LiepinProviderAdapter(
         settings,
         worker_client=context.liepin_worker_client
-        or build_liepin_worker_client(
-            settings,
-            cards_operation_executor=(
-                context.liepin_source_operation_executor
-            ),
-            lifecycle_supervisor=context.wtscli_lifecycle_supervisor,
-        ),
+        or build_liepin_worker_client(settings),
         store=store,
         connection_safety_resolver=context.liepin_connection_safety_resolver,
         verify_session_gate=(
             create_production_liepin_verify_session_gate(settings)
-            if settings.liepin_worker_mode == "opencli"
-            else None
-        ),
-        readiness_preparer=(
-            getattr(
-                context.liepin_source_operation_executor,
-                "prepare_readiness",
-                None,
-            )
             if settings.liepin_worker_mode == "opencli"
             else None
         ),

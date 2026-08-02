@@ -943,11 +943,9 @@ class _NoopRuntime:
         self,
         _settings: AppSettings,
         *,
-        source_operation_executor: object | None = None,
-        wtscli_lifecycle_supervisor: object | None = None,
+        source_registry: object | None = None,
     ) -> None:
-        self.source_operation_executor = source_operation_executor
-        self.wtscli_lifecycle_supervisor = wtscli_lifecycle_supervisor
+        self.source_registry = source_registry
 
     def extract_requirements(self, **_kwargs: object) -> object:
         raise AssertionError("requirement extraction is not part of lifecycle startup")

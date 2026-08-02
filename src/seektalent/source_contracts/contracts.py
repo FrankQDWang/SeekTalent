@@ -9,6 +9,14 @@ from seektalent.models import NormalizedResume, RequirementSheet, ResumeCandidat
 from seektalent.progress import ProgressCallback
 if TYPE_CHECKING:
     from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
+    from seektalent.runtime.orchestrator import RuntimeSourceRoundContext, WorkflowRuntime
+    from seektalent.runtime.source_round_dispatch import SourceRoundAdapter
+    from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
+    from seektalent.source_contracts.first_page_expansion import SourceFirstPageExpander
+    from seektalent.source_contracts.runtime_lanes import (
+        RuntimeSourceLaneRequest,
+        RuntimeSourceLaneResult,
+    )
 
 
 SourceId = str
@@ -161,6 +169,25 @@ class UnsupportedSourceFilter:
 
 
 SourceLaneRunner = Callable[[SourceLaneRequest], Coroutine[object, object, SourceLaneResult]]
+RuntimeSourceLaneRunner = Callable[
+    ["RuntimeSourceLaneRequest"],
+    Coroutine[object, object, "RuntimeSourceLaneResult"],
+]
+
+
+class SourceRoundAdapterBuilder(Protocol):
+    def __call__(
+        self,
+        runtime: "WorkflowRuntime",
+        context: "RuntimeSourceRoundContext",
+    ) -> "SourceRoundAdapter": ...
+
+
+class SourceFirstPageExpanderBuilder(Protocol):
+    def __call__(
+        self,
+        detail_open_claim_ledger: "DetailOpenClaimLedger",
+    ) -> "SourceFirstPageExpander": ...
 
 
 class SourcePlanBuilder(Protocol):
@@ -180,8 +207,10 @@ class RegisteredSource:
     capabilities: SourceCapabilities
     default_budget: SourceBudget
     plan: SourcePlanBuilder
-    run_card_lane: SourceLaneRunner
-    run_detail_lane: SourceLaneRunner | None = None
+    run_card_lane: RuntimeSourceLaneRunner
+    run_detail_lane: RuntimeSourceLaneRunner | None = None
+    build_round_adapter: SourceRoundAdapterBuilder | None = None
+    build_first_page_expander: SourceFirstPageExpanderBuilder | None = None
 
     def __post_init__(self) -> None:
         if not self.source_id:

@@ -5,10 +5,23 @@ from collections.abc import Mapping
 
 import pytest
 
-from seektalent.models import InputTruth, RequirementSheet, ResumeCandidate, RetrievalState, RunState, ScoringPolicy
+from seektalent.models import (
+    InputTruth,
+    RequirementSheet,
+    ResumeCandidate,
+    RetrievalState,
+    RunState,
+    RuntimeSourceEvidence,
+    ScoringPolicy,
+)
 from seektalent.runtime.logical_query_dispatch import LogicalQueryDispatch
 from seektalent.runtime.orchestrator import WorkflowRuntime
-from seektalent.runtime.source_lanes import apply_source_lane_result, runtime_source_lane_result_from_source_result
+from seektalent.runtime.source_lanes import (
+    RuntimeSourceBudgetPolicy,
+    RuntimeSourceLaneRequest,
+    RuntimeSourceLaneResult,
+    apply_source_lane_result,
+)
 from seektalent.runtime.source_round_dispatch import (
     RuntimeSourceInvariantError,
     SourceRoundAdapterResult,
@@ -19,8 +32,6 @@ from seektalent.source_contracts import (
     RegisteredSource,
     SourceBudget,
     SourceCapabilities,
-    SourceLaneRequest,
-    SourceLaneResult,
     SourcePlan,
 )
 from seektalent.sources.public_events import require_public_source_reason_code
@@ -78,8 +89,8 @@ def _fixture_source() -> RegisteredSource:
             query_intents=("fixture python",),
         )
 
-    async def run_card_lane(request: SourceLaneRequest) -> SourceLaneResult:
-        assert request.source_id == "fixture_source"
+    async def run_card_lane(request: RuntimeSourceLaneRequest) -> RuntimeSourceLaneResult:
+        assert request.source == "fixture_source"
         candidate = ResumeCandidate(
             resume_id="fixture-resume-1",
             source_resume_id="fixture-provider-1",
@@ -88,13 +99,30 @@ def _fixture_source() -> RegisteredSource:
             search_text="Python data platform engineer",
             raw={"source": "fixture_source"},
         )
-        return SourceLaneResult.from_candidates(
-            request=request,
+        return RuntimeSourceLaneResult(
+            runtime_run_id=request.runtime_run_id or "run-missing",
+            source_plan_id=request.source_plan_id or "plan-missing",
+            source_lane_run_id=request.source_lane_run_id or "lane-missing",
+            source=request.source,
+            lane_mode=request.lane_mode,
+            attempt=request.attempt,
             status="completed",
-            candidates=(candidate,),
-            collected_at="2026-06-04T00:00:00Z",
+            candidate_store_updates={candidate.resume_id: candidate},
+            source_evidence_updates=(
+                RuntimeSourceEvidence(
+                    evidence_id=f"{request.source_lane_run_id}:{candidate.resume_id}",
+                    source=request.source,
+                    provider=request.source,
+                    source_plan_id=request.source_plan_id,
+                    source_lane_run_id=request.source_lane_run_id,
+                    evidence_level=request.lane_mode,
+                    candidate_resume_id=candidate.resume_id,
+                    provider_candidate_key_hash="fixture-provider-hash",
+                    collected_at="2026-06-04T00:00:00Z",
+                ),
+            ),
             raw_candidate_count=1,
-            safe_reason_code="source_card_candidate",
+            stop_reason_code="source_card_candidate",
         )
 
     return RegisteredSource(
@@ -120,8 +148,8 @@ def test_fixture_source_runs_through_registry_and_runtime_merge_without_runtime_
     registry = SourceRegistry([_fixture_source()], default_source_ids=("fixture_source",))
     source = registry.enabled_sources(["fixture_source"])[0]
     plan = source.plan(runtime_run_id="run-1", source_index=0, budget_overrides=None)
-    request = SourceLaneRequest(
-        source_id=plan.source_id,
+    request = RuntimeSourceLaneRequest(
+        source=plan.source_id,
         lane_mode="card",
         runtime_run_id=plan.runtime_run_id,
         source_plan_id=plan.source_plan_id,
@@ -131,16 +159,19 @@ def test_fixture_source_runs_through_registry_and_runtime_merge_without_runtime_
         notes=None,
         requirement_sheet=_requirement_sheet(),
         source_query_terms=plan.query_intents,
-        budget=plan.budget,
+        source_budget_policy=RuntimeSourceBudgetPolicy(
+            card_target=plan.budget.card_target,
+            detail_target=plan.budget.detail_target,
+            scan_limit=plan.budget.scan_limit,
+        ),
     )
 
     source_result = asyncio.run(source.run_card_lane(request))
-    runtime_result = runtime_source_lane_result_from_source_result(source_result)
     run_state = _run_state()
 
     apply_source_lane_result(
         run_state=run_state,
-        result=runtime_result,
+        result=source_result,
         source_order={"fixture_source": 0},
     )
 

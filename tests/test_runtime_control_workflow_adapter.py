@@ -29,7 +29,7 @@ def test_workflow_adapter_persists_run_and_runtime_callbacks(tmp_path: Path) -> 
     runtime = CallbackRuntime()
     executor = WorkflowRuntimeExecutor(
         store=store,
-        runtime_factory=lambda *, source_operation_executor=None: runtime,
+        runtime_factory=lambda *, source_registry=None: runtime,
         runtime_run_id_factory=lambda: "runtime_run_1",
         executor_id_factory=lambda: "executor_1",
         checkpoint_id_factory=lambda: "rtcheckpoint_1",
@@ -97,7 +97,7 @@ def test_workflow_adapter_persists_private_detail_claim_map_without_exposing_che
     store.initialize()
     executor = WorkflowRuntimeExecutor(
         store=store,
-        runtime_factory=lambda *, source_operation_executor=None: CallbackRuntime(
+        runtime_factory=lambda *, source_registry=None: CallbackRuntime(
             checkpoint_run_state={"detail_open_claims_by_provider_key": claim_map}
         ),
         runtime_run_id_factory=lambda: "runtime_run_1",
@@ -158,7 +158,7 @@ def test_workflow_adapter_supplies_liepin_source_context(tmp_path: Path) -> None
     executor = WorkflowRuntimeExecutor(
         store=store,
         settings=settings,
-        runtime_factory=lambda *, source_operation_executor=None: runtime,
+        runtime_factory=lambda *, source_registry=None: runtime,
         runtime_run_id_factory=lambda: "runtime_run_1",
         executor_id_factory=lambda: "executor_1",
         checkpoint_id_factory=lambda: "rtcheckpoint_1",
@@ -226,7 +226,7 @@ def test_workflow_adapter_records_failed_event_before_reraising_runtime_error(tm
     store.initialize()
     executor = WorkflowRuntimeExecutor(
         store=store,
-        runtime_factory=lambda *, source_operation_executor=None: FailingRuntime(),
+        runtime_factory=lambda *, source_registry=None: FailingRuntime(),
         runtime_run_id_factory=lambda: "runtime_run_1",
         executor_id_factory=lambda: "executor_1",
         now=_clock(
@@ -268,7 +268,7 @@ def test_workflow_adapter_records_runtime_run_failed_after_start_ack(tmp_path: P
     store.initialize()
     executor = WorkflowRuntimeExecutor(
         store=store,
-        runtime_factory=lambda *, source_operation_executor=None: PostStartFailingRuntime(),
+        runtime_factory=lambda *, source_registry=None: PostStartFailingRuntime(),
         runtime_run_id_factory=lambda: "runtime_run_1",
         executor_id_factory=lambda: "executor_1",
         now=_clock(
@@ -323,7 +323,7 @@ def test_browser_lane_contention_yields_same_durable_run_then_completes(
     approved = _approved_requirement()
     executor = WorkflowRuntimeExecutor(
         store=store,
-        runtime_factory=lambda *, source_operation_executor=None: next(runtimes),
+        runtime_factory=lambda *, source_registry=None: next(runtimes),
         runtime_run_id_factory=lambda: "runtime_run_lane_wait",
         executor_id_factory=lambda: "executor_unused",
         checkpoint_id_factory=lambda: "checkpoint_lane_wait",
@@ -427,7 +427,7 @@ def test_cross_process_lane_contention_keeps_run_durable_until_one_effect(
     )
     executor = WorkflowRuntimeExecutor(
         store=store,
-        runtime_factory=lambda *, source_operation_executor=None: (
+        runtime_factory=lambda *, source_registry=None: (
             _LaneGuardRuntime(store, effects)
         ),
         runtime_run_id_factory=lambda: "runtime_run_cross_process_lane",

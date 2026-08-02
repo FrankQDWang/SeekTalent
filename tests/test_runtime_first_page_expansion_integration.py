@@ -37,6 +37,7 @@ from seektalent.runtime import WorkflowRuntime
 from seektalent.runtime.orchestrator import RuntimeSourceRoundContext
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
+from tests.source_registry_fakes import install_source_execution_fakes
 
 
 from tests.test_runtime_state_flow import (
@@ -59,6 +60,26 @@ class RecordingExpansionReflection(SequenceReflection):
     async def reflect(self, *, context: ReflectionContext) -> ReflectionAdvice:
         self.contexts.append(context)
         return await super().reflect(context=context)
+
+
+def _install_test_source_execution(
+    runtime: WorkflowRuntime,
+    *,
+    source_ids: tuple[str, ...],
+    adapters,
+    expanders=None,
+    first_page_source_ids: tuple[str, ...] = (),
+) -> None:
+    install_source_execution_fakes(
+        runtime,
+        source_ids=source_ids,
+        round_adapter_provider=adapters,
+        first_page_expander_provider=expanders,
+        first_page_source_ids=first_page_source_ids,
+    )
+    runtime_any = cast(Any, runtime)
+    runtime_any._test_round_adapter_provider = adapters
+    runtime_any._test_first_page_expander_provider = expanders
 
 
 def test_expansion_candidates_are_scored_and_visible_to_reflection_in_the_same_round(tmp_path: Path) -> None:
@@ -168,8 +189,13 @@ def test_expansion_candidates_are_scored_and_visible_to_reflection_in_the_same_r
             continuation_deleted=True,
         )
 
-    runtime_any.source_round_adapter_provider = adapters
-    runtime_any.source_first_page_expander_provider = lambda _runtime, _ledger: {"liepin": expand}
+    _install_test_source_execution(
+        runtime,
+        source_ids=("liepin",),
+        adapters=adapters,
+        expanders=lambda _runtime, _ledger: {"liepin": expand},
+        first_page_source_ids=("liepin",),
+    )
     artifacts = runtime.run(
         source_kinds=["liepin"], job_title="AI Agent Engineer", jd="Build production agent systems.", notes=""
     )
@@ -312,8 +338,13 @@ def _integrated_expansion_runtime(tmp_path: Path, *, scorer: object | None = Non
             continuation_deleted=True,
         )
 
-    runtime_any.source_round_adapter_provider = adapters
-    runtime_any.source_first_page_expander_provider = lambda _runtime, _ledger: {"liepin": expander}
+    _install_test_source_execution(
+        runtime,
+        source_ids=("liepin",),
+        adapters=adapters,
+        expanders=lambda _runtime, _ledger: {"liepin": expander},
+        first_page_source_ids=("liepin",),
+    )
     return runtime, runtime_any, actions
 
 
@@ -513,14 +544,17 @@ def test_integrated_cleanup_writer_failure_preserves_primary_exception(tmp_path:
 def test_integrated_missing_expander_preflight_zero_provider_calls_or_files(tmp_path: Path) -> None:
     runtime, runtime_any, _actions = _integrated_expansion_runtime(tmp_path)
     provider_calls: list[str] = []
-    original_provider = runtime_any.source_round_adapter_provider
+    original_provider = runtime_any._test_round_adapter_provider
 
     def recording_provider(*args, **kwargs):
         provider_calls.append("provider")
         return original_provider(*args, **kwargs)
 
-    runtime_any.source_round_adapter_provider = recording_provider
-    runtime_any.source_first_page_expander_provider = lambda _runtime, _ledger: {}
+    _install_test_source_execution(
+        runtime,
+        source_ids=("liepin",),
+        adapters=recording_provider,
+    )
     with pytest.raises(RuntimeSourceInvariantError, match="first_page_expander_unavailable"):
         _run_integrated_round(runtime, tmp_path)
     assert provider_calls == []
@@ -581,7 +615,6 @@ def test_integrated_non_liepin_no_expander_calls_or_files(tmp_path: Path) -> Non
         calls.append("transport")
         raise AssertionError("non-Liepin expansion transport must not run")
 
-    cast(Any, runtime).source_first_page_expander_provider = lambda _runtime, _ledger: {"cts": forbidden_expander}
     artifacts = runtime.run(
         source_kinds=["cts"],
         job_title="AI Agent Engineer",
@@ -761,8 +794,8 @@ def test_integrated_dual_lane_completed_partial_receipts_observation_reflection(
         return [first, second], decision
 
     runtime_any._build_round_query_bundle = dual_bundle
-    registry = runtime_any.source_first_page_expander_provider(runtime, None)
-    original = registry["liepin"]
+    original_provider = runtime_any._test_first_page_expander_provider
+    original = original_provider(runtime, None)["liepin"]
 
     async def partial(request: SourceFirstPageExpansionRequest) -> SourceFirstPageExpansionResult:
         if request.action == "discard":
@@ -794,7 +827,13 @@ def test_integrated_dual_lane_completed_partial_receipts_observation_reflection(
             continuation_deleted=True,
         )
 
-    runtime_any.source_first_page_expander_provider = lambda _runtime, _ledger: {"liepin": partial}
+    _install_test_source_execution(
+        runtime,
+        source_ids=("liepin",),
+        adapters=runtime_any._test_round_adapter_provider,
+        expanders=lambda _runtime, _ledger: {"liepin": partial},
+        first_page_source_ids=("liepin",),
+    )
     tracer = _run_integrated_round(runtime, tmp_path)
     assert reflection.contexts
     context = reflection.contexts[0]
@@ -912,7 +951,13 @@ def test_integrated_alias_bridge_final_identity_counts(tmp_path: Path) -> None:
             continuation_deleted=True,
         )
 
-    runtime_any.source_first_page_expander_provider = lambda _runtime, _ledger: {"liepin": alias_expander}
+    _install_test_source_execution(
+        runtime,
+        source_ids=("liepin",),
+        adapters=runtime_any._test_round_adapter_provider,
+        expanders=lambda _runtime, _ledger: {"liepin": alias_expander},
+        first_page_source_ids=("liepin",),
+    )
     try:
         _run_integrated_round(runtime, tmp_path, prepare_run_state=seed_prior)
     finally:

@@ -15,9 +15,12 @@ from seektalent_workbench_v2.runtime_service import WorkbenchV2RuntimeService
 from tests.settings_factory import make_settings
 
 
+ROOT = Path(__file__).resolve().parents[1]
+
+
 class _NoopRuntime:
-    def __init__(self, _settings: AppSettings, *, source_operation_executor: object | None = None) -> None:
-        self.source_operation_executor = source_operation_executor
+    def __init__(self, _settings: AppSettings, *, source_registry: object | None = None) -> None:
+        self.source_registry = source_registry
 
     async def run_async(self, **_kwargs: object) -> object:
         return object()
@@ -80,6 +83,41 @@ def test_dev_prod_difference_allowlist_excludes_runtime_and_source_execution() -
     }
     assert "runtime_composition" not in DEV_PROD_PARITY_DIFFERENCE_ALLOWLIST
     assert "source_operation_execution" not in DEV_PROD_PARITY_DIFFERENCE_ALLOWLIST
+
+
+def test_source_execution_dispatch_is_registry_owned() -> None:
+    runtime_composition = (ROOT / "src/seektalent/runtime/composition.py").read_text(
+        encoding="utf-8"
+    )
+    runtime_orchestrator = (ROOT / "src/seektalent/runtime/orchestrator.py").read_text(
+        encoding="utf-8"
+    )
+    runtime_executor = (
+        ROOT / "src/seektalent_runtime_control/executor.py"
+    ).read_text(encoding="utf-8")
+    source_registry = (
+        ROOT / "src/seektalent/source_adapters/registry.py"
+    ).read_text(encoding="utf-8")
+    source_adapters_facade = (
+        ROOT / "src/seektalent/source_adapters/__init__.py"
+    ).read_text(encoding="utf-8")
+    provider_plugins = (
+        ROOT / "src/seektalent/providers/plugins.py"
+    ).read_text(encoding="utf-8")
+    runtime_execution = (
+        ROOT / "src/seektalent_ui/runtime_execution.py"
+    ).read_text(encoding="utf-8")
+
+    assert "source_lane_request_runner" not in runtime_composition
+    assert "source_operation_executor" not in runtime_composition
+    assert "source_lane_request_runner" not in runtime_orchestrator
+    assert "source_operation_executor" not in runtime_orchestrator
+    assert "RuntimeLike" not in runtime_executor
+    assert "build_source_lane_request_runner" not in source_registry
+    assert "build_source_lane_request_runner" not in source_adapters_facade
+    assert "default_source_round_adapter_provider" not in source_adapters_facade
+    assert "liepin_source_operation_executor" not in provider_plugins
+    assert runtime_execution.count("WorkflowRuntimeExecutor(") == 1
 
 
 def test_prod_openapi_exposes_only_v2_agent_surface(tmp_path: Path) -> None:

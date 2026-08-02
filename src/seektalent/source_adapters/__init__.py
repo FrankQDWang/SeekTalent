@@ -81,7 +81,6 @@ from .registry import (
     _registered_liepin_source as _registered_liepin_source,
     _source_plan_builder as _source_plan_builder,
     build_default_source_registry as build_default_source_registry,
-    build_source_lane_request_runner as build_source_lane_request_runner,
 )
 from .round_adapters import (
     _SOURCE_ROUND_STATUSES as _SOURCE_ROUND_STATUSES,
@@ -89,8 +88,6 @@ from .round_adapters import (
     _run_liepin_source_round as _run_liepin_source_round,
     _source_filter_warning_reason as _source_filter_warning_reason,
     _source_round_status as _source_round_status,
-    default_source_round_adapter_provider as default_source_round_adapter_provider,
-    default_source_first_page_expander_provider as default_source_first_page_expander_provider,
 )
 from .runtime_factory import (
     _build_provider_retrieval_service as _build_provider_retrieval_service,

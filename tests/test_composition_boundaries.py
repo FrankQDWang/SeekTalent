@@ -42,6 +42,7 @@ def test_source_adapter_composition_builds_explicit_runtime_dependencies() -> No
 
     assert composition.settings is settings
     assert composition.source_registry.get("cts").source_id == "cts"
-    assert composition.source_round_adapter_provider is not None
+    assert composition.source_registry.get("cts").build_round_adapter is not None
+    assert composition.source_registry.get("liepin").build_round_adapter is not None
     assert composition.source_query_policy_provider is not None
     assert composition.retrieval_service is not None

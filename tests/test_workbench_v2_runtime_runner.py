@@ -756,7 +756,7 @@ def _accept_run(
     store.save_approved_requirement(approved, idempotency_key=f"approved-{runtime_run_id}")
     enqueue_executor = WorkflowRuntimeExecutor(
         store=store,
-        runtime_factory=lambda *, source_operation_executor=None: object(),
+        runtime_factory=lambda *, source_registry=None: object(),
         runtime_run_id_factory=lambda: runtime_run_id,
         now=lambda: created_at,
     )

@@ -42,14 +42,14 @@ from seektalent.runtime.source_lanes import (
 )
 from seektalent.runtime.orchestrator import RunArtifacts, WorkflowRuntime
 from seektalent.runtime.source_round_dispatch import SourceRoundAdapterResult, SourceRoundDispatchResult
-from seektalent.source_adapters import build_source_lane_request_runner
+from seektalent.source_adapters import build_default_source_registry
 from seektalent.source_contracts import (
     LogicalQueryDispatch,
     RegisteredSource,
     SourceBudget,
     SourceCapabilities,
     SourceLaneRequest,
-    SourceLaneResult,
+    SourcePlan,
     SourceRegistry,
 )
 from seektalent.sources.provider_card_lane import run_provider_card_lane
@@ -145,25 +145,22 @@ def _source_registry_from_runtime_runners(
     runners: dict[str, object],
 ) -> SourceRegistry:
     def registered(source_id: str, runner: object) -> RegisteredSource:
-        async def run_card_lane(request: SourceLaneRequest) -> SourceLaneResult:
-            runtime_result = await runner(request)  # type: ignore[misc]
-            return SourceLaneResult(
-                runtime_run_id=runtime_result.runtime_run_id,
-                source_plan_id=runtime_result.source_plan_id,
-                source_lane_run_id=runtime_result.source_lane_run_id,
-                source_id=runtime_result.source,
-                lane_mode=runtime_result.lane_mode,
-                attempt=runtime_result.attempt,
-                status=runtime_result.status,
-                candidate_store_updates=dict(runtime_result.candidate_store_updates),
-                normalized_store_updates=dict(runtime_result.normalized_store_updates),
-                source_evidence_updates=tuple(runtime_result.source_evidence_updates),
-                raw_candidate_count=runtime_result.raw_candidate_count,
-                blocked_reason_code=runtime_result.blocked_reason_code,
-                stop_reason_code=runtime_result.stop_reason_code,
-                retryable=runtime_result.retryable,
-                safe_error_summary=runtime_result.safe_error_summary,
-                error_ref=runtime_result.error_ref,
+        async def run_card_lane(request: RuntimeSourceLaneRequest) -> RuntimeSourceLaneResult:
+            return await runner(request)  # type: ignore[misc,no-any-return]
+
+        def plan(
+            *,
+            runtime_run_id: str,
+            source_index: int,
+            budget_overrides: object,
+        ) -> SourcePlan:
+            del budget_overrides
+            return SourcePlan(
+                source_id=source_id,
+                source_plan_id=f"{runtime_run_id}:source:{source_index}:{source_id}",
+                runtime_run_id=runtime_run_id,
+                label=source_id,
+                budget=SourceBudget(card_target=10, detail_target=0, scan_limit=10),
             )
 
         return RegisteredSource(
@@ -171,17 +168,7 @@ def _source_registry_from_runtime_runners(
             label=source_id,
             capabilities=_source_capabilities(),
             default_budget=SourceBudget(card_target=10, detail_target=0, scan_limit=10),
-            plan=lambda *, source_id, runtime_run_id, budget: RuntimeSourceLanePlan(
-                source_plan_id=f"{runtime_run_id}:source:{source_id}",
-                runtime_run_id=runtime_run_id,
-                source=source_id,
-                label=source_id,
-                source_budget_policy=RuntimeSourceBudgetPolicy(
-                    card_target=budget.card_target,
-                    detail_target=budget.detail_target,
-                    scan_limit=budget.scan_limit,
-                ),
-            ),
+            plan=plan,
             run_card_lane=run_card_lane,
         )
 
@@ -1304,8 +1291,14 @@ def test_runtime_cts_source_lane_enforces_single_page_at_provider_request_bounda
 
 def test_runtime_liepin_card_source_lane_returns_delta_without_detail_open(tmp_path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"))
-    runtime = WorkflowRuntime(settings, source_lane_request_runner=build_source_lane_request_runner(settings))
     worker = _FakeLiepinWorker()
+    runtime = WorkflowRuntime(
+        settings,
+        source_registry=build_default_source_registry(
+            settings,
+            liepin_worker_client=worker,
+        ),
+    )
     request = RuntimeSourceLaneRequest(
         source="liepin",
         lane_mode="card",
@@ -1323,7 +1316,7 @@ def test_runtime_liepin_card_source_lane_returns_delta_without_detail_open(tmp_p
         },
     )
 
-    result = asyncio.run(runtime.run_source_lane_async(request, source_client=worker))
+    result = asyncio.run(runtime.run_source_lane_async(request))
 
     assert result.source == "liepin"
     assert result.lane_mode == "card"
@@ -1387,8 +1380,14 @@ def test_liepin_logical_query_bundle_records_executed_query_packages(tmp_path) -
 
 def test_runtime_liepin_detail_lane_requires_approved_lease(tmp_path) -> None:
     settings = make_settings(runs_dir=str(tmp_path / "runs"))
-    runtime = WorkflowRuntime(settings, source_lane_request_runner=build_source_lane_request_runner(settings))
     worker = _FakeLiepinWorker()
+    runtime = WorkflowRuntime(
+        settings,
+        source_registry=build_default_source_registry(
+            settings,
+            liepin_worker_client=worker,
+        ),
+    )
     request = RuntimeSourceLaneRequest(
         source="liepin",
         lane_mode="detail",
@@ -1399,7 +1398,7 @@ def test_runtime_liepin_detail_lane_requires_approved_lease(tmp_path) -> None:
         runtime_run_id="run-liepin",
     )
 
-    result = asyncio.run(runtime.run_source_lane_async(request, source_client=worker))
+    result = asyncio.run(runtime.run_source_lane_async(request))
 
     assert result.status == "blocked"
     assert result.blocked_reason_code == "blocked_approval_missing"
@@ -1481,8 +1480,8 @@ def test_approved_detail_enrichment_creates_new_finalization_revision(tmp_path, 
         approved_detail_lease=lease,
     )
 
-    async def fake_run_source_lane_async(request, *, source_client=None):
-        del request, source_client
+    async def fake_run_source_lane_async(request):
+        del request
         return RuntimeSourceLaneResult(
             runtime_run_id="run-1",
             source_plan_id="plan-liepin",

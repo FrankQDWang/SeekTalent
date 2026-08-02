@@ -52,8 +52,6 @@ def test_source_adapters_current_public_exports_stay_compatible() -> None:
     for name in (
         "build_source_enabled_runtime",
         "build_default_source_registry",
-        "build_source_lane_request_runner",
-        "default_source_round_adapter_provider",
         "default_source_query_policies",
         "public_source_reason_code",
         "_run_cts_source_round",
@@ -298,8 +296,6 @@ def test_source_adapters_is_import_compatible_package() -> None:
     assert (ROOT / "src/seektalent/source_adapters/__init__.py").exists()
     assert hasattr(source_adapters, "build_source_enabled_runtime")
     assert hasattr(source_adapters, "build_default_source_registry")
-    assert hasattr(source_adapters, "build_source_lane_request_runner")
-    assert hasattr(source_adapters, "default_source_round_adapter_provider")
     assert hasattr(source_adapters, "default_source_query_policies")
     assert hasattr(source_adapters, "public_source_reason_code")
     assert hasattr(source_adapters, "_run_cts_source_round")

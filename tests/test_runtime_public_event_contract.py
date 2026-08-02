@@ -20,6 +20,7 @@ from seektalent.runtime.source_round_dispatch import SourceRoundAdapterResult, S
 from seektalent.source_adapters import build_source_enabled_runtime
 from seektalent.tracing import RunTracer
 from tests.settings_factory import make_settings
+from tests.source_registry_fakes import install_source_execution_fakes
 from tests.test_runtime_state_flow import (
     GenericFallbackScorer,
     SequenceController,
@@ -746,10 +747,13 @@ def _multi_source_runtime_public_event_payloads(
         max_rounds=1,
         enable_eval=False,
     )
-    runtime = WorkflowRuntime(
-        settings,
-        source_round_adapter_provider=_completed_source_round_adapters,
-        source_first_page_expander_provider=_contract_valid_test_expanders,
+    runtime = WorkflowRuntime(settings)
+    install_source_execution_fakes(
+        runtime,
+        source_ids=source_kinds,
+        round_adapter_provider=_completed_source_round_adapters,
+        first_page_expander_provider=_contract_valid_test_expanders,
+        first_page_source_ids=("liepin",) if "liepin" in source_kinds else (),
     )
     _install_runtime_stubs(runtime, controller=SequenceController(), resume_scorer=GenericFallbackScorer())
     tracer = RunTracer(tmp_path / "trace-runs")

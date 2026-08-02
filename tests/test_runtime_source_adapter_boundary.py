@@ -5,7 +5,6 @@ import json
 from pathlib import Path
 
 import pytest
-from types import SimpleNamespace
 
 from seektalent.models import (
     AgeRequirement,
@@ -48,9 +47,9 @@ from seektalent.source_contracts.runtime_lanes import (
 from seektalent.providers.liepin.source_compiler import compile_liepin_source_query_intents
 from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation
 from seektalent.source_contracts.first_page_expansion import SourceFirstPageExpansionRequest, SourceFirstPageExpansionResult
-from seektalent.source_adapters.round_adapters import default_source_first_page_expander_provider
+from seektalent.source_adapters.registry import _registered_liepin_source
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
-import seektalent.source_adapters.round_adapters as round_adapters
+from tests.settings_factory import make_settings
 
 
 def test_source_neutral_expander_provider_forwards_action_and_maps_result(monkeypatch) -> None:
@@ -66,20 +65,26 @@ def test_source_neutral_expander_provider_forwards_action_and_maps_result(monkey
     async def fake_run(**kwargs):
         calls.append(kwargs)
         return expected
-    monkeypatch.setattr(round_adapters, "run_liepin_first_page_expansion", fake_run)
+    from seektalent.sources.liepin import runtime_lane
+
+    monkeypatch.setattr(runtime_lane, "run_liepin_first_page_expansion", fake_run)
     source_operation_executor = object()
-    runtime = SimpleNamespace(
-        settings=object(),
-        source_operation_executor=source_operation_executor,
+    settings = make_settings(
+        liepin_worker_mode="fake_fixture",
+        liepin_allow_fake_fixture_worker=True,
     )
     ledger = DetailOpenClaimLedger({})
-    expanders = default_source_first_page_expander_provider(runtime, ledger)
-    result = asyncio.run(expanders["liepin"](request))
+    source = _registered_liepin_source(
+        settings,
+        operation_executor=source_operation_executor,
+    )
+    assert source.build_first_page_expander is not None
+    expander = source.build_first_page_expander(ledger)
+    result = asyncio.run(expander(request))
     assert result is expected
-    assert calls == [{"settings": runtime.settings, "request": request,
+    assert calls == [{"settings": settings, "request": request,
         "detail_open_claim_ledger": ledger,
         "cards_operation_executor": source_operation_executor}]
-    assert set(expanders) == {"liepin"}
 
 
 def _requirement_sheet() -> RequirementSheet:

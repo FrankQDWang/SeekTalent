@@ -6,10 +6,7 @@ from seektalent.config import AppSettings
 from seektalent.core.retrieval.service import RetrievalService
 from seektalent.evaluation import AsyncJudgeLimiter
 from seektalent.runtime.orchestrator import (
-    RuntimeSourceLaneRequestRunner,
     RuntimeSourceQueryPolicyProvider,
-    RuntimeSourceRoundAdapterProvider,
-    RuntimeSourceFirstPageExpanderProvider,
     WorkflowRuntime,
 )
 from seektalent.source_contracts import SourceRegistry
@@ -19,12 +16,8 @@ from seektalent.source_contracts import SourceRegistry
 class RuntimeComposition:
     settings: AppSettings
     source_registry: SourceRegistry
-    source_lane_request_runner: RuntimeSourceLaneRequestRunner
-    source_round_adapter_provider: RuntimeSourceRoundAdapterProvider
-    source_first_page_expander_provider: RuntimeSourceFirstPageExpanderProvider
     source_query_policy_provider: RuntimeSourceQueryPolicyProvider
     retrieval_service: RetrievalService
-    source_operation_executor: object | None = None
     judge_limiter: AsyncJudgeLimiter | None = None
     eval_remote_logging: bool = True
 
@@ -33,12 +26,8 @@ def build_workflow_runtime(composition: RuntimeComposition) -> WorkflowRuntime:
     return WorkflowRuntime(
         composition.settings,
         source_registry=composition.source_registry,
-        source_lane_request_runner=composition.source_lane_request_runner,
-        source_round_adapter_provider=composition.source_round_adapter_provider,
-        source_first_page_expander_provider=composition.source_first_page_expander_provider,
         source_query_policy_provider=composition.source_query_policy_provider,
         retrieval_service=composition.retrieval_service,
-        source_operation_executor=composition.source_operation_executor,
         judge_limiter=composition.judge_limiter,
         eval_remote_logging=composition.eval_remote_logging,
     )
