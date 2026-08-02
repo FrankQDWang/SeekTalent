@@ -8,13 +8,6 @@ from typing import TYPE_CHECKING, Literal
 from seektalent.opencli_browser.contracts import OpenCliBrowserError, OpenCliBrowserResult
 from seektalent.providers.liepin.liepin_site_parsing import _opencli_result_text
 from seektalent.providers.liepin.opencli_filter_planning import (
-    native_filter_city_confirm_ref,
-    native_filter_city_picker_selection_contains,
-    native_filter_city_overseas_tab_ref,
-    native_filter_city_picker_option_visible,
-    native_filter_city_search_input_ref,
-    native_filter_city_search_input_matches,
-    native_filter_option_visible_in_section,
     native_filter_selection_applied,
 )
 
@@ -45,27 +38,22 @@ def observe_picker_ready(
             state_text = _opencli_result_text(state)
             if native_filter_selection_applied(state_text, section=section, label=label):
                 reason = "requested_city_already_applied"
-            elif native_filter_city_search_input_ref(state_text) is not None:
-                reason = "city_search_input_ready"
-            elif native_filter_city_picker_option_visible(state_text, label=label):
-                reason = "requested_city_option_ready"
             else:
                 picker_state, probe_evidence = _picker_state_for_readiness(
                     site,
                     section=section,
                 )
-                if picker_state is not None and picker_state.get("readinessIncomplete") is True:
-                    reason = "city_picker_probe_incomplete"
-                elif picker_state is not None and _picker_selection_contains(picker_state, label=label):
-                    reason = "requested_city_selected"
-                elif picker_state is not None and _picker_candidate_ref(picker_state, label=label):
-                    reason = "requested_city_option_ready"
-                elif picker_state is not None and isinstance(
-                    picker_state.get("searchInputRef"), str
-                ):
-                    reason = "city_search_input_ready"
+                if picker_state is None:
+                    reason = "city_picker_probe_unavailable"
                 else:
-                    reason = "city_picker_not_ready"
+                    decision, _ref = decide_picker_action(picker_state, label=label)
+                    reason = {
+                        "confirm_selection": "requested_city_selected",
+                        "fill_search": "city_search_input_ready",
+                        "select_candidate": "requested_city_option_ready",
+                        "closed": "city_picker_not_ready",
+                        "wait": "city_picker_probe_incomplete",
+                    }[decision]
         events.append(
             {
                 "action_kind": "observe_native_filter_menu",
@@ -91,7 +79,11 @@ def observe_picker_ready(
                     "already_applied": True,
                 }
             )
-        if reason not in {"city_picker_not_ready", "city_picker_probe_incomplete"}:
+        if reason not in {
+            "city_picker_not_ready",
+            "city_picker_probe_incomplete",
+            "city_picker_probe_unavailable",
+        }:
             return state
     raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
 
@@ -106,27 +98,15 @@ def find_liepin_city_filter_option(
     before_effect: Callable[[], None],
 ) -> tuple[OpenCliBrowserResult, str | None]:
     state = current_state
-    state_text = _opencli_result_text(state)
-    picker_state = _picker_state_or_none(site, section=section)
-    if (
-        picker_state is not None
-        and _picker_search_matches(picker_state, label=label)
-        and (candidate_ref := _picker_candidate_ref(picker_state, label=label)) is not None
-    ):
-        return state, candidate_ref
-    if picker_state is None and native_filter_option_visible_in_section(
-        state_text, section=section, label=label
-    ):
-        return state, None
-    input_ref = None
-    if picker_state is not None:
-        probe_input_ref = picker_state.get("searchInputRef")
-        input_ref = probe_input_ref if isinstance(probe_input_ref, str) else None
-    else:
-        input_ref = native_filter_city_search_input_ref(state_text)
-    if input_ref is not None:
+    decision, ref = decide_picker_action(
+        _read_picker_state(site, section=section),
+        label=label,
+    )
+    if decision == "select_candidate" and ref is not None:
+        return state, ref
+    if decision == "fill_search" and ref is not None:
         before_effect()
-        site.fill(target=input_ref, text=label)
+        site.fill(target=ref, text=label)
         events.append(
             {"action_kind": "fill_native_city_filter_search", "filter": "city", "value": label, "ok": True}
         )
@@ -137,45 +117,9 @@ def find_liepin_city_filter_option(
             phase="search",
             events=events,
         )
-        state_text = _opencli_result_text(state)
-        if (
-            picker_state is not None
-            and _picker_search_matches(picker_state, label=label)
-            and (candidate_ref := _picker_candidate_ref(picker_state, label=label)) is not None
-        ):
-            return state, candidate_ref
-        if (
-            picker_state is None
-            and native_filter_city_search_input_matches(state_text, label=label)
-            and native_filter_option_visible_in_section(state_text, section=section, label=label)
-        ):
-            return state, None
-    if (overseas_ref := native_filter_city_overseas_tab_ref(state_text)) is not None:
-        before_effect()
-        site._click_native_filter_ref(overseas_ref)
-        events.append(
-            {"action_kind": "open_native_city_overseas_tab", "filter": "city", "value": label, "ok": True}
-        )
-        state, picker_state = _observe_city_option(
-            site,
-            section=section,
-            label=label,
-            phase="overseas",
-            events=events,
-        )
-        state_text = _opencli_result_text(state)
-        if (
-            picker_state is not None
-            and _picker_search_matches(picker_state, label=label)
-            and (candidate_ref := _picker_candidate_ref(picker_state, label=label)) is not None
-        ):
-            return state, candidate_ref
-        if (
-            picker_state is None
-            and native_filter_city_search_input_matches(state_text, label=label)
-            and native_filter_option_visible_in_section(state_text, section=section, label=label)
-        ):
-            return state, None
+        decision, ref = decide_picker_action(picker_state, label=label)
+        if decision == "select_candidate" and ref is not None:
+            return state, ref
     raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
 
 
@@ -186,36 +130,33 @@ def _observe_city_option(
     label: str,
     phase: str,
     events: list[dict[str, object]],
-) -> tuple[OpenCliBrowserResult, dict[str, object] | None]:
+) -> tuple[OpenCliBrowserResult, dict[str, object]]:
     for attempt in range(1, 3):
         if attempt > 1:
             site.wait_time(seconds=1)
         state = site.state()
-        picker_state = _picker_state_or_none(site, section=section)
+        picker_state: dict[str, object] | None = None
+        decision = "wait"
+        try:
+            picker_state = _read_picker_state(site, section=section)
+            decision, _ref = decide_picker_action(picker_state, label=label)
+        except OpenCliBrowserError as exc:
+            if exc.safe_reason_code != "liepin_opencli_status_unavailable":
+                raise
         events.append(
             {
                 "action_kind": f"observe_native_city_filter_{phase}",
                 "filter": "city",
                 "ok": state.ok,
                 "attempt": attempt,
+                "decision": decision,
             }
         )
         if not state.ok:
             raise OpenCliBrowserError(state.safe_reason_code)
-        state_text = _opencli_result_text(state)
-        probe_ready = (
-            picker_state is not None
-            and _picker_search_matches(picker_state, label=label)
-            and _picker_candidate_ref(picker_state, label=label) is not None
-        )
-        state_fallback_ready = (
-            picker_state is None
-            and native_filter_city_search_input_matches(state_text, label=label)
-            and native_filter_option_visible_in_section(state_text, section=section, label=label)
-        )
-        if probe_ready or state_fallback_ready or attempt == 2:
+        if picker_state is not None and decision == "select_candidate":
             return state, picker_state
-    raise AssertionError("unreachable")
+    raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
 
 
 def picker_selection_contains(payload: dict[str, object], *, label: str) -> bool:
@@ -232,31 +173,36 @@ def picker_confirm_ref(payload: dict[str, object]) -> str | None:
     return unique_refs[0] if len(unique_refs) == 1 else None
 
 
-def picker_control_ref(site: LiepinSiteAdapter, *, section: str) -> str | None:
-    try:
-        payload = _read_picker_state(site, section=section)
-    except OpenCliBrowserError as exc:
-        if exc.safe_reason_code == "liepin_opencli_status_unavailable":
-            return None
-        raise
+def decide_picker_action(
+    payload: dict[str, object],
+    *,
+    label: str,
+) -> tuple[
+    Literal["closed", "wait", "fill_search", "select_candidate", "confirm_selection"],
+    str | None,
+]:
+    if payload.get("pickerPhase") in {"input_hidden", "input_visible_root_incomplete"}:
+        return "wait", None
+    if payload.get("open") is not True:
+        return "closed", None
+    if picker_selection_contains(payload, label=label):
+        confirm_ref = picker_confirm_ref(payload)
+        return ("confirm_selection", confirm_ref) if confirm_ref is not None else ("wait", None)
+    candidate_ref = _picker_candidate_ref(payload, label=label)
+    if candidate_ref is not None:
+        return "select_candidate", candidate_ref
+    input_ref = payload.get("searchInputRef")
+    if isinstance(input_ref, str):
+        return "fill_search", input_ref
+    return "wait", None
+
+
+def picker_control_ref(site: LiepinSiteAdapter, *, section: str) -> str:
+    payload = _read_picker_state(site, section=section)
     control_ref = payload.get("controlRef")
     if not isinstance(control_ref, str):
         raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
     return control_ref
-
-
-def picker_open_state(
-    site: LiepinSiteAdapter,
-    *,
-    section: str,
-) -> Literal["open", "closed", "unavailable"]:
-    try:
-        payload = _read_picker_state(site, section=section)
-    except OpenCliBrowserError as exc:
-        if exc.safe_reason_code == "liepin_opencli_status_unavailable":
-            return "unavailable"
-        raise
-    return "open" if payload.get("open") is True else "closed"
 
 
 def pending_confirm_ref(
@@ -264,15 +210,13 @@ def pending_confirm_ref(
     *,
     section: str,
     label: str,
-    state_text: str,
 ) -> tuple[bool, str | None]:
-    payload = _picker_state_or_none(site, section=section)
-    if payload is not None:
-        if picker_selection_contains(payload, label=label):
-            return True, picker_confirm_ref(payload)
-        return False, None
-    if native_filter_city_picker_selection_contains(state_text, label=label):
-        return True, native_filter_city_confirm_ref(state_text)
+    decision, ref = decide_picker_action(
+        _read_picker_state(site, section=section),
+        label=label,
+    )
+    if decision == "confirm_selection":
+        return True, ref
     return False, None
 
 
@@ -282,7 +226,6 @@ def resolve_picker_action(
     section: str,
     label: str,
     state: OpenCliBrowserResult,
-    state_text: str,
     events: list[dict[str, object]],
     before_effect: Callable[[], None],
 ) -> tuple[OpenCliBrowserResult, str | None, bool, str | None]:
@@ -290,7 +233,6 @@ def resolve_picker_action(
         site,
         section=section,
         label=label,
-        state_text=state_text,
     )
     if pending_confirm:
         if confirm_ref is None:
@@ -334,20 +276,25 @@ def reconcile_city_filter_effect(
             if native_filter_selection_applied(state_text, section=section, label=label):
                 reason = "requested_city_applied"
             else:
-                picker_state = _picker_state_or_none(site, section=section)
-                if picker_state is None:
-                    if native_filter_city_picker_selection_contains(state_text, label=label):
-                        confirm_ref = native_filter_city_confirm_ref(state_text)
-                        reason = "requested_city_selected"
-                    else:
-                        reason = "city_picker_probe_unavailable"
-                elif _picker_selection_contains(picker_state, label=label):
-                    confirm_ref = picker_confirm_ref(picker_state)
-                    reason = "requested_city_selected"
-                elif picker_state.get("open") is True:
-                    reason = "requested_city_not_selected"
+                try:
+                    decision, decision_ref = decide_picker_action(
+                        _read_picker_state(site, section=section),
+                        label=label,
+                    )
+                except OpenCliBrowserError as exc:
+                    if exc.safe_reason_code != "liepin_opencli_status_unavailable":
+                        raise
+                    decision = "wait"
+                    decision_ref = None
+                    reason = "city_picker_probe_unavailable"
                 else:
-                    reason = "city_picker_closed_unapplied"
+                    if decision == "confirm_selection":
+                        confirm_ref = decision_ref
+                        reason = "requested_city_selected"
+                    elif decision == "closed":
+                        reason = "city_picker_closed_unapplied"
+                    else:
+                        reason = "requested_city_not_selected"
         events.append(
             {
                 "action_kind": "observe_after_native_city_filter_effect",
@@ -540,19 +487,6 @@ def parse_picker_probe_output(
     return payload
 
 
-def _picker_state_or_none(
-    site: LiepinSiteAdapter,
-    *,
-    section: str,
-) -> dict[str, object] | None:
-    try:
-        return _read_picker_state(site, section=section)
-    except OpenCliBrowserError as exc:
-        if exc.safe_reason_code == "liepin_opencli_status_unavailable":
-            return None
-        raise
-
-
 def _picker_state_for_readiness(
     site: LiepinSiteAdapter,
     *,
@@ -603,13 +537,6 @@ def _read_picker_state(
         section=section,
         allow_incomplete_open=allow_incomplete_open,
     )
-
-
-def _picker_search_matches(payload: dict[str, object], *, label: str) -> bool:
-    if payload.get("open") is not True:
-        return False
-    value = payload.get("searchValue")
-    return isinstance(value, str) and _normalized_city(value) == _normalized_city(label)
 
 
 def _picker_selection_contains(payload: dict[str, object], *, label: str) -> bool:

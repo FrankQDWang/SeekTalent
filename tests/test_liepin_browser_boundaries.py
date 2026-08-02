@@ -616,6 +616,56 @@ def test_native_filter_effect_failure_does_not_repeat_selection(
     assert selection_calls == 1
 
 
+def test_city_filter_never_uses_page_text_when_focused_probe_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = LiepinSiteAdapter(
+        browser_config=OpenCliBrowserConfig(
+            session="seektalent-city-probe-unavailable",
+            timeout_seconds=10,
+            pacing_enabled=False,
+        ),
+        site_config=LiepinOpenCliSiteConfig(
+            allowed_hosts=("h.liepin.com",),
+            allowed_start_urls=(LIEPIN_RECRUITER_SEARCH_URL,),
+        ),
+        automation=object(),  # type: ignore[arg-type]
+    )
+    state = OpenCliBrowserResult(ok=True, action="state", private_output="page text claims 上海 is visible")
+    monkeypatch.setattr(
+        "seektalent.providers.liepin.liepin_site_adapter.native_filter_selection_applied",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "seektalent.providers.liepin.liepin_site_adapter.native_filter_option_visible_in_section",
+        lambda *_args, **_kwargs: True,
+    )
+    monkeypatch.setattr(runner, "state", lambda: state)
+
+    def unavailable_probe(**_kwargs: object) -> str:
+        raise OpenCliBrowserError("liepin_opencli_status_unavailable")
+
+    monkeypatch.setattr(runner, "_liepin_city_picker_control_ref", unavailable_probe)
+    page_text_clicks = 0
+
+    def click_page_text(*_args: object, **_kwargs: object) -> None:
+        nonlocal page_text_clicks
+        page_text_clicks += 1
+
+    monkeypatch.setattr(runner, "_click_native_filter_option", click_page_text)
+
+    with pytest.raises(OpenCliBrowserError, match="liepin_opencli_status_unavailable"):
+        runner._select_liepin_native_filter(
+            filter_name="city",
+            section="expected",
+            label="上海",
+            current_state=state,
+            events=[],
+        )
+
+    assert page_text_clicks == 0
+
+
 def _opencli_tab_url_is_blocked(runner: LiepinSiteAdapter, url: str) -> bool:
     try:
         runner._validate_tab_new_url(url)

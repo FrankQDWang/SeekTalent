@@ -2755,18 +2755,13 @@ class LiepinSiteAdapter:
                         }
                     )
                     return state
-                force_city_picker = exact_city_filter and attempt_index > 0 and not city_picker_active
                 if not city_picker_active and (
-                    force_city_picker
+                    exact_city_filter
                     or not native_filter_option_visible_in_section(state_text, section=section, label=label)
                 ):
-                    control_authority = "state_fallback"
                     if exact_city_filter:
-                        control_ref = self._liepin_city_choose_ref_from_dom(section=section)
-                        if control_ref is not None:
-                            control_authority = "focused_probe"
-                        else:
-                            control_ref = native_filter_control_ref_in_section(state_text, section=section)
+                        control_ref = self._liepin_city_picker_control_ref(section=section)
+                        control_authority = "focused_probe"
                     else:
                         control_ref = native_filter_control_ref_in_section(state_text, section=section)
                     mark_filter_effect_started()
@@ -2798,7 +2793,7 @@ class LiepinSiteAdapter:
                         return state
                 if city_picker_active:
                     state, city_option_ref, pending_confirm, confirm_ref = city_picker.resolve_picker_action(
-                        self, section=section, label=label, state=state, state_text=state_text,
+                        self, section=section, label=label, state=state,
                         events=events, before_effect=mark_filter_effect_started,
                     )
                     state_text = _opencli_result_text(state)
@@ -2923,7 +2918,7 @@ class LiepinSiteAdapter:
                     raise OpenCliBrowserError(state.safe_reason_code)
         return state
 
-    def _liepin_city_choose_ref_from_dom(self, *, section: str) -> str | None:
+    def _liepin_city_picker_control_ref(self, *, section: str) -> str:
         return city_picker.picker_control_ref(self, section=section)
 
     def _liepin_search_query_value_from_dom(self, *, ref: str) -> str:

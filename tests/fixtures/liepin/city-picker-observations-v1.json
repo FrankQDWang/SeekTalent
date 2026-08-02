@@ -1,0 +1,106 @@
+{
+  "schema_version": "seektalent.liepin_city_picker_replay.v1",
+  "cases": [
+    {
+      "name": "input_visible_root_incomplete",
+      "allow_incomplete_open": true,
+      "observation": {
+        "schema_version": "seektalent.liepin_city_picker.v1",
+        "section": "expected",
+        "open": false,
+        "searchValue": "",
+        "candidates": [],
+        "selectedCities": [],
+        "confirmRefs": [],
+        "pickerPhase": "input_visible_root_incomplete",
+        "searchInputPresent": true,
+        "searchInputVisible": true,
+        "citySurfacePresent": false,
+        "confirmPresent": false
+      },
+      "expected_decision": "wait",
+      "expected_ref": null
+    },
+    {
+      "name": "search_input_ready",
+      "observation": {
+        "schema_version": "seektalent.liepin_city_picker.v1",
+        "section": "expected",
+        "open": true,
+        "searchInputRef": "60",
+        "searchValue": "",
+        "candidates": [],
+        "selectedCities": [],
+        "confirmRefs": ["66"],
+        "pickerPhase": "open",
+        "searchInputPresent": true,
+        "searchInputVisible": true,
+        "citySurfacePresent": true,
+        "confirmPresent": true
+      },
+      "expected_decision": "fill_search",
+      "expected_ref": "60"
+    },
+    {
+      "name": "candidate_ready",
+      "observation": {
+        "schema_version": "seektalent.liepin_city_picker.v1",
+        "section": "expected",
+        "open": true,
+        "searchInputRef": "60",
+        "searchValue": "上海",
+        "candidates": [
+          {"ref": "64", "kind": "suggestion", "label": "中国 · 上海"}
+        ],
+        "selectedCities": [],
+        "confirmRefs": ["66"],
+        "pickerPhase": "open",
+        "searchInputPresent": true,
+        "searchInputVisible": true,
+        "citySurfacePresent": true,
+        "confirmPresent": true
+      },
+      "expected_decision": "select_candidate",
+      "expected_ref": "64"
+    },
+    {
+      "name": "selection_pending_confirmation",
+      "observation": {
+        "schema_version": "seektalent.liepin_city_picker.v1",
+        "section": "expected",
+        "open": true,
+        "searchInputRef": "60",
+        "searchValue": "上海",
+        "candidates": [],
+        "selectedCities": ["上海"],
+        "confirmRefs": ["66"],
+        "pickerPhase": "open",
+        "searchInputPresent": true,
+        "searchInputVisible": true,
+        "citySurfacePresent": true,
+        "confirmPresent": true
+      },
+      "expected_decision": "confirm_selection",
+      "expected_ref": "66"
+    },
+    {
+      "name": "picker_closed",
+      "observation": {
+        "schema_version": "seektalent.liepin_city_picker.v1",
+        "section": "expected",
+        "open": false,
+        "searchValue": "",
+        "candidates": [],
+        "selectedCities": [],
+        "confirmRefs": [],
+        "pickerPhase": "closed",
+        "searchInputPresent": false,
+        "searchInputVisible": false,
+        "citySurfacePresent": false,
+        "confirmPresent": false
+      },
+      "expected_decision": "closed",
+      "expected_ref": null
+    }
+  ]
+}

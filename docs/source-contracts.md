@@ -50,6 +50,11 @@ Provider production code must follow these rules:
 - Keep provider DTOs, transport clients, and browser/worker mechanics provider-local.
 - Use source/provider-local structural protocols when provider compilers need runtime-shaped values.
 - Return provider facts through source/retrieval contracts rather than leaking provider internals into runtime.
+- A browser transition may poll read-only state before or after an effect, but it
+  must not repeat the effect inside that transition.
+- Liepin city-picker decisions use the bounded focused probe as their only
+  action authority. Whole-page text may verify the final applied filter, but it
+  must not supply fallback refs or authorize a different click path.
 
 ## Adding A Source
 
