@@ -1,1 +1,2 @@
 src/seektalent_ui/static/workbench/_app/*.js whitespace=-blank-at-eol,-blank-at-eof,-space-before-tab
+acceptance/fixtures/*.json text eol=lf

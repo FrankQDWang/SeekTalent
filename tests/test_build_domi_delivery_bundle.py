@@ -189,6 +189,15 @@ def test_delivery_installers_default_to_the_adjacent_exact_product_bundle() -> N
     assert "npm install" not in powershell
 
 
+def test_acceptance_fixture_checkout_is_forced_to_lf() -> None:
+    root = Path(__file__).resolve().parents[1]
+    attributes = (root / ".gitattributes").read_text(encoding="utf-8").splitlines()
+    fixture = root / "acceptance" / "fixtures" / "liepin-ai-agent-engineer-v1.json"
+
+    assert "acceptance/fixtures/*.json text eol=lf" in attributes
+    assert b"\r\n" not in fixture.read_bytes()
+
+
 def test_host_start_scripts_require_domi_runtime_and_use_installed_package() -> None:
     root = Path(__file__).resolve().parents[1]
     posix = (root / "scripts" / "start-seektalent-domi.sh").read_text(encoding="utf-8")
