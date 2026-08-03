@@ -359,6 +359,88 @@ def test_next_round_requirement_retargets_locked_round_and_activates_at_boundary
     ]
 
 
+@pytest.mark.parametrize(
+    "fault_point",
+    [
+        "after_applied_event",
+        "after_amendment_update",
+        "after_run_revision_update",
+        "after_activated_event",
+    ],
+)
+def test_requirement_activation_failure_cannot_leave_applied_amendment_on_old_revision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    fault_point: str,
+) -> None:
+    from seektalent_runtime_control.commands import RuntimeCommandService
+
+    store = _store_with_approved_run(tmp_path)
+    store.acquire_executor_lease(
+        runtime_run_id="runtime_run_1",
+        executor_id="executor_1",
+        acquired_at="2026-06-08T00:00:00.000000Z",
+        lease_expires_at="2026-06-08T00:01:00.000000Z",
+    )
+    service = RuntimeCommandService(
+        store=store,
+        requirement_normalizer=FakeRequirementNormalizer(),
+        amendment_id_factory=lambda: "reqamend_atomic",
+        approved_requirement_id_factory=lambda: "reqapproved_atomic",
+        now=lambda: "2026-06-08T00:00:01.000000Z",
+    )
+    amendment = service.submit_next_round_requirement(
+        runtime_run_id="runtime_run_1",
+        text="Add Kafka.",
+        target_section_hint="must_have_capabilities",
+        idempotency_key="amend-atomic",
+    )
+    prepared = service.prepare_next_round_requirements_at_boundary(
+        runtime_run_id="runtime_run_1",
+        executor_id="executor_1",
+        round_no=3,
+    )
+
+    activate = store.activate_requirement_amendment_at_boundary
+
+    def activate_with_fault(**kwargs):
+        def inject(point: str) -> None:
+            if point == fault_point:
+                raise RuntimeError(f"fault:{point}")
+
+        return activate(**kwargs, fault_injector=inject)
+
+    monkeypatch.setattr(
+        store,
+        "activate_requirement_amendment_at_boundary",
+        activate_with_fault,
+    )
+    with pytest.raises(RuntimeError, match=f"fault:{fault_point}"):
+        service.commit_next_round_requirements_at_boundary(
+            runtime_run_id="runtime_run_1",
+            executor_id="executor_1",
+            round_no=3,
+            amendments=prepared,
+        )
+
+    assert store.get_requirement_amendment(amendment.amendment_id).status == (
+        "pending_target_round"
+    )
+    assert store.get_run("runtime_run_1").approved_requirement_revision_id == (
+        "reqapproved_1"
+    )
+    event_types = [
+        event.event_type
+        for event in store.list_events(
+            runtime_run_id="runtime_run_1",
+            after_seq=0,
+            limit=20,
+        ).events
+    ]
+    assert "runtime_next_round_requirement_applied" not in event_types
+    assert "runtime_requirement_revision_activated" not in event_types
+
+
 def test_next_round_boundary_waits_for_requirement_extraction_before_controller(tmp_path: Path) -> None:
     from seektalent_runtime_control.commands import RuntimeCommandService
 

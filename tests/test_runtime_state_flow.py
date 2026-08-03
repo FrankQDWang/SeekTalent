@@ -14,6 +14,7 @@ from seektalent.models import (
     CTSQuery,
     FinalCandidate,
     FinalResult,
+    HardConflictEvidence,
     HardConstraintSlots,
     InputTruth,
     LocationExecutionPlan,
@@ -1459,6 +1460,32 @@ def test_identity_top_pool_contains_one_scorecard_per_identity() -> None:
 
     assert [item.resume_id for item in selected] == ["liepin-1", "cts-2"]
     assert run_state.top_pool_ids == ["liepin-1", "cts-2"]
+
+
+def test_identity_top_pool_only_contains_recommendation_eligible_candidates() -> None:
+    run_state = _run_state_for_canonical_intake_tests()
+    fit = _scored_candidate("fit", overall_score=80)
+    hard_conflict = _scored_candidate("not-fit", overall_score=99).model_copy(
+        update={
+            "fit_bucket": "not_fit",
+            "hard_conflicts": [
+                HardConflictEvidence(
+                    policy_reference="exclusion_signals[0]",
+                    resume_evidence="Resume explicitly matches the blocking exclusion.",
+                )
+            ],
+        }
+    )
+    low_score = _scored_candidate("low-score", overall_score=59)
+    run_state.scorecards_by_resume_id = {
+        candidate.resume_id: candidate
+        for candidate in (fit, hard_conflict, low_score)
+    }
+
+    selected = select_identity_top_candidates(run_state)
+
+    assert [candidate.resume_id for candidate in selected] == ["fit"]
+    assert run_state.top_pool_ids == ["fit"]
 
 
 def test_finalize_context_uses_identity_deduped_top_pool() -> None:

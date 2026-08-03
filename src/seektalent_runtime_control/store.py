@@ -2558,41 +2558,171 @@ class RuntimeControlStore(
             run_status="running",
         )
 
-    def activate_run_requirement_revision(
+    def activate_requirement_amendment_at_boundary(
         self,
         *,
         runtime_run_id: str,
-        approved_requirement_revision_id: str,
-        updated_at: str,
-    ) -> RuntimeRunRecord:
-        with self._connect() as conn, conn:
-            existing = _run_row(conn, runtime_run_id)
-            if existing is None:
-                raise RuntimeControlLookupError("runtime_run_not_found")
-            require_run_truth_mutable(existing)
-            updated = conn.execute(
-                """
-                UPDATE runtime_control_runs
-                SET approved_requirement_revision_id = ?, updated_at = ?,
-                    state_revision = state_revision + 1
-                WHERE runtime_run_id = ?
-                  AND product_outcome IS NULL
-                  AND current_failure_id IS NULL
-                  AND current_failure_revision IS NULL
-                  AND current_failure_owner_lease_id IS NULL
-                  AND current_failure_authority_mode IS NULL
-                """,
-                (approved_requirement_revision_id, updated_at, runtime_run_id),
-            )
-            if updated.rowcount != 1:
-                raise RuntimeControlError(
-                    "runtime_failed_outcome_terminal_immutable"
+        amendment_id: str,
+        round_no: int,
+        applied_event: RuntimeControlEventInput,
+        activated_event: RuntimeControlEventInput,
+        executor_id: str,
+        attempt_no: int | None = None,
+        fault_injector: Callable[[str], None] | None = None,
+    ) -> RequirementAmendment:
+        if (
+            applied_event.runtime_run_id != runtime_run_id
+            or applied_event.event_type != "runtime_next_round_requirement_applied"
+            or applied_event.round_no != round_no
+            or activated_event.runtime_run_id != runtime_run_id
+            or activated_event.event_type != "runtime_requirement_revision_activated"
+            or activated_event.round_no != round_no
+        ):
+            raise ValueError("runtime_requirement_activation_event_invalid")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                _require_active_executor(
+                    conn,
+                    runtime_run_id,
+                    executor_id,
+                    attempt_no=attempt_no,
+                    observed_at=applied_event.created_at,
                 )
-            row = conn.execute(
-                "SELECT * FROM runtime_control_runs WHERE runtime_run_id = ?",
-                (runtime_run_id,),
-            ).fetchone()
-            return _validated_run_from_row(conn, row)
+                amendment_row = conn.execute(
+                    """
+                    SELECT *
+                    FROM runtime_requirement_amendments
+                    WHERE amendment_id = ? AND runtime_run_id = ?
+                    """,
+                    (amendment_id, runtime_run_id),
+                ).fetchone()
+                if amendment_row is None:
+                    raise RuntimeControlError("requirement_draft_not_found")
+                if (
+                    amendment_row["status"] != "pending_target_round"
+                    or amendment_row["target_round_no"] != round_no
+                ):
+                    raise RuntimeControlError("requirement_amendment_stale")
+                target_revision_id = amendment_row[
+                    "result_approved_requirement_revision_id"
+                ]
+                if not isinstance(target_revision_id, str) or not target_revision_id:
+                    raise RuntimeControlError("requirement_amendment_stale")
+                if (
+                    applied_event.payload.get("amendmentId") != amendment_id
+                    or activated_event.payload.get("amendmentId") != amendment_id
+                    or activated_event.payload.get(
+                        "approvedRequirementRevisionId"
+                    )
+                    != target_revision_id
+                ):
+                    raise ValueError("runtime_requirement_activation_event_invalid")
+                approved_row = conn.execute(
+                    """
+                    SELECT 1
+                    FROM runtime_approved_requirements
+                    WHERE approved_requirement_revision_id = ?
+                    """,
+                    (target_revision_id,),
+                ).fetchone()
+                if approved_row is None:
+                    raise RuntimeControlError("approved_requirement_not_found")
+
+                stored_applied_event = _append_event_in_transaction(
+                    conn,
+                    applied_event,
+                    snapshot=None,
+                    run_status="running",
+                    stop_reason_code=None,
+                    completed_at=None,
+                    latest_checkpoint_id=None,
+                )
+                _inject_requirement_activation_fault(
+                    fault_injector,
+                    "after_applied_event",
+                )
+                amendment_update = conn.execute(
+                    """
+                    UPDATE runtime_requirement_amendments
+                    SET status = 'applied', applied_event_id = ?, resolved_at = ?
+                    WHERE amendment_id = ?
+                      AND runtime_run_id = ?
+                      AND status = 'pending_target_round'
+                      AND target_round_no = ?
+                    """,
+                    (
+                        stored_applied_event.event_id,
+                        applied_event.created_at,
+                        amendment_id,
+                        runtime_run_id,
+                        round_no,
+                    ),
+                )
+                if amendment_update.rowcount != 1:
+                    raise RuntimeControlError("requirement_amendment_stale")
+                _inject_requirement_activation_fault(
+                    fault_injector,
+                    "after_amendment_update",
+                )
+
+                run_row = _run_row(conn, runtime_run_id)
+                if run_row is None:
+                    raise RuntimeControlLookupError("runtime_run_not_found")
+                require_run_truth_mutable(run_row)
+                run_update = conn.execute(
+                    """
+                    UPDATE runtime_control_runs
+                    SET approved_requirement_revision_id = ?, updated_at = ?,
+                        state_revision = state_revision + 1
+                    WHERE runtime_run_id = ?
+                      AND state_revision = ?
+                      AND product_outcome IS NULL
+                      AND current_failure_id IS NULL
+                      AND current_failure_revision IS NULL
+                      AND current_failure_owner_lease_id IS NULL
+                      AND current_failure_authority_mode IS NULL
+                    """,
+                    (
+                        target_revision_id,
+                        applied_event.created_at,
+                        runtime_run_id,
+                        run_row["state_revision"],
+                    ),
+                )
+                if run_update.rowcount != 1:
+                    raise RuntimeControlError("runtime_state_revision_conflict")
+                _inject_requirement_activation_fault(
+                    fault_injector,
+                    "after_run_revision_update",
+                )
+
+                _append_event_in_transaction(
+                    conn,
+                    activated_event,
+                    snapshot=None,
+                    run_status="running",
+                    stop_reason_code=None,
+                    completed_at=None,
+                    latest_checkpoint_id=None,
+                )
+                _inject_requirement_activation_fault(
+                    fault_injector,
+                    "after_activated_event",
+                )
+                updated_row = conn.execute(
+                    """
+                    SELECT *
+                    FROM runtime_requirement_amendments
+                    WHERE amendment_id = ?
+                    """,
+                    (amendment_id,),
+                ).fetchone()
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return _amendment_from_row(updated_row)
 
     def has_event(self, *, runtime_run_id: str, event_type: str, round_no: int | None = None) -> bool:
         clauses = ["runtime_run_id = ?", "event_type = ?"]
@@ -6105,6 +6235,7 @@ def _recoverable_checkpoint_from_run_row(
             "runtime_candidate_checkpoint",
             "after_source_result_commit",
             "after_round_controller",
+            "before_round_controller",
             "before_finalization",
             "after_finalization_commit",
             "entering_pause",
@@ -6884,6 +7015,14 @@ def _recovery_event_id(lease_id: str, kind: str) -> str:
 
 
 def _inject_recovery_fault(
+    fault_injector: Callable[[str], None] | None,
+    point: str,
+) -> None:
+    if fault_injector is not None:
+        fault_injector(point)
+
+
+def _inject_requirement_activation_fault(
     fault_injector: Callable[[str], None] | None,
     point: str,
 ) -> None:

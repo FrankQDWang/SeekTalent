@@ -115,6 +115,21 @@ def _after_round_controller_is_valid(
     )
 
 
+def _before_round_controller_is_valid(
+    checkpoint: RuntimeCheckpoint,
+    context: RuntimeCheckpointValidationContext,
+) -> bool:
+    return (
+        _checkpoint_matches_run(checkpoint, context)
+        and checkpoint.round_no is not None
+        and checkpoint.durable_refs.get("roundLedgerHighWatermark")
+        == checkpoint.round_no - 1
+        and context.candidate_truth_valid
+        and context.source_operations_main_committed
+        and _cursor_matches(checkpoint, next_phase="rounds")
+    )
+
+
 def _before_finalization_is_valid(
     checkpoint: RuntimeCheckpoint,
     context: RuntimeCheckpointValidationContext,
@@ -172,6 +187,7 @@ SAFE_BOUNDARY_REGISTRY: dict[str, SafeBoundaryValidator] = {
     "runtime_candidate_checkpoint": _runtime_candidate_checkpoint_is_valid,
     "after_source_result_commit": _after_source_result_is_valid,
     "after_round_controller": _after_round_controller_is_valid,
+    "before_round_controller": _before_round_controller_is_valid,
     "before_finalization": _before_finalization_is_valid,
     "after_finalization_commit": _after_finalization_is_valid,
     "entering_pause": _paused_boundary_is_valid,

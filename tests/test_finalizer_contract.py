@@ -5,7 +5,7 @@ import hashlib
 from pathlib import Path
 
 from seektalent.finalize.finalizer import Finalizer
-from seektalent.models import FinalizeContext, ScoredCandidate
+from seektalent.models import FinalizeContext, HardConflictEvidence, ScoredCandidate
 from seektalent.prompting import LoadedPrompt
 from seektalent.finalize.deterministic import build_deterministic_final_result
 from tests.settings_factory import make_settings
@@ -33,6 +33,42 @@ def test_deterministic_finalization_preserves_runtime_ranking_and_scorecard_fact
     assert result.candidates[0].final_score == 95
     assert result.candidates[0].match_summary == "Strong role match."
     assert result.candidates[0].why_selected.startswith("Ranked by runtime score 95.")
+
+
+def test_deterministic_finalization_excludes_hard_conflict_candidates() -> None:
+    fit_candidates = [
+        _scored_candidate("fit-1", source_round=1, score=90),
+        _scored_candidate("fit-2", source_round=1, score=80),
+    ]
+    not_fit_candidates = [
+        _scored_candidate(f"not-fit-{index}", source_round=1, score=99 - index).model_copy(
+            update={
+                "fit_bucket": "not_fit",
+                "hard_conflicts": [
+                    HardConflictEvidence(
+                        policy_reference="exclusion_signals[0]",
+                        resume_evidence="Resume explicitly matches the blocking exclusion.",
+                    )
+                ],
+            }
+        )
+        for index in range(8)
+    ]
+
+    result = build_deterministic_final_result(
+        FinalizeContext(
+            run_id="run-hard-conflicts",
+            run_dir="/tmp/run-hard-conflicts",
+            rounds_executed=1,
+            stop_reason="controller_stop",
+            top_candidates=[*fit_candidates, *not_fit_candidates],
+        )
+    )
+
+    assert [candidate.resume_id for candidate in result.candidates] == [
+        "fit-1",
+        "fit-2",
+    ]
 
 
 def test_deterministic_finalization_exposes_claim_aware_presentation_id_not_carrier() -> None:

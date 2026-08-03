@@ -23,6 +23,7 @@ from seektalent.models import (
     ScoringFailure,
     ScoringContext,
     ScoringPolicy,
+    SCORING_SEMANTICS_VERSION,
     unique_strings,
 )
 from seektalent.candidate_quality import risk_at_or_above, risk_at_or_below
@@ -39,7 +40,7 @@ from seektalent.tracing import LLMCallSnapshot, RunTracer
 from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
 from seektalent.tracing import json_char_count, json_sha256, text_char_count, text_sha256
 
-SCORING_CACHE_SCHEMA_VERSION = "scored_candidate.v3"
+SCORING_CACHE_SCHEMA_VERSION = "scored_candidate.v4"
 ScoringFailureKind = Literal[
     "timeout",
     "transport_error",
@@ -984,6 +985,7 @@ def _materialize_scored_candidate(
         source_provider=source_provider,
         source_round=source_round,
         fit_bucket=fit_bucket,
+        scoring_semantics_version=SCORING_SEMANTICS_VERSION,
         hard_conflicts=draft.hard_conflicts,
         overall_score=overall_score,
         must_have_match_score=draft.must_have_match_score,

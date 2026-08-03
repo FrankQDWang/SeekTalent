@@ -1,7 +1,9 @@
 from typing import TypeGuard
 
-
-RECOMMENDATION_MIN_SCORE = 60
+from seektalent.models import (
+    RECOMMENDATION_MIN_SCORE,
+    is_recommendation_eligible as _is_recommendation_eligible,
+)
 
 
 def is_valid_candidate_score(score: int | None) -> TypeGuard[int]:
@@ -13,7 +15,7 @@ def is_recommendation_score(score: int | None) -> TypeGuard[int]:
 
 
 def is_recommendation_eligible(*, score: int | None, fit_bucket: str | None) -> bool:
-    return fit_bucket == "fit" and is_recommendation_score(score)
+    return _is_recommendation_eligible(score=score, fit_bucket=fit_bucket)
 
 
 def is_workbench_candidate_visible(*, score: int | None, fit_bucket: str | None) -> bool:

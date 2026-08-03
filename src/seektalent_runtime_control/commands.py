@@ -602,51 +602,53 @@ class RuntimeCommandService:
             if current.status != _PENDING_TARGET_ROUND_STATUS or current.target_round_no != round_no:
                 raise RuntimeControlError("requirement_amendment_stale")
             applied_at = self.now()
-            event = self.store.append_executor_event(
-                _event(
-                    runtime_run_id=runtime_run_id,
-                    event_type="runtime_next_round_requirement_applied",
-                    stage="round",
-                    round_no=round_no,
-                    status="completed",
-                    summary="next-round requirement applied",
-                    payload={"amendmentId": amendment.amendment_id},
-                    created_at=applied_at,
-                ),
+            applied_event = _event(
+                runtime_run_id=runtime_run_id,
+                event_type="runtime_next_round_requirement_applied",
+                stage="round",
+                round_no=round_no,
+                status="completed",
+                summary="next-round requirement applied",
+                payload={"amendmentId": amendment.amendment_id},
+                created_at=applied_at,
+            ).model_copy(
+                update={
+                    "idempotency_key": (
+                        f"runtime-next-round-requirement-applied:{amendment.amendment_id}"
+                    )
+                }
+            )
+            target_revision_id = current.result_approved_requirement_revision_id
+            if target_revision_id is None:
+                raise RuntimeControlError("requirement_amendment_stale")
+            activated_event = _event(
+                runtime_run_id=runtime_run_id,
+                event_type="runtime_requirement_revision_activated",
+                stage="round",
+                round_no=round_no,
+                status="completed",
+                summary="requirement revision activated",
+                payload={
+                    "amendmentId": amendment.amendment_id,
+                    "approvedRequirementRevisionId": target_revision_id,
+                },
+                created_at=applied_at,
+            ).model_copy(
+                update={
+                    "idempotency_key": (
+                        f"runtime-requirement-revision-activated:{amendment.amendment_id}"
+                    )
+                }
+            )
+            updated = self.store.activate_requirement_amendment_at_boundary(
+                runtime_run_id=runtime_run_id,
+                amendment_id=amendment.amendment_id,
+                round_no=round_no,
+                applied_event=applied_event,
+                activated_event=activated_event,
                 executor_id=executor_id,
                 attempt_no=attempt_no,
-                run_status="running",
             )
-            updated = self.store.update_requirement_amendment_status(
-                amendment_id=amendment.amendment_id,
-                status="applied",
-                applied_event_id=event.event_id,
-                resolved_at=applied_at,
-            )
-            if current.result_approved_requirement_revision_id is not None:
-                self.store.activate_run_requirement_revision(
-                    runtime_run_id=runtime_run_id,
-                    approved_requirement_revision_id=current.result_approved_requirement_revision_id,
-                    updated_at=applied_at,
-                )
-                self.store.append_executor_event(
-                    _event(
-                        runtime_run_id=runtime_run_id,
-                        event_type="runtime_requirement_revision_activated",
-                        stage="round",
-                        round_no=round_no,
-                        status="completed",
-                        summary="requirement revision activated",
-                        payload={
-                            "amendmentId": amendment.amendment_id,
-                            "approvedRequirementRevisionId": current.result_approved_requirement_revision_id,
-                        },
-                        created_at=applied_at,
-                    ),
-                    executor_id=executor_id,
-                    attempt_no=attempt_no,
-                    run_status="running",
-                )
             applied.append(updated)
         return applied
 

@@ -28,6 +28,10 @@ _Avoid_: Fit threshold, display floor
 A presentation-only projection of the raw match score. It never changes candidate ordering, eligibility, recommendation quality, or stored assessment truth.
 _Avoid_: Raw score, final score
 
+**Scoring semantics version**:
+The persisted contract version that makes a scorecard interpretable. A recovered scorecard without the current version must be re-scored as a complete candidate set; an old `not_fit` value can never be converted into hard-conflict evidence.
+_Avoid_: Cache version, checkpoint schema version, inferred conflict
+
 **Candidate identity**:
 The person-level continuity record that groups known resume observations and resolves historical aliases to one current canonical identity. It does not choose or combine resume content.
 _Avoid_: Resume version, candidate card, provider candidate ID

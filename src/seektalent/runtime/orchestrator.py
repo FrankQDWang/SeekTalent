@@ -97,6 +97,7 @@ from seektalent.models import (
     RuntimeFinalizationRevision,
     RuntimeSourceCoverageSummary,
     RequirementSheet,
+    SCORING_SEMANTICS_VERSION,
     ScoredCandidate,
     SearchControllerDecision,
     SearchAttempt,
@@ -936,6 +937,14 @@ class WorkflowRuntime:
                 resume_checkpoint=resume_checkpoint,
                 run_state=run_state,
             )
+            if continuation is not None:
+                await self._refresh_recovered_scoring_semantics(
+                    run_state=run_state,
+                    continuation=continuation,
+                    resume_checkpoint=resume_checkpoint,
+                    tracer=tracer,
+                    runtime_checkpoint_callback=runtime_checkpoint_callback,
+                )
             detail_open_claim_ledger: DetailOpenClaimLedger
             detail_open_claim_ledger = DetailOpenClaimLedger(
                 run_state.detail_open_claims_by_provider_key,
@@ -1327,6 +1336,81 @@ class WorkflowRuntime:
             next_phase=expected_phase,
             completed_rounds=completed_rounds,
             stop_reason=stop_reason,
+        )
+
+    async def _refresh_recovered_scoring_semantics(
+        self,
+        *,
+        run_state: RunState,
+        continuation: _RuntimeContinuation,
+        resume_checkpoint: Mapping[str, object] | None,
+        tracer: RunTracer,
+        runtime_checkpoint_callback: RuntimeCheckpointCallback | None,
+    ) -> None:
+        legacy_scorecard_ids = sorted(
+            resume_id
+            for resume_id, scorecard in run_state.scorecards_by_resume_id.items()
+            if scorecard.scoring_semantics_version != SCORING_SEMANTICS_VERSION
+        )
+        if not legacy_scorecard_ids:
+            return
+        round_no = max(1, continuation.completed_rounds)
+        rescored = await rescore_requirement_revision_candidates(
+            round_no=round_no,
+            run_state=run_state,
+            tracer=tracer,
+            runtime_only_constraints=[],
+            resume_scorer=self.resume_scorer,
+            format_scoring_failure_message=self._format_scoring_failure_message,
+            run_stage_error=RunStageError,
+        )
+        if any(
+            scorecard.scoring_semantics_version != SCORING_SEMANTICS_VERSION
+            for scorecard in rescored.values()
+        ):
+            raise RunStageError(
+                "scoring",
+                "scoring_semantics_refresh_incomplete",
+            )
+        run_state.scorecards_by_resume_id = rescored
+        select_identity_top_candidates(run_state)
+        boundary = (
+            resume_checkpoint.get("safe_boundary")
+            if resume_checkpoint is not None
+            else None
+        )
+        checkpoint_round_no = (
+            resume_checkpoint.get("round_no")
+            if resume_checkpoint is not None
+            else None
+        )
+        if not isinstance(boundary, str):
+            raise RunStageError(
+                "runtime_resume",
+                "runtime_checkpoint_safe_boundary_invalid",
+            )
+        if not isinstance(checkpoint_round_no, int) or isinstance(
+            checkpoint_round_no,
+            bool,
+        ):
+            checkpoint_round_no = None
+        self._refresh_runtime_candidate_checkpoint(
+            runtime_checkpoint_callback=runtime_checkpoint_callback,
+            tracer=tracer,
+            run_state=run_state,
+            safe_boundary=boundary,
+            round_no=checkpoint_round_no,
+            continuation_cursor={
+                "nextPhase": continuation.next_phase,
+                "completedRounds": continuation.completed_rounds,
+                "stopReason": continuation.stop_reason,
+            },
+        )
+        tracer.emit(
+            "scoring_semantics_refreshed",
+            status="succeeded",
+            summary="Recovered scorecards refreshed to current scoring semantics.",
+            payload={"candidateCount": len(legacy_scorecard_ids)},
         )
 
     async def _build_run_state(

@@ -471,10 +471,11 @@ def test_high_score_with_hard_conflict_materializes_as_not_fit() -> None:
     assert result.fit_bucket == "not_fit"
     assert result.overall_score >= 90
     assert result.hard_conflicts == [conflict]
+    assert result.scoring_semantics_version == "hard_conflict_v1"
 
 
 def test_scoring_cache_schema_version_excludes_old_fit_semantics() -> None:
-    assert SCORING_CACHE_SCHEMA_VERSION == "scored_candidate.v3"
+    assert SCORING_CACHE_SCHEMA_VERSION == "scored_candidate.v4"
 
 
 def test_materializer_calculates_total_and_applicability_from_policy() -> None:

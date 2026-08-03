@@ -11,6 +11,23 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictInt, Stri
 from seektalent.source_references import SourceReference
 
 FitBucket = Literal["fit", "not_fit"]
+SCORING_SEMANTICS_VERSION = "hard_conflict_v1"
+RECOMMENDATION_MIN_SCORE = 60
+
+
+def is_recommendation_eligible(
+    *,
+    score: int | None,
+    fit_bucket: str | None,
+) -> bool:
+    return (
+        fit_bucket == "fit"
+        and score is not None
+        and 0 <= score <= 100
+        and score >= RECOMMENDATION_MIN_SCORE
+    )
+
+
 DecisionType = Literal["continue", "stop"]
 ControllerAction = Literal["source_search", "search_cts", "stop"]
 PoolDecisionType = Literal["selected", "retained", "dropped"]
@@ -1161,6 +1178,10 @@ class ScoredCandidate(BaseModel):
     resume_id: str = Field(description="Stable resume identifier from the candidate source.")
     source_provider: str | None = None
     fit_bucket: FitBucket = Field(description="Derived hard-conflict eligibility verdict for this resume.")
+    scoring_semantics_version: Literal["hard_conflict_v1"] | None = Field(
+        default=None,
+        description="Persisted scoring semantics; missing values require a full rescore on recovery.",
+    )
     hard_conflicts: list[HardConflictEvidence] = Field(
         default_factory=list,
         max_length=3,
@@ -1187,6 +1208,16 @@ class ScoredCandidate(BaseModel):
     score_delta: int | None = None
     detail_open_reason: str | None = None
     detail_open_policy_version: str | None = None
+
+    @model_validator(mode="after")
+    def validate_current_scoring_semantics(self) -> ScoredCandidate:
+        if self.scoring_semantics_version == SCORING_SEMANTICS_VERSION:
+            expected_bucket: FitBucket = (
+                "not_fit" if self.hard_conflicts else "fit"
+            )
+            if self.fit_bucket != expected_bucket:
+                raise ValueError("scored_candidate_hard_conflict_semantics_invalid")
+        return self
 
 
 class ScoringFailure(BaseModel):
