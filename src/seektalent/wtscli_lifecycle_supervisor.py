@@ -137,7 +137,10 @@ class WtsCliLifecycleSupervisor:
         monotonic_clock: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         sidecar_path: Path | None = None,
+        startup_timeout_seconds: float = WTSCLI_SUPERVISOR_READY_TIMEOUT_SECONDS,
     ) -> None:
+        if startup_timeout_seconds <= 0:
+            raise ValueError("startup_timeout_seconds must be positive")
         self._settings = settings
         self._runtime = runtime
         self._allow_start = allow_start
@@ -145,6 +148,7 @@ class WtsCliLifecycleSupervisor:
         self._monotonic_clock = monotonic_clock
         self._sleep = sleep
         self._sidecar_path = sidecar_path or Path(__file__).with_name(_SIDECAR_FILENAME)
+        self._startup_timeout_seconds = startup_timeout_seconds
         self._process: subprocess.Popen[bytes] | None = None
         self._windows_job: _WindowsJob | None = None
         self._started = False
@@ -195,33 +199,44 @@ class WtsCliLifecycleSupervisor:
                 return
             if not self._allow_start:
                 raise WtsCliLifecycleError("wtscli_supervisor_start_forbidden")
-            runtime = self._runtime or ensure_wtscli_runtime()
-            self._verify_bundle(runtime)
-            self._runtime = runtime
-            self._configure_paths(runtime)
-            owner = self._read_owner_lock()
-            if owner is not None:
-                if _process_alive(owner.get("supervisorPid")):
-                    raise WtsCliLifecycleError("wtscli_supervisor_foreign_owner")
-                self._remove_stale_owner_lock()
-            self._sidecar_restart_count = 0
-            self._sidecar_first_failure_code = None
-            self._watchdog_failure_reason = None
-            self._lifecycle_id = uuid.uuid4().hex
-            self._watchdog_stop.clear()
             try:
+                runtime = self._runtime or ensure_wtscli_runtime()
+                self._verify_bundle(runtime)
+                self._runtime = runtime
+                self._configure_paths(runtime)
+                owner = self._read_owner_lock()
+                if owner is not None:
+                    if _process_alive(owner.get("supervisorPid")):
+                        raise WtsCliLifecycleError("wtscli_supervisor_foreign_owner")
+                    self._remove_stale_owner_lock()
+                self._sidecar_restart_count = 0
+                self._sidecar_first_failure_code = None
+                self._watchdog_failure_reason = None
+                self._lifecycle_id = uuid.uuid4().hex
+                self._watchdog_stop.clear()
                 self._spawn_sidecar()
                 self._started = True
                 self._started_at = self._monotonic_clock()
                 self._wait_for_sidecar_owner()
-            except (OSError, RuntimeError, ValueError):
-                process = self._process
-                self._process = None
-                self._started = False
-                if process is not None:
-                    self._stop_process(process, request_control=False)
+            except (BootstrapError, WtsCliLifecycleError):
+                self._reset_failed_start()
+                raise
+            except OSError as exc:
+                self._reset_failed_start()
+                raise WtsCliLifecycleError(
+                    "wtscli_supervisor_start_failed"
+                ) from exc
+            except (RuntimeError, ValueError):
+                self._reset_failed_start()
                 raise
             self._start_watchdog()
+
+    def _reset_failed_start(self) -> None:
+        process = self._process
+        self._process = None
+        self._started = False
+        if process is not None:
+            self._stop_process(process, request_control=False)
 
     def record_startup_failure(self, error: Exception) -> None:
         if isinstance(error, WtsCliLifecycleError):
@@ -418,6 +433,8 @@ class WtsCliLifecycleSupervisor:
             self._lifecycle_id,
             "--supervisor-restart-count",
             str(self._sidecar_restart_count),
+            "--daemon-listener-timeout-ms",
+            str(round(self._startup_timeout_seconds * 1000)),
         ]
         if self._sidecar_first_failure_code is not None:
             command.extend(
@@ -439,7 +456,7 @@ class WtsCliLifecycleSupervisor:
 
     def _wait_for_sidecar_owner(self) -> None:
         assert self._process is not None
-        deadline = self._monotonic_clock() + 2.0
+        deadline = self._monotonic_clock() + self._startup_timeout_seconds
         while self._monotonic_clock() < deadline:
             owner = self._read_owner_lock()
             if owner is not None:
@@ -460,7 +477,7 @@ class WtsCliLifecycleSupervisor:
                         else "wtscli_supervisor_exited"
                     )
                 )
-            self._sleep(0.05)
+            self._sleep(min(0.05, max(0.0, deadline - self._monotonic_clock())))
         raise WtsCliLifecycleError("wtscli_supervisor_owner_timeout")
 
     def _start_watchdog(self) -> None:
@@ -486,7 +503,11 @@ class WtsCliLifecycleSupervisor:
                 self._recover_sidecar("wtscli_supervisor_exited")
             elif status is not None and _status_is_stale(status):
                 self._recover_sidecar("wtscli_supervisor_heartbeat_stale")
-            elif status is None and self._monotonic_clock() - self._started_at > 5.0:
+            elif (
+                status is None
+                and self._monotonic_clock() - self._started_at
+                > self._startup_timeout_seconds
+            ):
                 self._recover_sidecar("wtscli_supervisor_heartbeat_missing")
 
     def _recover_sidecar(self, reason_code: str) -> None:

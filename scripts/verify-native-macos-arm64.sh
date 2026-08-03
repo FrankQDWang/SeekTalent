@@ -32,7 +32,7 @@ wtscli_source="$temp_root/wtscli-fork"
 wtscli_bundle="$temp_root/wtscli-browser-bridge"
 native_evidence="$temp_root/native-launch-binding-evidence.json"
 source_revision="$(git rev-parse HEAD)"
-build_dir="$ROOT/dist/tmp/0.8.0rc1-${source_revision:0:12}"
+build_dir="$ROOT/dist/tmp/0.8.0rc2-${source_revision:0:12}"
 wheel_dir="$build_dir"
 wheelhouse_dir="$build_dir/wheelhouse-macos-arm64"
 delivery_dir="$build_dir"
@@ -87,7 +87,7 @@ uv run --group dev python scripts/build_domi_delivery_bundle.py \
   --platform macos-arm64 \
   --source-revision "$source_revision"
 
-SEEKTALENT_NATIVE_DELIVERY_ARCHIVE="$delivery_dir/seektalent-offline-0.8.0rc1-macos-arm64-py313.zip" \
+SEEKTALENT_NATIVE_DELIVERY_ARCHIVE="$delivery_dir/seektalent-offline-0.8.0rc2-macos-arm64-py313.zip" \
 SEEKTALENT_NATIVE_DELIVERY_PLATFORM="macos-arm64" \
   uv run --group dev python -m pytest tests/test_build_domi_delivery_bundle.py -q
 

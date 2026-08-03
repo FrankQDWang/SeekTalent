@@ -52,7 +52,7 @@ def test_staging_installer_has_valid_shell_syntax(tmp_path: Path) -> None:
 def test_staging_installer_uses_published_package_and_isolated_runtime() -> None:
     script = INSTALLER.read_text(encoding="utf-8")
 
-    assert 'VERSION="${1:-0.8.0rc1}"' in script
+    assert 'VERSION="${1:-0.8.0rc2}"' in script
     assert '"seektalent==${VERSION}"' in script
     assert 'STAGING_ROOT="${SEEKTALENT_STAGING_ROOT:-${HOME}/.seektalent-staging}"' in script
     assert 'export HOME="$STAGING_ROOT/home"' in script

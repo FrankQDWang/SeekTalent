@@ -190,6 +190,16 @@ def create_app(
         from datetime import UTC, datetime
 
         observed_at = datetime.now(UTC)
+        executor_leases = runtime_control_store.list_active_executor_leases()
+        expired_executor_leases = [
+            lease
+            for lease in executor_leases
+            if datetime.fromisoformat(
+                lease.lease_expires_at.replace("Z", "+00:00")
+            )
+            <= observed_at
+        ]
+        live_executor_lease = len(executor_leases) > len(expired_executor_leases)
         components = [app.state.workbench_v2_runtime_runner.health_snapshot()]
         component_payloads = []
         for component in components:
@@ -203,12 +213,21 @@ def create_app(
                 if component.last_heartbeat_at is not None
                 else None
             )
-            stale = (
+            heartbeat_stale = (
                 heartbeat is None
                 or (observed_at - heartbeat).total_seconds() > 10
             )
+            covered_by_active_executor_lease = bool(
+                component.name == "runtime_runner"
+                and component.alive
+                and live_executor_lease
+            )
+            stale = heartbeat_stale and not covered_by_active_executor_lease
             item = component.as_dict()
             item["stale"] = stale
+            item["coveredByActiveExecutorLease"] = (
+                covered_by_active_executor_lease
+            )
             item["status"] = (
                 "ready"
                 if component.alive and not stale
@@ -233,14 +252,6 @@ def create_app(
             and browser_lane.status == "active"
             and browser_lane.last_failure_code is not None
         )
-        expired_executor_leases = [
-            lease
-            for lease in runtime_control_store.list_active_executor_leases()
-            if datetime.fromisoformat(
-                lease.lease_expires_at.replace("Z", "+00:00")
-            )
-            <= observed_at
-        ]
         ready = (
             all(item["status"] == "ready" for item in component_payloads)
             and (
@@ -335,7 +346,7 @@ async def _lifespan(app: FastAPI):
         if wtscli_supervisor is not None:
             try:
                 wtscli_supervisor.start()
-            except (BootstrapError, WtsCliLifecycleError) as exc:
+            except (BootstrapError, WtsCliLifecycleError, OSError) as exc:
                 wtscli_supervisor.record_startup_failure(exc)
                 logger.warning(
                     "WTSCLI lifecycle supervisor is not ready: %s",

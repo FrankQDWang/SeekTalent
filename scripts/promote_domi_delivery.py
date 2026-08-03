@@ -9,16 +9,27 @@ import zipfile
 from pathlib import Path
 
 from seektalent.version import __version__
+from scripts.build_domi_delivery_bundle import _source_revision
 
 
-PLATFORMS = ("macos-arm64", "macos-x86_64", "windows-x64")
+PLATFORMS = ("macos-arm64",)
 
 
-def promote_delivery(*, dist_dir: Path, build_dir: Path) -> dict[str, str]:
-    """Validate one three-platform build and preserve every previous artifact."""
+def promote_delivery(
+    *,
+    dist_dir: Path,
+    build_dir: Path,
+    expected_source_revision: str | None = None,
+) -> dict[str, str]:
+    """Validate one exact release handoff and preserve every previous artifact."""
     dist_dir = dist_dir.resolve(strict=True)
     build_dir = build_dir.resolve(strict=True)
     artifacts, identity = _validated_artifacts(build_dir)
+    if (
+        expected_source_revision is not None
+        and identity["source_revision"] != expected_source_revision
+    ):
+        raise ValueError("delivery source revision does not match checkout")
     short_revision = identity["source_revision"][:12]
     archive_dir = dist_dir / "archive" / f"before-{__version__}-{short_revision}"
     if archive_dir.exists():
@@ -92,6 +103,7 @@ def _validated_artifacts(build_dir: Path) -> tuple[list[Path], dict[str, str]]:
             )
     if not wheel.is_file() or not sdist.is_file():
         raise FileNotFoundError("the exact wheel and sdist are required")
+    wheel_sha256 = _sha256(wheel)
 
     first = manifests[0]
     fixture = first.get("acceptance_fixture")
@@ -104,6 +116,9 @@ def _validated_artifacts(build_dir: Path) -> tuple[list[Path], dict[str, str]]:
         "source_revision": str(first.get("source_revision")),
         "product_build_id": str(first.get("product_build_id")),
         "fixture_sha256": str(fixture.get("sha256")),
+        "seektalent_wheel_sha256": str(
+            first.get("seektalent_wheel_sha256")
+        ),
     }
     if (
         identity["schema_version"] != "2"
@@ -114,6 +129,8 @@ def _validated_artifacts(build_dir: Path) -> tuple[list[Path], dict[str, str]]:
         or len(identity["fixture_sha256"]) != 64
     ):
         raise ValueError("invalid delivery identity")
+    if identity["seektalent_wheel_sha256"] != wheel_sha256:
+        raise ValueError("top-level wheel does not match delivery archives")
     for platform_name, manifest in zip(PLATFORMS, manifests, strict=True):
         manifest_fixture = manifest.get("acceptance_fixture")
         if isinstance(manifest_fixture, dict):
@@ -128,9 +145,12 @@ def _validated_artifacts(build_dir: Path) -> tuple[list[Path], dict[str, str]]:
                 if isinstance(manifest_fixture, dict)
                 else None
             ),
+            "seektalent_wheel_sha256": str(
+                manifest.get("seektalent_wheel_sha256")
+            ),
         }
         if candidate != identity or manifest.get("platform") != platform_name:
-            raise ValueError("three-platform delivery identity mismatch")
+            raise ValueError("delivery identity mismatch")
     return artifacts, identity
 
 
@@ -147,7 +167,11 @@ def main() -> int:
     parser.add_argument("--dist-dir", type=Path, default=Path("dist"))
     parser.add_argument("--build-dir", type=Path, required=True)
     args = parser.parse_args()
-    identity = promote_delivery(dist_dir=args.dist_dir, build_dir=args.build_dir)
+    identity = promote_delivery(
+        dist_dir=args.dist_dir,
+        build_dir=args.build_dir,
+        expected_source_revision=_source_revision(),
+    )
     print(json.dumps(identity, sort_keys=True))
     return 0
 

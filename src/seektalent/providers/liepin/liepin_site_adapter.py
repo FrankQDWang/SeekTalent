@@ -2810,7 +2810,15 @@ class LiepinSiteAdapter:
                     )
                     if exact_city_filter:
                         city_picker_active = True
-                        state = city_picker.observe_picker_ready(self, section=section, label=label, events=events)
+                        state = city_picker.observe_picker_ready(
+                            self,
+                            section=section,
+                            label=label,
+                            events=events,
+                            timeout_seconds=(
+                                self._site_config.search_navigation_timeout_seconds
+                            ),
+                        )
                     else:
                         self._wait_for_text_condition(label)
                         state = self.state()
@@ -2829,6 +2837,9 @@ class LiepinSiteAdapter:
                     state, city_option_ref, pending_confirm, confirm_ref = city_picker.resolve_picker_action(
                         self, section=section, label=label, state=state,
                         events=events, before_effect=mark_filter_effect_started,
+                        timeout_seconds=(
+                            self._site_config.search_navigation_timeout_seconds
+                        ),
                     )
                     state_text = _opencli_result_text(state)
                 if not pending_confirm:
@@ -2845,6 +2856,9 @@ class LiepinSiteAdapter:
                                 label=label,
                                 events=events,
                                 allow_pending_confirm=True,
+                                timeout_seconds=(
+                                    self._site_config.search_navigation_timeout_seconds
+                                ),
                             )
                         )
                         state_text = _opencli_result_text(state)
@@ -2875,6 +2889,9 @@ class LiepinSiteAdapter:
                             label=label,
                             events=events,
                             allow_pending_confirm=False,
+                            timeout_seconds=(
+                                self._site_config.search_navigation_timeout_seconds
+                            ),
                         )
                     )
                     state_text = _opencli_result_text(state)
@@ -3679,8 +3696,8 @@ class LiepinSiteAdapter:
         return self._opened_tab_url_matches_requested_url(current_url, requested_url)
 
     def _wait_for_controlled_detail_navigation(self, *, page_id: str) -> None:
-        attempts = max(1, int(self._site_config.detail_open_timeout_seconds))
-        for attempt_index in range(attempts):
+        deadline = time.monotonic() + self._site_config.detail_open_timeout_seconds
+        while True:
             current_url = self._current_url()
             if _is_liepin_detail_url(current_url):
                 return
@@ -3692,8 +3709,10 @@ class LiepinSiteAdapter:
                 safe_reason_code = classify_liepin_state(url=current_url, text="")
                 if safe_reason_code:
                     raise OpenCliBrowserError(safe_reason_code)
-            if attempt_index < attempts - 1:
-                time.sleep(1)
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(0.2, remaining))
         raise OpenCliBrowserError("liepin_opencli_detail_not_opened")
 
     def _tab_url_for_page_id(self, page_id: str) -> str | None:

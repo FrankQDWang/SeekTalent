@@ -99,9 +99,9 @@ def test_support_bundle_is_allowlisted_local_and_private(
         json.dumps(
             {
                 "schemaVersion": INSTALL_RECEIPT_SCHEMA,
-                "productVersion": "0.8.0rc1",
+                    "productVersion": "0.8.0rc2",
                 "sourceRevision": "a" * 40,
-                "productBuildId": "seektalent-0.8.0rc1+" + "a" * 40,
+                    "productBuildId": "seektalent-0.8.0rc2+" + "a" * 40,
                 "wheelSha256": "b" * 64,
                 "deliveryManifestSha256": "c" * 64,
                 "bridgeBuildId": WTSCLI_BUILD_ID,

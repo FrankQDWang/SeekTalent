@@ -272,13 +272,23 @@ def _sha256(path: Path) -> str:
 
 
 def _source_revision() -> str:
-    return subprocess.run(
+    revision = subprocess.run(
         ["git", "rev-parse", "HEAD"],
         cwd=ROOT,
         check=True,
         capture_output=True,
         text=True,
     ).stdout.strip()
+    dirty = subprocess.run(
+        ["git", "status", "--porcelain"],
+        cwd=ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    if dirty:
+        raise RuntimeError("source_checkout_not_clean")
+    return revision
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -303,6 +313,12 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    source_revision = _source_revision()
+    if (
+        args.source_revision is not None
+        and args.source_revision != source_revision
+    ):
+        raise ValueError("source_revision_does_not_match_checkout")
     archive = build_delivery_bundle(
         output_dir=args.output_dir,
         browser_bridge_bundle=args.wtscli_bundle_dir,
@@ -311,7 +327,7 @@ def main(argv: list[str] | None = None) -> int:
         domi_python=args.domi_python,
         node=args.node,
         platform_name=args.platform_name,
-        source_revision=args.source_revision,
+        source_revision=source_revision,
     )
     print(archive)
     return 0

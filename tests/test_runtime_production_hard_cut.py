@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from seektalent.config import AppSettings
 from seektalent_runtime_control.errors import RuntimeControlError
+from seektalent_runtime_control.execution_health import ExecutionComponentHealth
 from seektalent_ui.server import create_app
 from seektalent_ui.runtime_execution import DEV_PROD_PARITY_DIFFERENCE_ALLOWLIST
 from seektalent_workbench_v2.runtime_service import WorkbenchV2RuntimeService
@@ -134,6 +135,47 @@ def test_legacy_agent_write_is_not_a_live_route(tmp_path: Path) -> None:
     with TestClient(app) as client:
         response = client.post("/api/agent/conversations", json={"title": "legacy"})
     assert response.status_code == 404
+
+
+def test_execution_readiness_accepts_stale_runner_heartbeat_during_live_executor_lease(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    app = create_app(settings=_settings(tmp_path), runtime_factory=_NoopRuntime)
+
+    class ActiveRunner:
+        def start(self) -> None:
+            return None
+
+        def stop(self) -> None:
+            return None
+
+        def health_snapshot(self) -> ExecutionComponentHealth:
+            return ExecutionComponentHealth(
+                name="runtime_runner",
+                alive=True,
+                last_heartbeat_at="2020-01-01T00:00:00Z",
+                last_success_at="2020-01-01T00:00:00Z",
+                first_failure_at=None,
+                first_failure_type=None,
+                failure_count=0,
+                restart_count=1,
+            )
+
+    app.state.workbench_v2_runtime_runner = ActiveRunner()
+    monkeypatch.setattr(
+        app.state.runtime_control_store,
+        "list_active_executor_leases",
+        lambda: [SimpleNamespace(lease_expires_at="2999-01-01T00:00:00Z")],
+    )
+
+    with TestClient(app) as client:
+        response = client.get("/api/health/execution-ready")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "ready"
+    assert payload["components"][0]["coveredByActiveExecutorLease"] is True
 
 
 def test_expired_unresolved_lane_blocks_before_run_creation() -> None:
