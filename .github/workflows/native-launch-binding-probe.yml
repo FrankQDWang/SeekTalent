@@ -57,8 +57,6 @@ jobs:
             delivery_platform: macos-x86_64
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 20
-    env:
-      NATIVE_BUILD_ROOT: ${{ runner.temp }}/seektalent-native
 
     steps:
       - uses: actions/checkout@v5
@@ -95,7 +93,7 @@ jobs:
 
           output = check_output([sys.executable, "tools/native_probes/launch_binding_probe.py", "--json"], text=True)
           print(output, end="")
-          build_root = Path(os.environ["NATIVE_BUILD_ROOT"])
+          build_root = Path(os.environ["RUNNER_TEMP"]) / "seektalent-native"
           build_root.mkdir(parents=True, exist_ok=True)
           (build_root / "native-launch-binding-evidence.json").write_text(output, encoding="utf-8")
 
@@ -149,7 +147,7 @@ jobs:
           node = shutil.which("node")
           assert uv is not None
           assert node is not None
-          build_root = Path(os.environ["NATIVE_BUILD_ROOT"])
+          build_root = Path(os.environ["RUNNER_TEMP"]) / "seektalent-native"
           wheel_dir = build_root / "wheel"
           wheelhouse_dir = build_root / "wheelhouse"
           delivery_dir = build_root / "delivery"

@@ -214,6 +214,7 @@ def test_delivery_uses_one_cross_platform_builder_and_workflow() -> None:
     assert "delivery_platform: windows-x64" in workflow
     assert "delivery_platform: macos-x86_64" in workflow
     assert "${{ runner.temp }}/seektalent-native" in workflow
+    assert "NATIVE_BUILD_ROOT: ${{ runner.temp }}" not in workflow
     assert 'Path("dist/wheel")' not in workflow
     assert 'Path("dist/wheelhouse")' not in workflow
     assert '"dist/delivery"' not in workflow
