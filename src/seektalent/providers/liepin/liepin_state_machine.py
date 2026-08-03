@@ -2,10 +2,6 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Literal
-
-
-RetryPolicy = Literal["none", "no_repeat_toggle"]
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -36,7 +32,6 @@ class LiepinTransition:
     postcondition: Callable[[LiepinStateSnapshot], bool]
     safe_reason_code: str
     trace_event: str
-    retry_policy: RetryPolicy = "none"
 
 
 class LiepinTransitionRunner:

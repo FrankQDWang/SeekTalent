@@ -34,8 +34,17 @@ def promote_delivery(*, dist_dir: Path, build_dir: Path) -> dict[str, str]:
         for path in previous_top
         if "0.7.47" in path.name
     ]
-    archived_top = [path for path in previous_top if path not in previous_release]
     previous_last = dist_dir / "last-version"
+    previous_last_release_names = (
+        [
+            path.name
+            for path in previous_last.iterdir()
+            if path.is_file() and "0.7.47" in path.name
+        ]
+        if previous_last.exists()
+        else []
+    )
+    archived_top = [path for path in previous_top if path not in previous_release]
 
     archive_top = archive_dir / "top-level"
     archive_top.mkdir(parents=True)
@@ -48,6 +57,11 @@ def promote_delivery(*, dist_dir: Path, build_dir: Path) -> dict[str, str]:
     next_last.mkdir()
     for path in previous_release:
         shutil.move(str(path), next_last / path.name)
+    archived_last = archive_dir / "last-version"
+    for name in previous_last_release_names:
+        destination = next_last / name
+        if not destination.exists():
+            shutil.copy2(archived_last / name, destination)
     for source in artifacts:
         shutil.copy2(source, dist_dir / source.name)
     return identity

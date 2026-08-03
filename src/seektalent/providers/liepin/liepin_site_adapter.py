@@ -2099,7 +2099,6 @@ class LiepinSiteAdapter:
                             not retried_unready
                             and snapshot.safe_reason_code
                             in {
-                                "liepin_opencli_risk_page",
                                 "liepin_opencli_status_unavailable",
                             }
                         ):

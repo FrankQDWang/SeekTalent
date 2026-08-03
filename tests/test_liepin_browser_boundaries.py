@@ -563,6 +563,61 @@ def test_search_effect_stale_ref_is_not_reissued(
     assert effect_calls == 1
 
 
+def test_search_stops_on_first_risk_page_observation(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    search_url = LIEPIN_RECRUITER_SEARCH_URL
+
+    class SearchAutomation:
+        def wait_for_page_url(self, **_kwargs: object) -> OpenCliBrowserResult:
+            return OpenCliBrowserResult(ok=True, action="wait", private_output=search_url)
+
+    runner = LiepinSiteAdapter(
+        browser_config=OpenCliBrowserConfig(
+            session="seektalent-search-risk-page",
+            timeout_seconds=10,
+            pacing_enabled=False,
+        ),
+        site_config=LiepinOpenCliSiteConfig(
+            allowed_hosts=("h.liepin.com",),
+            allowed_start_urls=(search_url,),
+            artifact_root=tmp_path,
+        ),
+        automation=SearchAutomation(),  # type: ignore[arg-type]
+    )
+    state_calls = 0
+
+    def observe_risk_page() -> OpenCliBrowserResult:
+        nonlocal state_calls
+        state_calls += 1
+        return OpenCliBrowserResult(
+            ok=False,
+            action="state",
+            safe_reason_code="liepin_opencli_risk_page",
+        )
+
+    monkeypatch.setattr(
+        runner,
+        "open_liepin_tab",
+        lambda _url: OpenCliBrowserResult(ok=True, action="open"),
+    )
+    monkeypatch.setattr(runner, "state", observe_risk_page)
+    monkeypatch.setattr(runner, "_current_url_or_none", lambda: search_url)
+
+    envelope = runner._search_liepin_cards_once(
+        source_run_id="risk-page",
+        query="AI Agent",
+        max_pages=1,
+        max_cards=1,
+        native_filters=None,
+        recovering_search_surface=False,
+    )
+
+    assert envelope["safe_reason_code"] == "liepin_opencli_risk_page"
+    assert state_calls == 1
+
+
 def test_search_rejects_unchanged_results_after_the_settle_deadline(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

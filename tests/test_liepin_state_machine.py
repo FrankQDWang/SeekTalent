@@ -96,7 +96,6 @@ def test_transition_runner_does_not_repeat_toggle_when_postcondition_is_unknown(
             postcondition=lambda snapshot: snapshot.text == "enabled",
             safe_reason_code="liepin_opencli_filter_toggle_unknown",
             trace_event="liepin.filter.toggle",
-            retry_policy="no_repeat_toggle",
         )
     )
 

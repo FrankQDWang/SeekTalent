@@ -20,6 +20,8 @@ def test_promotion_preserves_old_artifacts_and_requires_one_exact_identity(
     (dist / "seektalent-0.7.49.tar.gz").write_bytes(b"0.7.49")
     last = dist / "last-version"
     last.mkdir()
+    old_current_intel = last / "seektalent-offline-0.7.47-macos-x86_64-py313.zip"
+    old_current_intel.write_bytes(b"0.7.47-intel")
     (last / "seektalent-offline-0.7.46-macos-arm64-py313.zip").write_bytes(
         b"0.7.46"
     )
@@ -55,6 +57,7 @@ def test_promotion_preserves_old_artifacts_and_requires_one_exact_identity(
     assert identity["source_revision"] == source_revision
     assert (dist / old_current.name).exists() is False
     assert (dist / "last-version" / old_current.name).read_bytes() == b"0.7.47"
+    assert (dist / "last-version" / old_current_intel.name).read_bytes() == b"0.7.47-intel"
     archived = dist / "archive" / "before-0.8.0rc1-aaaaaaaaaaaa"
     assert (archived / "top-level" / "seektalent-0.7.49.tar.gz").exists()
     assert (
