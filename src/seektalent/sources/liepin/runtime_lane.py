@@ -126,11 +126,35 @@ async def run_liepin_first_page_expansion(*, settings: AppSettings,
     attributions = tuple(RuntimeQueryCandidateAttribution(source_kind="liepin",
         query_instance_id=request.query_instance_id, resume_id=item.resume_id,
         dedup_key=item.dedup_key) for item in candidates)
+    source_plan_id = f"{request.runtime_run_id}:source:{request.round_no}:liepin"
+    source_lane_run_id = f"{request.runtime_run_id}:expansion:{request.continuation_id}"
+    source_plan = RuntimeSourceLanePlan(
+        source_plan_id=source_plan_id,
+        runtime_run_id=request.runtime_run_id,
+        source="liepin",
+        label="Liepin",
+        lane_mode="detail",
+        backend_mode="runtime_source_lane",
+        produces_private_first_page_continuations=True,
+    )
+    collected_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    evidence_updates = tuple(
+        _source_evidence_for_candidate(
+            source_plan=source_plan,
+            candidate=candidate,
+            collected_at=collected_at,
+            evidence_level="detail",
+            source_lane_run_id=source_lane_run_id,
+            provider_rank=index,
+        )
+        for index, candidate in enumerate(candidates, start=1)
+    )
     lane = RuntimeSourceLaneResult(runtime_run_id=request.runtime_run_id,
-        source_plan_id=f"{request.runtime_run_id}:source:{request.round_no}:liepin",
-        source_lane_run_id=f"{request.runtime_run_id}:expansion:{request.continuation_id}",
+        source_plan_id=source_plan_id,
+        source_lane_run_id=source_lane_run_id,
         source="liepin", lane_mode="card", attempt=request.round_no, status=result.status,
         candidate_store_updates={item.resume_id: item for item in candidates},
+        source_evidence_updates=evidence_updates,
         raw_candidate_count=result.search_result.raw_candidate_count,
         candidate_query_attributions=attributions, stop_reason_code=result.safe_reason_code)
     return SourceFirstPageExpansionResult(source_kind="liepin",

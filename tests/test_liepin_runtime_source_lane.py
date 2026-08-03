@@ -136,6 +136,12 @@ def test_expansion_maps_provider_result_to_source_lane_and_attribution(monkeypat
     assert result.lane_result is not None
     assert result.lane_result.candidate_store_updates == {"resume-1": candidate}
     assert result.lane_result.candidate_query_attributions == result.candidate_query_attributions
+    assert len(result.lane_result.source_evidence_updates) == 1
+    [evidence] = result.lane_result.source_evidence_updates
+    assert evidence.candidate_resume_id == "resume-1"
+    assert evidence.source == "liepin"
+    assert evidence.evidence_level == "detail"
+    assert evidence.reason_code == "source_detail_candidate"
     assert result.expansion_opened_count == 1
     assert result.safe_reason_code == "expansion_partial"
     assert result.continuation_deleted is True

@@ -21,6 +21,7 @@ from seektalent.models import (
     RoundRetrievalPlan,
     RoundState,
     RuntimeConstraint,
+    RuntimeSourceEvidence,
     RunState,
     ScoredCandidate,
     ScoringPolicy,
@@ -149,6 +150,18 @@ def _scored_candidate(
         strengths=["Directly relevant backend work."],
         weaknesses=[],
         source_round=round_no,
+    )
+
+
+def _source_evidence(resume_id: str) -> RuntimeSourceEvidence:
+    return RuntimeSourceEvidence(
+        evidence_id=f"evidence-{resume_id}",
+        source="cts",
+        provider="cts",
+        evidence_level="detail",
+        candidate_resume_id=resume_id,
+        provider_candidate_key_hash=f"provider-{resume_id}",
+        collected_at="2026-08-03T00:00:00Z",
     )
 
 
@@ -282,6 +295,10 @@ def _run_state_for_stop_gate(
             ),
         ),
         scorecards_by_resume_id={candidate.resume_id: candidate for candidate in candidates},
+        candidate_identity_by_resume_id={candidate.resume_id: candidate.resume_id for candidate in candidates},
+        source_evidence_by_identity_id={
+            candidate.resume_id: [_source_evidence(candidate.resume_id)] for candidate in candidates
+        },
         top_pool_ids=[candidate.resume_id for candidate in candidates],
         round_history=[
             RoundState(
@@ -368,6 +385,11 @@ def test_context_builder_projects_contexts_from_run_state() -> None:
         scorecards_by_resume_id={
             "r-1": _scored_candidate("r-1", round_no=1),
             "r-2": _scored_candidate("r-2", round_no=1),
+        },
+        candidate_identity_by_resume_id={"r-1": "r-1", "r-2": "r-2"},
+        source_evidence_by_identity_id={
+            "r-1": [_source_evidence("r-1")],
+            "r-2": [_source_evidence("r-2")],
         },
         top_pool_ids=["r-1"],
         round_history=[

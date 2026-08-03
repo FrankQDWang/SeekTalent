@@ -154,3 +154,16 @@ def select_identity_top_candidates(run_state: RunState) -> list[ScoredCandidate]
             break
     run_state.top_pool_ids = [candidate.resume_id for candidate in selected]
     return selected
+
+
+def evidence_backed_candidates(
+    run_state: RunState,
+    candidates: Iterable[ScoredCandidate],
+) -> list[ScoredCandidate]:
+    return [
+        candidate
+        for candidate in candidates
+        if run_state.source_evidence_by_identity_id.get(
+            run_state.candidate_identity_by_resume_id.get(candidate.resume_id, candidate.resume_id)
+        )
+    ]

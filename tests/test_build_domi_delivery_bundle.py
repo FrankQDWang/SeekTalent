@@ -67,7 +67,7 @@ def test_build_delivery_bundle_contains_exact_pair_runtime_and_platform_installe
 ) -> None:
     bundle = tmp_path / "wtscli-browser-bridge"
     write_browser_bridge_bundle(bundle)
-    wheel = tmp_path / "seektalent-0.8.1-py3-none-any.whl"
+    wheel = tmp_path / "seektalent-0.8.2-py3-none-any.whl"
     wheel.write_bytes(b"wheel")
     wheelhouse = tmp_path / "wheelhouse"
     wheelhouse.mkdir()
@@ -104,10 +104,10 @@ def test_build_delivery_bundle_contains_exact_pair_runtime_and_platform_installe
         assert manifest["bridge_build_id"] == WTSCLI_BUILD_ID
         assert manifest["platform"] == "windows-x64"
         assert manifest["extension_directory"] == "~/.seektalent/chrome-extension/wtscli"
-        assert manifest["product_version"] == "0.8.1"
+        assert manifest["product_version"] == "0.8.2"
         assert manifest["source_revision"] == "a" * 40
         assert manifest["product_build_id"] == (
-            "seektalent-0.8.1+" + "a" * 40
+            "seektalent-0.8.2+" + "a" * 40
         )
         assert manifest["startup_script"] == "start-seektalent-domi.ps1"
         assert manifest["startup_contract"] == {
@@ -173,7 +173,7 @@ def test_exact_head_native_delivery_archive_contains_the_bound_pair() -> None:
 def test_delivery_payload_tampering_is_rejected(tmp_path: Path) -> None:
     bundle = tmp_path / "bundle"
     write_browser_bridge_bundle(bundle)
-    wheel = tmp_path / "seektalent-0.8.1-py3-none-any.whl"
+    wheel = tmp_path / "seektalent-0.8.2-py3-none-any.whl"
     wheel.write_bytes(b"wheel")
     wheelhouse = tmp_path / "wheelhouse"
     wheelhouse.mkdir()

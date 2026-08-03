@@ -59,7 +59,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: exact-seektalent-wheel
-          path: ${{ runner.temp }}/seektalent-wheel/seektalent-0.8.1-py3-none-any.whl
+          path: ${{ runner.temp }}/seektalent-wheel/seektalent-0.8.2-py3-none-any.whl
           if-no-files-found: error
           retention-days: 14
 
@@ -226,7 +226,7 @@ jobs:
 
       - name: Verify native product package contents
         env:
-          SEEKTALENT_NATIVE_DELIVERY_ARCHIVE: ${{ runner.temp }}/seektalent-native/delivery/seektalent-offline-0.8.1-${{ matrix.delivery_platform }}-py313.zip
+          SEEKTALENT_NATIVE_DELIVERY_ARCHIVE: ${{ runner.temp }}/seektalent-native/delivery/seektalent-offline-0.8.2-${{ matrix.delivery_platform }}-py313.zip
           SEEKTALENT_NATIVE_DELIVERY_PLATFORM: ${{ matrix.delivery_platform }}
         run: uv run --group dev python -m pytest tests/test_build_domi_delivery_bundle.py -q
 
@@ -282,9 +282,9 @@ jobs:
       - name: Upload native SeekTalent product package
         uses: actions/upload-artifact@v4
         with:
-          name: seektalent-offline-0.8.1-${{ matrix.delivery_platform }}-py313
+          name: seektalent-offline-0.8.2-${{ matrix.delivery_platform }}-py313
           path: |
-            ${{ runner.temp }}/seektalent-native/delivery/seektalent-offline-0.8.1-${{ matrix.delivery_platform }}-py313.zip
-            ${{ runner.temp }}/seektalent-native/delivery/seektalent-offline-0.8.1-${{ matrix.delivery_platform }}-py313.zip.sha256
+            ${{ runner.temp }}/seektalent-native/delivery/seektalent-offline-0.8.2-${{ matrix.delivery_platform }}-py313.zip
+            ${{ runner.temp }}/seektalent-native/delivery/seektalent-offline-0.8.2-${{ matrix.delivery_platform }}-py313.zip.sha256
           if-no-files-found: error
           retention-days: 14
