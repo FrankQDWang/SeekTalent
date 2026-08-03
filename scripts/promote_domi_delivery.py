@@ -13,7 +13,7 @@ from seektalent.version import __version__
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PLATFORMS = ("macos-arm64",)
+PLATFORMS = ("macos-arm64", "macos-x86_64", "windows-x64")
 
 
 def promote_delivery(

@@ -6,6 +6,7 @@ from pathlib import Path
 from seektalent.models import QueryTermCandidate, RequirementSheet
 from seektalent.progress import ProgressEvent
 from seektalent.runtime.public_events import make_runtime_public_event
+from tests.settings_factory import make_settings
 
 
 def test_enqueue_uses_atomic_acceptance_and_replays_without_duplicate_event(tmp_path: Path, monkeypatch) -> None:
@@ -170,7 +171,10 @@ def test_executor_progress_callback_persists_public_events_and_stage_outputs_wit
     assert all(output.artifact_ref_id is None for output in stage_outputs)
 
 
-def test_executor_applies_next_round_requirement_at_runtime_round_boundary(tmp_path: Path) -> None:
+def test_executor_applies_next_round_requirement_at_runtime_round_boundary(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
     from seektalent_runtime_control.commands import RuntimeCommandService
     from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
     from seektalent_runtime_control.store import RuntimeControlStore
@@ -191,6 +195,21 @@ def test_executor_applies_next_round_requirement_at_runtime_round_boundary(tmp_p
         ),
     )
     runtime = BoundaryCallbackRuntime(command_service)
+
+    def capture_source_registry(
+        settings,
+        *,
+        liepin_operation_executor=None,
+        liepin_worker_client=None,
+    ):
+        del settings, liepin_worker_client
+        runtime.operation_executor = liepin_operation_executor
+        return object()
+
+    monkeypatch.setattr(
+        "seektalent.source_adapters.build_default_source_registry",
+        capture_source_registry,
+    )
     approved_requirement = _approved_requirement()
     store.save_approved_requirement(approved_requirement, idempotency_key="approved-boundary")
     executor = WorkflowRuntimeExecutor(
@@ -210,6 +229,11 @@ def test_executor_applies_next_round_requirement_at_runtime_round_boundary(tmp_p
             "2026-06-17T00:00:08.000000Z",
         ),
         command_service=command_service,
+        settings=make_settings(
+            workspace_root=str(tmp_path),
+            liepin_worker_mode="opencli",
+            liepin_browser_action_backend="opencli",
+        ),
     )
 
     run = asyncio.run(
@@ -220,7 +244,7 @@ def test_executor_applies_next_round_requirement_at_runtime_round_boundary(tmp_p
             job_title="Senior Python Engineer",
             jd_text="Build search systems.",
             notes=None,
-            source_ids=["cts"],
+            source_ids=["liepin"],
         )
     )
 
@@ -296,6 +320,7 @@ class BoundaryCallbackRuntime:
     def __init__(self, command_service) -> None:  # type: ignore[no-untyped-def]
         self.command_service = command_service
         self.boundary_sheet: RequirementSheet | None = None
+        self.operation_executor: object | None = None
 
     async def run_async(self, **kwargs: object) -> object:
         runtime_start_callback = kwargs["runtime_start_callback"]
@@ -318,6 +343,20 @@ class BoundaryCallbackRuntime:
             "runtime_run_1"
         ).approved_requirement_revision_id == "reqapproved_1"
         runtime_round_boundary_commit_callback(1)
+        assert self.operation_executor is not None
+        accepted_revision = getattr(
+            self.operation_executor,
+            "_accepted_requirement_revision_id",
+        )
+        current_revision = self.command_service.store.get_run(
+            "runtime_run_1"
+        ).approved_requirement_revision_id
+        if accepted_revision != current_revision:
+            from seektalent_runtime_control.store import RuntimeControlError
+
+            raise RuntimeControlError(
+                "source_operation_requirement_revision_mismatch"
+            )
         return object()
 
 

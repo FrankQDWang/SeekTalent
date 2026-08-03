@@ -451,6 +451,10 @@ class WorkflowRuntimeExecutor:
                     round_no=round_no,
                     amendments=amendments,
                 )
+            if liepin_operation_executor is not None:
+                liepin_operation_executor.activate_requirement_revision(
+                    target.approved_requirement_revision_id
+                )
             approved = target
             projected_requirement_revision_id = target.approved_requirement_revision_id
 
