@@ -4,6 +4,7 @@ from seektalent.models import FinalizeContext, RunState
 from seektalent.requirements import build_requirement_digest
 
 from seektalent.runtime.context_views import top_candidates
+from seektalent.runtime.candidate_intake import evidence_backed_candidates
 
 
 def build_finalize_context(
@@ -19,7 +20,7 @@ def build_finalize_context(
         run_dir=run_dir,
         rounds_executed=rounds_executed,
         stop_reason=stop_reason,
-        top_candidates=top_candidates(run_state),
+        top_candidates=evidence_backed_candidates(run_state, top_candidates(run_state)),
         requirement_digest=build_requirement_digest(run_state.requirement_sheet),
         sent_query_history=run_state.retrieval_state.sent_query_history,
     )

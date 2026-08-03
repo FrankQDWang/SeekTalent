@@ -37,6 +37,25 @@ from seektalent_workbench_v2.runtime_service import (
 NOW = "2026-06-25T01:02:03.000004+00:00"
 
 
+def _summary_evidence(
+    runtime_run_id: str,
+    identity_id: str,
+    resume_id: str,
+) -> RuntimeControlCandidateEvidence:
+    return RuntimeControlCandidateEvidence(
+        runtime_run_id=runtime_run_id,
+        evidence_id=f"evidence-{identity_id}",
+        identity_id=identity_id,
+        resume_id=resume_id,
+        source_kind="liepin",
+        evidence_level="detail",
+        provider_candidate_key_hash=f"provider-{identity_id}",
+        payload={},
+        payload_hash=f"evidence-hash-{identity_id}",
+        updated_at=NOW,
+    )
+
+
 def test_liepin_worker_error_implements_source_neutral_contract() -> None:
     assert issubclass(LiepinWorkerModeError, SourceWorkerError)
 
@@ -276,8 +295,10 @@ class CandidateThresholdStore:
         ]
 
     def list_candidate_evidence(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateEvidence]:
-        del runtime_run_id
-        return []
+        return [
+            _summary_evidence(runtime_run_id, identity_id, f"resume-{identity_id}")
+            for identity_id in ("low", "edge", "high", "hard-fail")
+        ]
 
 
 def test_candidate_summary_includes_low_fit_scores_but_hides_hard_conflicts() -> None:
@@ -312,8 +333,10 @@ class CandidateLimitStore:
         ]
 
     def list_candidate_evidence(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateEvidence]:
-        del runtime_run_id
-        return []
+        return [
+            _summary_evidence(runtime_run_id, f"identity-{score:02d}", f"resume-{score:02d}")
+            for score in range(25)
+        ]
 
 
 def test_candidate_summary_keeps_top_twenty_in_raw_score_order() -> None:
@@ -785,13 +808,10 @@ def test_runtime_service_candidate_detail_uses_only_canonical_resume_evidence() 
 def test_runtime_service_does_not_claim_source_without_evidence() -> None:
     service = WorkbenchV2RuntimeService(store=CandidateIdentityOnlyStore())  # type: ignore[arg-type]
 
-    summary = service.list_candidate_summaries("rtrun_candidate")[0]
+    summaries = service.list_candidate_summaries("rtrun_candidate")
     detail = service.get_candidate_detail("rtrun_candidate", "identity_1")
 
-    assert summary["sourceKinds"] == []
-    assert summary["detailAvailability"] == "unavailable"
-    assert summary["accessState"] == "denied"
-    assert summary["avatarColorKey"] in {f"avatar-{index}" for index in range(6)}
+    assert summaries == []
     assert detail["sourceKinds"] == []
     assert detail["detailAvailability"] == "unavailable"
     assert detail["accessState"] == "denied"

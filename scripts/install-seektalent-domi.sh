@@ -14,7 +14,7 @@ _seektalent_domi_fail() {
 }
 
 _seektalent_domi_install() {
-  local version="${1:-0.8.1}"
+  local version="${1:-0.8.2}"
   local requested_bundle_dir="${2:-${SEEKTALENT_WTSCLI_BUNDLE_DIR:-}}"
   local domi_python="${SEEKTALENT_DOMI_PYTHON:-${DOMI_PYTHON:-}}"
   local domi_node="${DOMI_NODE:-${SEEKTALENT_DOMI_NODE:-}}"

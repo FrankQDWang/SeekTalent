@@ -117,7 +117,11 @@ from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 from seektalent.source_contracts.first_page_expansion import SourceFirstPageExpansionResult
 from seektalent.progress import ProgressCallback, ProgressEvent
 from seektalent.artifacts.lifecycle import RuntimeArtifactLifecycleRef
-from seektalent.runtime.candidate_intake import normalize_runtime_candidates, select_identity_top_candidates
+from seektalent.runtime.candidate_intake import (
+    evidence_backed_candidates,
+    normalize_runtime_candidates,
+    select_identity_top_candidates,
+)
 from seektalent.reflection.critic import ReflectionCritic
 from seektalent.retrieval import (
     build_location_execution_plan,
@@ -817,7 +821,7 @@ class WorkflowRuntime:
             selected_source_kinds=selected_sources,
             candidate_identity_ids=tuple(
                 run_state.candidate_identity_by_resume_id.get(candidate.resume_id, candidate.resume_id)
-                for candidate in identity_top_candidates
+                for candidate in evidence_backed_candidates(run_state, identity_top_candidates)
             ),
             created_at=datetime.now().astimezone().isoformat(timespec="seconds"),
             coverage_summary=run_state.source_coverage_summary,
@@ -1556,7 +1560,7 @@ class WorkflowRuntime:
             selected_source_kinds=coverage_summary.selected_source_kinds,
             candidate_identity_ids=tuple(
                 run_state.candidate_identity_by_resume_id.get(candidate.resume_id, candidate.resume_id)
-                for candidate in identity_top_candidates
+                for candidate in evidence_backed_candidates(run_state, identity_top_candidates)
             ),
             created_at=datetime.now().astimezone().isoformat(timespec="seconds"),
             coverage_summary=coverage_summary,

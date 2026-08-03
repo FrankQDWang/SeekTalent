@@ -520,6 +520,8 @@ class WorkbenchV2RuntimeService:
                 identity,
                 retained_evidence,
             )
+            if not evidence:
+                continue
             score = _candidate_score(identity, evidence)
             if not is_workbench_candidate_visible(score=score, fit_bucket=identity.fit_bucket):
                 continue

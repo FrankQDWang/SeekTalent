@@ -36,6 +36,7 @@ from seektalent.models import (
     RuntimeCanonicalIntakeSummary,
     RuntimeCanonicalResumeSelection,
     RuntimeIdentityConflict,
+    RuntimeSourceEvidence,
     ScoredCandidate,
     ScoringPolicy,
     ScoringFailure,
@@ -1059,6 +1060,22 @@ def _scored_candidate(
     )
 
 
+def _attach_source_evidence(run_state: RunState, *resume_ids: str) -> None:
+    for index, resume_id in enumerate(resume_ids, start=1):
+        identity_id = run_state.candidate_identity_by_resume_id.get(resume_id, resume_id)
+        run_state.source_evidence_by_identity_id.setdefault(identity_id, []).append(
+            RuntimeSourceEvidence(
+                evidence_id=f"evidence-{resume_id}-{index}",
+                source="liepin",
+                provider="liepin",
+                evidence_level="detail",
+                candidate_resume_id=resume_id,
+                provider_candidate_key_hash=f"provider-{resume_id}",
+                collected_at="2026-08-03T00:00:00Z",
+            )
+        )
+
+
 def test_source_dispatch_merge_normalizes_candidates_before_identity_rebuild(tmp_path: Path) -> None:
     runtime = _runtime_for_strict_source_tests(tmp_path)
     run_state = _run_state_for_canonical_intake_tests()
@@ -1455,6 +1472,7 @@ def test_identity_top_pool_contains_one_scorecard_per_identity() -> None:
         "liepin-1": _scored_candidate("liepin-1", overall_score=90),
         "cts-2": _scored_candidate("cts-2", overall_score=80),
     }
+    _attach_source_evidence(run_state, "liepin-1", "cts-2")
 
     selected = select_identity_top_candidates(run_state)
 
@@ -1481,11 +1499,46 @@ def test_identity_top_pool_only_contains_recommendation_eligible_candidates() ->
         candidate.resume_id: candidate
         for candidate in (fit, hard_conflict, low_score)
     }
+    _attach_source_evidence(run_state, "fit", "not-fit", "low-score")
 
     selected = select_identity_top_candidates(run_state)
 
     assert [candidate.resume_id for candidate in selected] == ["fit"]
     assert run_state.top_pool_ids == ["fit"]
+
+
+def test_finalize_context_excludes_candidates_without_source_evidence() -> None:
+    run_state = _run_state_for_canonical_intake_tests()
+    candidates = [_scored_candidate(f"resume-{index}", overall_score=90 - index) for index in range(10)]
+    run_state.scorecards_by_resume_id = {candidate.resume_id: candidate for candidate in candidates}
+    run_state.candidate_identity_by_resume_id = {
+        candidate.resume_id: f"identity-{index}" for index, candidate in enumerate(candidates)
+    }
+    run_state.source_evidence_by_identity_id = {
+        f"identity-{index}": [
+            RuntimeSourceEvidence(
+                evidence_id=f"evidence-{index}",
+                source="liepin",
+                provider="liepin",
+                evidence_level="detail",
+                candidate_resume_id=candidate.resume_id,
+                provider_candidate_key_hash=f"provider-{index}",
+                collected_at="2026-08-03T00:00:00Z",
+            )
+        ]
+        for index, candidate in enumerate(candidates[:2])
+    }
+
+    select_identity_top_candidates(run_state)
+    context = build_finalize_context(
+        run_state=run_state,
+        rounds_executed=1,
+        stop_reason="max_rounds_reached",
+        run_id="run-test",
+        run_dir="/tmp/run-test",
+    )
+
+    assert [candidate.resume_id for candidate in context.top_candidates] == ["resume-0", "resume-1"]
 
 
 def test_finalize_context_uses_identity_deduped_top_pool() -> None:
@@ -1512,6 +1565,7 @@ def test_finalize_context_uses_identity_deduped_top_pool() -> None:
         "liepin-1": _scored_candidate("liepin-1", overall_score=90),
         "cts-2": _scored_candidate("cts-2", overall_score=80),
     }
+    _attach_source_evidence(run_state, "liepin-1", "cts-2")
     select_identity_top_candidates(run_state)
 
     context = build_finalize_context(
@@ -3854,6 +3908,7 @@ def test_score_round_keeps_existing_scorecards_and_only_scores_new_resumes(tmp_p
             blocking=False,
         )
     ]
+    _attach_source_evidence(run_state, "seen", "fresh")
 
     try:
         scoring_result = asyncio.run(
@@ -4327,6 +4382,7 @@ def test_candidate_feedback_lane_does_not_instantiate_model_steps(
             ),
         }
         run_state.top_pool_ids = ["seed-1", "seed-2"]
+        _attach_source_evidence(run_state, "seed-1", "seed-2")
         _, stop_reason, rounds_executed, terminal_controller_round = asyncio.run(
             runtime._run_rounds(
                 run_state=run_state,
@@ -4410,6 +4466,7 @@ def test_low_quality_rescue_candidate_feedback_calls_llm_prf(tmp_path: Path, mon
             ),
         }
         run_state.top_pool_ids = ["seed-1", "seed-2"]
+        _attach_source_evidence(run_state, "seed-1", "seed-2")
         asyncio.run(
             runtime._run_rounds(
                 run_state=run_state,
