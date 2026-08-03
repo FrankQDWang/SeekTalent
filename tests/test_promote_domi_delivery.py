@@ -2,12 +2,35 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from pathlib import Path
+import subprocess
+import sys
 import zipfile
 
 import pytest
 
 from scripts.promote_domi_delivery import PLATFORMS, promote_delivery
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_promotion_script_runs_by_file_path_without_pythonpath() -> None:
+    env = os.environ.copy()
+    env.pop("PYTHONPATH", None)
+
+    completed = subprocess.run(
+        [sys.executable, "scripts/promote_domi_delivery.py", "--help"],
+        cwd=ROOT,
+        env=env,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "usage:" in completed.stdout
 
 
 def test_promotion_preserves_old_artifacts_and_requires_one_exact_identity(

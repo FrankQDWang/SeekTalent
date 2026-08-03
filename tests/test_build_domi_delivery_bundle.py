@@ -12,6 +12,7 @@ import pytest
 from scripts import build_domi_delivery_bundle as delivery_module
 from scripts.build_domi_delivery_bundle import build_delivery_bundle
 from seektalent.domi_host_runtime import HostRuntimeIdentity, validate_delivery_payload
+from seektalent import release_source
 from tests.browser_bridge_bundle_fixtures import (
     WTSCLI_BUILD_ID,
     write_browser_bridge_bundle,
@@ -40,14 +41,14 @@ def test_source_revision_rejects_a_dirty_checkout(
 ) -> None:
     def run(command: list[str], **_kwargs: object):
         if command[1:] == ["rev-parse", "HEAD"]:
-            return delivery_module.subprocess.CompletedProcess(
+            return release_source.subprocess.CompletedProcess(
                 command,
                 0,
                 stdout="a" * 40 + "\n",
                 stderr="",
             )
         if command[1:] == ["status", "--porcelain"]:
-            return delivery_module.subprocess.CompletedProcess(
+            return release_source.subprocess.CompletedProcess(
                 command,
                 0,
                 stdout=" M src/seektalent/version.py\n",
@@ -55,10 +56,10 @@ def test_source_revision_rejects_a_dirty_checkout(
             )
         raise AssertionError(command)
 
-    monkeypatch.setattr(delivery_module.subprocess, "run", run)
+    monkeypatch.setattr(release_source.subprocess, "run", run)
 
     with pytest.raises(RuntimeError, match="source_checkout_not_clean"):
-        delivery_module._source_revision()
+        release_source.source_revision(delivery_module.ROOT)
 
 
 def test_build_delivery_bundle_contains_exact_pair_runtime_and_platform_installer(

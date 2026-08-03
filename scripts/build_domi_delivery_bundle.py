@@ -5,7 +5,6 @@ import hashlib
 import json
 import shutil
 import stat
-import subprocess
 import sys
 import tempfile
 import zipfile
@@ -23,6 +22,7 @@ from seektalent.domi_host_runtime import (
     probe_runtime_with_python,
     validate_delivery_runtime_contract,
 )
+from seektalent.release_source import source_revision as checkout_source_revision
 from seektalent.version import __version__
 
 
@@ -55,7 +55,7 @@ def build_delivery_bundle(
     if platform_name not in SUPPORTED_PLATFORMS:
         raise ValueError(f"unsupported delivery platform: {platform_name}")
     admitted = load_browser_bridge_bundle(browser_bridge_bundle)
-    exact_source_revision = source_revision or _source_revision()
+    exact_source_revision = source_revision or checkout_source_revision(ROOT)
     if (
         len(exact_source_revision) != 40
         or any(character not in "0123456789abcdef" for character in exact_source_revision)
@@ -271,26 +271,6 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _source_revision() -> str:
-    revision = subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-    dirty = subprocess.run(
-        ["git", "status", "--porcelain"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout
-    if dirty:
-        raise RuntimeError("source_checkout_not_clean")
-    return revision
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Build a platform SeekTalent package with the exact WTSCLI pair.",
@@ -313,7 +293,7 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
-    source_revision = _source_revision()
+    source_revision = checkout_source_revision(ROOT)
     if (
         args.source_revision is not None
         and args.source_revision != source_revision

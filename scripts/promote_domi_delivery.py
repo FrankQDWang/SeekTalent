@@ -8,10 +8,11 @@ from typing import cast
 import zipfile
 from pathlib import Path
 
+from seektalent.release_source import source_revision
 from seektalent.version import __version__
-from scripts.build_domi_delivery_bundle import _source_revision
 
 
+ROOT = Path(__file__).resolve().parents[1]
 PLATFORMS = ("macos-arm64",)
 
 
@@ -170,7 +171,7 @@ def main() -> int:
     identity = promote_delivery(
         dist_dir=args.dist_dir,
         build_dir=args.build_dir,
-        expected_source_revision=_source_revision(),
+        expected_source_revision=source_revision(ROOT),
     )
     print(json.dumps(identity, sort_keys=True))
     return 0
