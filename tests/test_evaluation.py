@@ -2400,7 +2400,7 @@ def test_evaluate_run_logs_weave_and_wandb(
     assert any(payload.get("rounds_executed") == 4 for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("terminal_quality_gate_status") is None for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("terminal_top_pool_strength") is None for payload in fake_wandb.runs[0].logged)
-    assert any(payload.get("terminal_strong_fit_count") is None for payload in fake_wandb.runs[0].logged)
+    assert any(payload.get("terminal_strong_recommendation_count") is None for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("terminal_broadening_attempted") is None for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("judge_candidate_count") == 1 for payload in fake_wandb.runs[0].logged)
     assert any(payload.get("judge_label_cache_hit_count") == 0 for payload in fake_wandb.runs[0].logged)

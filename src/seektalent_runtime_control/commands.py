@@ -271,78 +271,64 @@ class RuntimeCommandService:
         )
         if existing is not None:
             return _amendment_result(existing, supersedes_amendment_id=None)
-        current = self.store.get_approved_requirement(run.approved_requirement_revision_id)
-        target_round_no = self._next_unlocked_round(runtime_run_id=runtime_run_id, after_round=run.current_round or 0)
         amendment_id = self.amendment_id_factory()
         safe_provenance = _sanitize_requirement_provenance(provenance)
-        saved_extracting = False
-        if self.requirement_extractor is not None:
-            self.store.save_requirement_amendment(
-                RequirementAmendment(
-                    amendment_id=amendment_id,
-                    agent_conversation_id=run.agent_conversation_id or runtime_run_id,
-                    runtime_run_id=runtime_run_id,
-                    base_approved_requirement_revision_id=current.approved_requirement_revision_id,
-                    target_round_no=target_round_no,
-                    effective_boundary="before_round_controller",
-                    input_text=text,
-                    target_section_hint=target_section_hint,
-                    status=_EXTRACTING_STATUS,
-                    normalized_patch={},
-                    rejected_fragments=[],
-                    review_items=[],
-                    provenance=safe_provenance,
-                    idempotency_key=idempotency_key,
-                    created_at=self.now(),
-                )
-            )
-            saved_extracting = True
+        reserved, chain_predecessor_id = self.store.reserve_next_round_requirement(
+            RequirementAmendment(
+                amendment_id=amendment_id,
+                agent_conversation_id=run.agent_conversation_id or runtime_run_id,
+                runtime_run_id=runtime_run_id,
+                base_approved_requirement_revision_id=run.approved_requirement_revision_id,
+                target_round_no=(run.current_round or 0) + 1,
+                effective_boundary="before_round_controller",
+                input_text=text,
+                target_section_hint=target_section_hint,
+                status=_EXTRACTING_STATUS,
+                normalized_patch={},
+                rejected_fragments=[],
+                review_items=[],
+                provenance=safe_provenance,
+                idempotency_key=idempotency_key,
+                created_at=self.now(),
+            ),
+            after_round=run.current_round or 0,
+            replace_amendment_id=replace_amendment_id,
+        )
+        if reserved.amendment_id != amendment_id:
+            return _amendment_result(reserved, supersedes_amendment_id=None)
+        if reserved.target_round_no is None:
+            raise RuntimeControlError("requirement_amendment_stale")
+        target_round_no = reserved.target_round_no
+        base_revision_id = reserved.base_approved_requirement_revision_id
+        if base_revision_id is None:
+            raise RuntimeControlError("requirement_not_confirmed")
+        current = self.store.get_approved_requirement(base_revision_id)
         try:
             normalized = self._extract_next_round_requirement_patch(
                 runtime_run_id=runtime_run_id,
                 text=text,
                 target_section_hint=target_section_hint,
                 current_requirement=current,
+                effective_round_no=target_round_no,
             )
         except (RuntimeControlError, TypeError, ValueError, ValidationError):
-            if saved_extracting:
-                self.store.update_requirement_amendment_status(
-                    amendment_id=amendment_id,
-                    status="failed",
-                    resolved_at=self.now(),
-                )
+            self.store.update_requirement_amendment_status(
+                amendment_id=amendment_id,
+                status="failed",
+                resolved_at=self.now(),
+            )
             raise
         review_items = _review_items(normalized)
         if review_items:
-            amendment = RequirementAmendment(
+            amendment = self.store.complete_runtime_requirement_amendment_extraction(
                 amendment_id=amendment_id,
-                agent_conversation_id=run.agent_conversation_id or runtime_run_id,
-                runtime_run_id=runtime_run_id,
-                base_approved_requirement_revision_id=current.approved_requirement_revision_id,
-                target_round_no=target_round_no,
-                effective_boundary="before_round_controller",
-                input_text=text,
-                target_section_hint=target_section_hint,
                 status=_NEEDS_REVIEW_STATUS,
+                result_approved_requirement_revision_id=None,
                 normalized_patch=dict(normalized),
                 rejected_fragments=_list_payload(normalized.get("rejectedFragments")),
                 review_items=review_items,
-                provenance=safe_provenance,
-                idempotency_key=idempotency_key,
-                created_at=self.now(),
+                resolved_at=self.now(),
             )
-            if saved_extracting:
-                amendment = self.store.complete_runtime_requirement_amendment_extraction(
-                    amendment_id=amendment_id,
-                    status=_NEEDS_REVIEW_STATUS,
-                    result_approved_requirement_revision_id=None,
-                    normalized_patch=dict(normalized),
-                    rejected_fragments=_list_payload(normalized.get("rejectedFragments")),
-                    review_items=review_items,
-                    resolved_at=self.now(),
-                )
-            else:
-                self.store.save_requirement_amendment(amendment)
             self.store.append_event(
                 _event(
                     runtime_run_id=runtime_run_id,
@@ -371,7 +357,7 @@ class RuntimeCommandService:
                     created_at=amendment.created_at,
                 )
             )
-            return _amendment_result(amendment, supersedes_amendment_id=replace_amendment_id)
+            return _amendment_result(amendment, supersedes_amendment_id=None)
         approved = ApprovedRequirementRevision(
             approved_requirement_revision_id=self.approved_requirement_id_factory(),
             draft_revision_id=None,
@@ -384,43 +370,16 @@ class RuntimeCommandService:
             created_at=self.now(),
         )
         self.store.save_approved_requirement(approved, idempotency_key=f"{idempotency_key}:approved")
-        amendment = RequirementAmendment(
+        amendment = self.store.complete_runtime_requirement_amendment_extraction(
             amendment_id=amendment_id,
-            agent_conversation_id=run.agent_conversation_id or runtime_run_id,
-            runtime_run_id=runtime_run_id,
-            base_approved_requirement_revision_id=current.approved_requirement_revision_id,
-            result_approved_requirement_revision_id=approved.approved_requirement_revision_id,
-            target_round_no=target_round_no,
-            effective_boundary="before_round_controller",
-            input_text=text,
-            target_section_hint=target_section_hint,
             status=_PENDING_TARGET_ROUND_STATUS,
+            result_approved_requirement_revision_id=approved.approved_requirement_revision_id,
             normalized_patch=dict(normalized),
             rejected_fragments=_list_payload(normalized.get("rejectedFragments")),
             review_items=[],
-            provenance=safe_provenance,
-            idempotency_key=idempotency_key,
-            created_at=approved.created_at,
+            resolved_at=approved.created_at,
         )
-        if saved_extracting:
-            amendment = self.store.complete_runtime_requirement_amendment_extraction(
-                amendment_id=amendment_id,
-                status=_PENDING_TARGET_ROUND_STATUS,
-                result_approved_requirement_revision_id=approved.approved_requirement_revision_id,
-                normalized_patch=dict(normalized),
-                rejected_fragments=_list_payload(normalized.get("rejectedFragments")),
-                review_items=[],
-                resolved_at=approved.created_at,
-            )
-        else:
-            self.store.save_requirement_amendment(amendment)
-        if replace_amendment_id is not None:
-            self.store.update_requirement_amendment_status(
-                amendment_id=replace_amendment_id,
-                status="superseded",
-                superseded_by_amendment_id=amendment.amendment_id,
-                resolved_at=approved.created_at,
-            )
+        if chain_predecessor_id is not None:
             self.store.append_event(
                 _event(
                     runtime_run_id=runtime_run_id,
@@ -429,7 +388,10 @@ class RuntimeCommandService:
                     round_no=run.current_round,
                     status="completed",
                     summary="next-round requirement superseded",
-                    payload={"amendmentId": replace_amendment_id, "supersededByAmendmentId": amendment.amendment_id},
+                    payload={
+                        "amendmentId": chain_predecessor_id,
+                        "supersededByAmendmentId": amendment.amendment_id,
+                    },
                     created_at=approved.created_at,
                 )
             )
@@ -445,7 +407,7 @@ class RuntimeCommandService:
                 created_at=approved.created_at,
             )
         )
-        return _amendment_result(amendment, supersedes_amendment_id=replace_amendment_id)
+        return _amendment_result(amendment, supersedes_amendment_id=chain_predecessor_id)
 
     def _extract_next_round_requirement_patch(
         self,
@@ -454,6 +416,7 @@ class RuntimeCommandService:
         text: str,
         target_section_hint: str | None,
         current_requirement: ApprovedRequirementRevision,
+        effective_round_no: int,
     ) -> dict[str, object]:
         if self.requirement_extractor is None:
             if self.requirement_normalizer is None:
@@ -470,7 +433,11 @@ class RuntimeCommandService:
             notes=None,
             requirement_cache_scope=runtime_run_id,
         )
-        merged = merge_requirement_sheet_supplement(current_requirement.requirement_sheet, supplement)
+        merged = merge_requirement_sheet_supplement(
+            current_requirement.requirement_sheet,
+            supplement,
+            effective_round_no=effective_round_no,
+        )
         return {
             "requirementSheet": merged.model_dump(mode="json"),
             "extractedSupplement": supplement.model_dump(mode="json"),
@@ -517,18 +484,18 @@ class RuntimeCommandService:
             created_at=self.now(),
         )
         self.store.save_approved_requirement(approved, idempotency_key=f"{idempotency_key}:approved")
-        target_round_no = self._next_unlocked_round(
-            runtime_run_id=runtime_run_id,
-            after_round=(amendment.target_round_no or run.current_round or 0) - 1,
-        )
         resolved = self.store.resolve_runtime_requirement_amendment(
             amendment_id=amendment.amendment_id,
+            runtime_run_id=runtime_run_id,
             status=_PENDING_TARGET_ROUND_STATUS,
-            target_round_no=target_round_no,
+            after_round=(amendment.target_round_no or run.current_round or 0) - 1,
             result_approved_requirement_revision_id=approved.approved_requirement_revision_id,
             resolved_patch=resolved_patch,
             resolved_at=approved.created_at,
         )
+        if resolved.target_round_no is None:
+            raise RuntimeControlError("requirement_amendment_stale")
+        target_round_no = resolved.target_round_no
         self.store.append_event(
             _event(
                 runtime_run_id=runtime_run_id,
@@ -555,6 +522,45 @@ class RuntimeCommandService:
         attempt_no: int | None = None,
         round_no: int,
     ) -> list[RequirementAmendment]:
+        pending = self.prepare_next_round_requirements_at_boundary(
+            runtime_run_id=runtime_run_id,
+            executor_id=executor_id,
+            attempt_no=attempt_no,
+            round_no=round_no,
+        )
+        return self.commit_next_round_requirements_at_boundary(
+            runtime_run_id=runtime_run_id,
+            executor_id=executor_id,
+            attempt_no=attempt_no,
+            round_no=round_no,
+            amendments=pending,
+        )
+
+    def prepare_next_round_requirements_at_boundary(
+        self,
+        *,
+        runtime_run_id: str,
+        executor_id: str,
+        attempt_no: int | None = None,
+        round_no: int,
+    ) -> list[RequirementAmendment]:
+        lock_event = _event(
+            runtime_run_id=runtime_run_id,
+            event_type="runtime_round_input_locked",
+            stage="round",
+            round_no=round_no,
+            status="completed",
+            summary=f"round {round_no} input locked",
+            payload={"targetRoundNo": round_no},
+            created_at=self.now(),
+        ).model_copy(
+            update={"idempotency_key": f"runtime-round-input-locked:{round_no}"}
+        )
+        self.store.lock_round_input(
+            lock_event,
+            executor_id=executor_id,
+            attempt_no=attempt_no,
+        )
         self._wait_for_blocking_next_round_requirements(
             runtime_run_id=runtime_run_id,
             executor_id=executor_id,
@@ -566,54 +572,83 @@ class RuntimeCommandService:
             target_round_no=round_no,
             statuses={"pending_target_round"},
         )
+        if len(pending) > 1:
+            raise RuntimeControlError(
+                "runtime_requirement_amendment_chain_conflict",
+                payload={
+                    "targetRoundNo": round_no,
+                    "amendmentIds": [item.amendment_id for item in pending],
+                },
+            )
+        return pending
+
+    def commit_next_round_requirements_at_boundary(
+        self,
+        *,
+        runtime_run_id: str,
+        executor_id: str,
+        attempt_no: int | None = None,
+        round_no: int,
+        amendments: list[RequirementAmendment],
+    ) -> list[RequirementAmendment]:
         applied: list[RequirementAmendment] = []
-        for amendment in pending:
+        for amendment in amendments:
+            current = self.store.get_requirement_amendment(amendment.amendment_id)
+            if current is None:
+                raise RuntimeControlError("requirement_draft_not_found")
+            if current.status == "applied":
+                applied.append(current)
+                continue
+            if current.status != _PENDING_TARGET_ROUND_STATUS or current.target_round_no != round_no:
+                raise RuntimeControlError("requirement_amendment_stale")
             applied_at = self.now()
-            event = self.store.append_executor_event(
-                _event(
-                    runtime_run_id=runtime_run_id,
-                    event_type="runtime_next_round_requirement_applied",
-                    stage="round",
-                    round_no=round_no,
-                    status="completed",
-                    summary="next-round requirement applied",
-                    payload={"amendmentId": amendment.amendment_id},
-                    created_at=applied_at,
-                ),
+            applied_event = _event(
+                runtime_run_id=runtime_run_id,
+                event_type="runtime_next_round_requirement_applied",
+                stage="round",
+                round_no=round_no,
+                status="completed",
+                summary="next-round requirement applied",
+                payload={"amendmentId": amendment.amendment_id},
+                created_at=applied_at,
+            ).model_copy(
+                update={
+                    "idempotency_key": (
+                        f"runtime-next-round-requirement-applied:{amendment.amendment_id}"
+                    )
+                }
+            )
+            target_revision_id = current.result_approved_requirement_revision_id
+            if target_revision_id is None:
+                raise RuntimeControlError("requirement_amendment_stale")
+            activated_event = _event(
+                runtime_run_id=runtime_run_id,
+                event_type="runtime_requirement_revision_activated",
+                stage="round",
+                round_no=round_no,
+                status="completed",
+                summary="requirement revision activated",
+                payload={
+                    "amendmentId": amendment.amendment_id,
+                    "approvedRequirementRevisionId": target_revision_id,
+                },
+                created_at=applied_at,
+            ).model_copy(
+                update={
+                    "idempotency_key": (
+                        f"runtime-requirement-revision-activated:{amendment.amendment_id}"
+                    )
+                }
+            )
+            updated = self.store.activate_requirement_amendment_at_boundary(
+                runtime_run_id=runtime_run_id,
+                amendment_id=amendment.amendment_id,
+                round_no=round_no,
+                applied_event=applied_event,
+                activated_event=activated_event,
                 executor_id=executor_id,
                 attempt_no=attempt_no,
-                run_status="running",
             )
-            updated = self.store.update_requirement_amendment_status(
-                amendment_id=amendment.amendment_id,
-                status="applied",
-                applied_event_id=event.event_id,
-                resolved_at=applied_at,
-            )
-            if amendment.result_approved_requirement_revision_id is not None:
-                self.store.activate_run_requirement_revision(
-                    runtime_run_id=runtime_run_id,
-                    approved_requirement_revision_id=amendment.result_approved_requirement_revision_id,
-                    updated_at=applied_at,
-                )
-                self.store.append_executor_event(
-                    _event(
-                        runtime_run_id=runtime_run_id,
-                        event_type="runtime_requirement_revision_activated",
-                        stage="round",
-                        round_no=round_no,
-                        status="completed",
-                        summary="requirement revision activated",
-                        payload={
-                            "amendmentId": amendment.amendment_id,
-                            "approvedRequirementRevisionId": amendment.result_approved_requirement_revision_id,
-                        },
-                        created_at=applied_at,
-                    ),
-                    executor_id=executor_id,
-                    attempt_no=attempt_no,
-                    run_status="running",
-                )
             applied.append(updated)
         return applied
 
@@ -797,17 +832,6 @@ class RuntimeCommandService:
         run = self.store.get_run(runtime_run_id)
         if run.status in _TERMINAL_RUN_STATUSES or run.status == "cancellation_requested":
             raise RuntimeControlError("runtime_command_conflict")
-
-    def _next_unlocked_round(self, *, runtime_run_id: str, after_round: int) -> int:
-        target = after_round + 1
-        while self.store.has_event(
-            runtime_run_id=runtime_run_id,
-            event_type="runtime_round_input_locked",
-            round_no=target,
-        ):
-            target += 1
-        return target
-
 
 def _next_lifecycle_command(commands: list[RuntimeCommand]) -> RuntimeCommand | None:
     for command_type in ("cancel", "pause", "resume"):

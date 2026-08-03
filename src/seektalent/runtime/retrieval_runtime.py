@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal, TypedDict
 
 from seektalent.config import AppSettings
+from seektalent.candidate_quality import is_recommendation_eligible
 from seektalent.corpus.runtime import ProviderReturnedCandidate, build_deterministic_provider_request_id
 from seektalent.core.retrieval.provider_contract import ProviderSearchContinuation, ProviderSnapshot, SearchResult
 from seektalent.core.retrieval.service import RetrievalService
@@ -448,7 +449,14 @@ class RetrievalRuntime:
 
             scored_candidates = await score_for_query_outcome(new_candidates) if new_candidates else []
             lane_outcome.scored_candidates.extend(scored_candidates)
-            fit_or_near_fit_count = sum(1 for candidate in scored_candidates if candidate.fit_bucket == "fit")
+            fit_or_near_fit_count = sum(
+                1
+                for candidate in scored_candidates
+                if is_recommendation_eligible(
+                    score=candidate.overall_score,
+                    fit_bucket=candidate.fit_bucket,
+                )
+            )
             fit_rate = fit_or_near_fit_count / len(new_candidates) if new_candidates else 0.0
             must_have_match_avg = (
                 sum(candidate.must_have_match_score for candidate in scored_candidates) / len(scored_candidates)

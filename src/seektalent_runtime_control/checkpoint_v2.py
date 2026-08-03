@@ -13,6 +13,7 @@ RUNTIME_CHECKPOINT_SCHEMA_V2 = "runtime-control-checkpoint/v2"
 V2_SAFE_BOUNDARIES = frozenset(
     {
         "before_source_dispatch",
+        "before_round_controller",
         "after_source_result_commit",
         "runtime_candidate_checkpoint",
         "after_round_controller",

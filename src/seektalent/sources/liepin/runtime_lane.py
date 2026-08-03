@@ -10,6 +10,10 @@ from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
 from seektalent.config import AppSettings
+from seektalent.candidate_observation_merge import (
+    merge_resume_candidate_observations,
+    merge_runtime_source_evidence_updates,
+)
 from seektalent.core.retrieval.provider_contract import (
     ProviderFirstPageExpansionError,
     ProviderSearchContinuation,
@@ -20,6 +24,7 @@ from seektalent.core.retrieval.provider_contract import (
 from seektalent.source_contracts.first_page_expansion import SourceFirstPageExpansionError, SourceFirstPageExpansionRequest, SourceFirstPageExpansionResult
 from seektalent.models import ResumeCandidate, RuntimeSourceEvidence
 from seektalent.providers.liepin.adapter import LiepinProviderAdapter
+from seektalent.normalization import normalize_resume
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 from seektalent.providers.liepin.card_policy import (
     LiepinCardDecisionAction,
@@ -498,10 +503,29 @@ def merge_liepin_card_lane_results(
     first: RuntimeSourceLaneResult,
     second: RuntimeSourceLaneResult,
 ) -> RuntimeSourceLaneResult:
+    evidence_updates = merge_runtime_source_evidence_updates(
+        first.source_evidence_updates,
+        second.source_evidence_updates,
+    )
+    first_evidence_by_resume_id = _evidence_by_resume_id(first.source_evidence_updates)
+    second_evidence_by_resume_id = _evidence_by_resume_id(second.source_evidence_updates)
     candidate_updates = dict(first.candidate_store_updates)
-    candidate_updates.update(second.candidate_store_updates)
-    normalized_updates = dict(first.normalized_store_updates)
-    normalized_updates.update(second.normalized_store_updates)
+    for resume_id, candidate in second.candidate_store_updates.items():
+        existing = candidate_updates.get(resume_id)
+        if existing is None:
+            candidate_updates[resume_id] = candidate
+            continue
+        merged_candidate, _ = merge_resume_candidate_observations(
+            existing,
+            candidate,
+            left_evidence=first_evidence_by_resume_id.get(resume_id, ()),
+            right_evidence=second_evidence_by_resume_id.get(resume_id, ()),
+        )
+        candidate_updates[resume_id] = merged_candidate
+    normalized_updates = {
+        resume_id: normalize_resume(candidate)
+        for resume_id, candidate in candidate_updates.items()
+    }
     reconciliation_reason = _reconciliation_required_reason(
         (first, second)
     )
@@ -531,7 +555,7 @@ def merge_liepin_card_lane_results(
         status=status,
         candidate_store_updates=candidate_updates,
         normalized_store_updates=normalized_updates,
-        source_evidence_updates=first.source_evidence_updates + second.source_evidence_updates,
+        source_evidence_updates=evidence_updates,
         provider_snapshots=first.provider_snapshots + second.provider_snapshots,
         private_first_page_continuations=(first.private_first_page_continuations + second.private_first_page_continuations),
         raw_candidate_count=int(first.raw_candidate_count or 0) + int(second.raw_candidate_count or 0),
@@ -553,6 +577,15 @@ def merge_liepin_card_lane_results(
         safe_error_summary=first.safe_error_summary or second.safe_error_summary,
         error_ref=first.error_ref or second.error_ref,
     )
+
+
+def _evidence_by_resume_id(
+    evidence: Collection[RuntimeSourceEvidence],
+) -> dict[str, tuple[RuntimeSourceEvidence, ...]]:
+    grouped: dict[str, list[RuntimeSourceEvidence]] = {}
+    for item in evidence:
+        grouped.setdefault(item.candidate_resume_id, []).append(item)
+    return {resume_id: tuple(items) for resume_id, items in grouped.items()}
 
 
 def _with_liepin_executed_query_package(

@@ -73,7 +73,16 @@ def apply_next_round_patch(sheet: RequirementSheet, normalized: dict[str, object
     return RequirementSheet.model_validate(values)
 
 
-def merge_requirement_sheet_supplement(base: RequirementSheet, supplement: RequirementSheet) -> RequirementSheet:
+def merge_requirement_sheet_supplement(
+    base: RequirementSheet,
+    supplement: RequirementSheet,
+    *,
+    effective_round_no: int = 1,
+) -> RequirementSheet:
+    supplement = prepare_requirement_supplement(
+        supplement,
+        effective_round_no=effective_round_no,
+    )
     values = base.model_dump(mode="python")
     supplement_values = supplement.model_dump(mode="python")
     for field in ("must_have_capabilities", "preferred_capabilities", "exclusion_signals"):
@@ -113,12 +122,33 @@ def merge_requirement_sheet_supplement(base: RequirementSheet, supplement: Requi
     values["initial_query_term_pool"] = _merge_query_terms(
         _list_payload(values.get("initial_query_term_pool")),
         _list_payload(supplement_values.get("initial_query_term_pool")),
+        effective_round_no=effective_round_no,
     )
     values["scoring_rationale"] = _merge_rationale(
         str(values.get("scoring_rationale") or ""),
         str(supplement_values.get("scoring_rationale") or ""),
     )
     return RequirementSheet.model_validate(values)
+
+
+def prepare_requirement_supplement(
+    supplement: RequirementSheet,
+    *,
+    effective_round_no: int,
+) -> RequirementSheet:
+    return supplement.model_copy(
+        update={
+            "initial_query_term_pool": [
+                item.model_copy(
+                    update={
+                        "first_added_round": effective_round_no,
+                        "active": item.queryability == "admitted",
+                    }
+                )
+                for item in supplement.initial_query_term_pool
+            ]
+        }
+    )
 
 
 def _default_requirement_section(section_id: str | None) -> str | None:
@@ -143,24 +173,56 @@ def _string_key_dict(value: object) -> dict[str, object]:
     return {key: item for key, item in value.items() if isinstance(key, str)}
 
 
-def _merge_query_terms(base_terms: list[object], supplement_terms: list[object]) -> list[object]:
-    output = list(base_terms)
-    output_mappings = [_object_mapping(term) for term in output]
-    seen = {
-        str(term.get("term") or "").strip().casefold()
-        for term in output_mappings
-        if str(term.get("term") or "").strip()
+def _merge_query_terms(
+    base_terms: list[object],
+    supplement_terms: list[object],
+    *,
+    effective_round_no: int,
+) -> list[QueryTermCandidate]:
+    output = [QueryTermCandidate.model_validate(term) for term in base_terms]
+    index = {
+        _query_term_key(term.term): position
+        for position, term in enumerate(output)
+        if _query_term_key(term.term)
     }
     for term in supplement_terms:
         mapped_term = _object_mapping(term)
         if not mapped_term:
             continue
-        key = str(mapped_term.get("term") or "").strip().casefold()
-        if not key or key in seen:
+        candidate = QueryTermCandidate.model_validate(mapped_term)
+        key = _query_term_key(candidate.term)
+        if not key:
             continue
-        output.append(term)
-        seen.add(key)
+        existing_position = index.get(key)
+        if existing_position is None:
+            output.append(
+                candidate.model_copy(
+                    update={
+                        "first_added_round": effective_round_no,
+                        "active": candidate.queryability == "admitted",
+                    }
+                )
+            )
+            index[key] = len(output) - 1
+            continue
+        existing = output[existing_position]
+        if existing.source == "job_title" and candidate.source == "job_title":
+            continue
+        if existing.queryability != "admitted":
+            output[existing_position] = existing.model_copy(update={"active": False})
+        elif candidate.queryability != "admitted":
+            output[existing_position] = candidate.model_copy(
+                update={"first_added_round": effective_round_no, "active": False}
+            )
+        else:
+            output[existing_position] = existing.model_copy(
+                update={"first_added_round": effective_round_no, "active": True}
+            )
     return output
+
+
+def _query_term_key(term: str) -> str:
+    return " ".join(term.split()).casefold()
 
 
 def _object_mapping(value: object) -> Mapping[str, object]:

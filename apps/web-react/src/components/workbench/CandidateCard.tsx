@@ -1,6 +1,10 @@
 import { Eye } from "lucide-react";
 import type { WorkbenchV2CandidateSummary } from "../../lib/api/workbenchV2Types";
 import { Button } from "../primitives/Button";
+import {
+  candidateDisplayScore,
+  RECOMMENDATION_MIN_SCORE,
+} from "./candidateDisplayScore";
 import { candidateSourceLabel } from "./candidateSource";
 import "./CandidateQueue.css";
 
@@ -28,14 +32,17 @@ export function CandidateCard({
   const headline = candidateHeadline(candidate);
   const score =
     typeof candidate.matchScore === "number"
-      ? `${String(candidate.matchScore)}分`
+      ? `${String(candidateDisplayScore(candidate.matchScore))}分`
       : null;
-  const status = candidateStatusLabel(candidate.status);
+  const status = candidateStatusLabel(candidate.status, candidate.matchScore);
   const sourceLabel =
     candidate.sourceLabel?.trim() ||
     candidateSourceLabel(candidate.sourceKinds);
   const avatarLabel =
     candidate.avatarLabel?.trim() || candidate.displayName.slice(0, 1);
+  const detailUnavailable =
+    candidate.detailAvailability === "unavailable" ||
+    candidate.accessState === "denied";
 
   return (
     <article
@@ -74,11 +81,12 @@ export function CandidateCard({
         {score ? <span className="candidate-card__score">{score}</span> : null}
         <Button
           className="candidate-card__detail-button"
+          disabled={detailUnavailable}
           icon={<Eye aria-hidden="true" size={16} />}
           onClick={() => onViewDetails?.(candidate.candidateId)}
           tone="primary"
         >
-          查看详情
+          {detailUnavailable ? "暂无详情" : "查看详情"}
         </Button>
       </div>
     </article>
@@ -104,9 +112,12 @@ function candidateHeadline(candidate: CandidateCardCandidate): string {
 
 function candidateStatusLabel(
   status: CandidateCardCandidate["status"],
+  rawScore: CandidateCardCandidate["matchScore"],
 ): string | null {
   if (status === "fit") {
-    return "推荐";
+    return typeof rawScore === "number" && rawScore < RECOMMENDATION_MIN_SCORE
+      ? "当前最接近要求"
+      : "推荐";
   }
   if (status === "reviewing" || status === "maybe") {
     return "待复核";

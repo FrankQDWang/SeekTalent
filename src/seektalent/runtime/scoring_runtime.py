@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Collection
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal, Protocol
 
 from seektalent.models import (
     NormalizedResume,
@@ -11,6 +11,7 @@ from seektalent.models import (
     RunState,
     RuntimeConstraint,
     RuntimeCanonicalIntakeSummary,
+    ScoringContext,
     ScoringFailure,
     ScoredCandidate,
 )
@@ -20,6 +21,15 @@ from seektalent.runtime.normalized_artifacts import normalized_resume_artifact_p
 from seektalent.runtime.runtime_diagnostics import slim_top_pool_snapshot
 from seektalent.runtime.scoring_context import build_scoring_context
 from seektalent.tracing import RunTracer, json_char_count, json_sha256
+
+
+class CandidateScorer(Protocol):
+    async def score_candidates_parallel(
+        self,
+        *,
+        contexts: list[ScoringContext],
+        tracer: RunTracer,
+    ) -> tuple[list[ScoredCandidate], list[ScoringFailure]]: ...
 
 
 @dataclass(frozen=True)
@@ -39,7 +49,7 @@ def scoring_failures_are_recoverable(
     scoring_failures: Collection[ScoringFailure],
 ) -> bool:
     return bool(scored_candidates) and bool(scoring_failures) and all(
-        failure.failure_kind == "score_applicability_error"
+        failure.failure_kind in {"score_applicability_error", "timeout"}
         for failure in scoring_failures
     )
 
@@ -76,7 +86,7 @@ async def score_round(
     run_state: RunState,
     tracer: RunTracer,
     runtime_only_constraints: list[RuntimeConstraint],
-    resume_scorer: Any,
+    resume_scorer: CandidateScorer,
     format_scoring_failure_message: Callable[[Collection[object]], str],
     run_stage_error: Callable[[str, str], Exception],
     selected_source_kinds: tuple[str, ...] = (),
@@ -171,6 +181,56 @@ async def score_round(
         previous_top_ids=previous_top_ids,
     )
     return ScoringRoundResult(current_top_candidates, pool_decisions, dropped_candidates, scoring_failures)
+
+
+async def rescore_requirement_revision_candidates(
+    *,
+    round_no: int,
+    run_state: RunState,
+    tracer: RunTracer,
+    runtime_only_constraints: list[RuntimeConstraint],
+    resume_scorer: CandidateScorer,
+    format_scoring_failure_message: Callable[[Collection[object]], str],
+    run_stage_error: Callable[[str, str], Exception],
+) -> dict[str, ScoredCandidate]:
+    """Score the existing successful candidate set without mutating live scorecards."""
+    expected_ids = set(run_state.scorecards_by_resume_id)
+    if not expected_ids:
+        return {}
+    missing_normalized = sorted(expected_ids - set(run_state.normalized_store))
+    if missing_normalized:
+        raise run_stage_error(
+            "scoring",
+            f"requirement_revision_rescore_missing_normalized:{','.join(missing_normalized)}",
+        )
+    contexts = [
+        build_scoring_context(
+            run_state=run_state,
+            round_no=round_no,
+            normalized_resume=run_state.normalized_store[resume_id],
+            runtime_only_constraints=runtime_only_constraints,
+        )
+        for resume_id in sorted(expected_ids)
+    ]
+    try:
+        scored_candidates, scoring_failures = await resume_scorer.score_candidates_parallel(
+            contexts=contexts,
+            tracer=tracer,
+        )
+    except TimeoutError as exc:
+        raise run_stage_error("scoring", str(exc)) from exc
+    if scoring_failures:
+        raise run_stage_error(
+            "scoring",
+            format_scoring_failure_message(scoring_failures),
+        )
+    rescored = {candidate.resume_id: candidate for candidate in scored_candidates}
+    if len(rescored) != len(scored_candidates) or set(rescored) != expected_ids:
+        raise run_stage_error(
+            "scoring",
+            "requirement_revision_rescore_candidate_set_mismatch",
+        )
+    return rescored
 
 
 def finalize_round_pool(

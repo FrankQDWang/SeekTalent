@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -11,7 +10,7 @@ from typing import Literal, Protocol, runtime_checkable
 from uuid import uuid4
 
 from seektalent.config import AppSettings
-from seektalent.candidate_quality import is_recommendation_eligible
+from seektalent.candidate_quality import is_workbench_candidate_visible
 from seektalent.failure_interpretation import public_source_problem_message
 from seektalent.models import RequirementSheet
 from seektalent.prompting import PromptRegistry
@@ -21,7 +20,10 @@ from seektalent_runtime_control.commands import RuntimeCommandService
 from seektalent_runtime_control.detail import RuntimeDetailService
 from seektalent_runtime_control.errors import RuntimeControlError
 from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
-from seektalent_runtime_control.normalizer import merge_requirement_sheet_supplement
+from seektalent_runtime_control.normalizer import (
+    merge_requirement_sheet_supplement,
+    prepare_requirement_supplement,
+)
 from seektalent_runtime_control.models import (
     RuntimeControlCandidateEvidence,
     RuntimeControlCandidateIdentity,
@@ -31,10 +33,13 @@ from seektalent_runtime_control.requirements import (
     ApprovedRequirementRevision,
     RequirementDraft,
     draft_from_requirement_sheet,
+    merge_duplicate_requirement_draft_item,
+    requirement_draft_item_key,
     requirement_sheet_from_draft,
 )
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_workbench_v2.agent_loop import WorkbenchV2RuntimeInput
+from seektalent_workbench_v2.errors import CandidateNotFoundError
 from seektalent_workbench_v2.runtime_display import (
     normalize_runtime_progress_payload,
     runtime_event_terminal_summary,
@@ -237,6 +242,10 @@ class WorkbenchV2RuntimeService:
             jd_text=text,
             notes=None,
             requirement_cache_scope=f"{conversation_id}:{idempotency_key}",
+        )
+        supplement = prepare_requirement_supplement(
+            supplement,
+            effective_round_no=1,
         )
         merged_sheet = merge_requirement_sheet_supplement(base_sheet, supplement)
         draft = _draft_with_supplement_items(
@@ -498,26 +507,36 @@ class WorkbenchV2RuntimeService:
         for evidence in self.store.list_candidate_evidence(runtime_run_id=runtime_run_id):
             evidence_by_identity.setdefault(evidence.identity_id, []).append(evidence)
         eligible_identities: list[
-            tuple[RuntimeControlCandidateIdentity, list[RuntimeControlCandidateEvidence], int]
+            tuple[
+                RuntimeControlCandidateIdentity,
+                list[RuntimeControlCandidateEvidence],
+                list[RuntimeControlCandidateEvidence],
+                int,
+            ]
         ] = []
         for identity in identities:
+            retained_evidence = evidence_by_identity.get(identity.identity_id, [])
             evidence = _canonical_candidate_evidence(
                 identity,
-                evidence_by_identity.get(identity.identity_id, []),
+                retained_evidence,
             )
             score = _candidate_score(identity, evidence)
-            if not is_recommendation_eligible(score=score, fit_bucket=identity.fit_bucket):
+            if not is_workbench_candidate_visible(score=score, fit_bucket=identity.fit_bucket):
                 continue
             assert score is not None
-            eligible_identities.append((identity, evidence, score))
-        eligible_identities.sort(key=lambda row: (-row[2], row[0].identity_id))
+            eligible_identities.append((identity, evidence, retained_evidence, score))
+        eligible_identities.sort(key=lambda row: (-row[3], row[0].identity_id))
         candidates: list[dict[str, object]] = []
-        for index, (identity, evidence, score) in enumerate(eligible_identities[: max(0, limit)], start=1):
+        for index, (identity, evidence, retained_evidence, score) in enumerate(
+            eligible_identities[: max(0, limit)],
+            start=1,
+        ):
             source_kinds = _candidate_source_kinds(evidence)
             headline = _candidate_headline(identity, evidence)
             display_name = _candidate_display_name(identity, evidence, fallback=f"候选人 {index}")
             evidence_level = _candidate_evidence_level(evidence)
-            detail_availability = _candidate_detail_availability(identity, evidence)
+            detail_evidence = _select_candidate_detail_evidence(identity, retained_evidence)
+            detail_availability = _candidate_detail_availability(identity, detail_evidence)
             city = identity.location or _candidate_location(evidence)
             work_years = _candidate_experience_years(evidence)
             candidates.append(
@@ -553,59 +572,69 @@ class WorkbenchV2RuntimeService:
         return candidates
 
     def get_candidate_detail(self, runtime_run_id: str, candidate_id: str) -> dict[str, object]:
+        resolver = getattr(self.store, "resolve_candidate_identity_id", None)
+        resolved_candidate_id = (
+            resolver(runtime_run_id=runtime_run_id, candidate_id=candidate_id)
+            if callable(resolver)
+            else candidate_id
+        )
+        if resolved_candidate_id is None:
+            raise CandidateNotFoundError(candidate_id)
         identities = self.store.list_candidate_identities(runtime_run_id=runtime_run_id)
-        identity = next((item for item in identities if item.identity_id == candidate_id), None)
+        identity = next((item for item in identities if item.identity_id == resolved_candidate_id), None)
         if identity is None:
-            raise KeyError(candidate_id)
+            raise CandidateNotFoundError(candidate_id)
         retained_evidence = [
             item
             for item in self.store.list_candidate_evidence(runtime_run_id=runtime_run_id)
-            if item.identity_id == candidate_id
+            if item.identity_id == identity.identity_id
         ]
-        evidence = [
-            item
-            for item in retained_evidence
-            if item.identity_id == candidate_id and item.resume_id == identity.canonical_resume_id
-        ]
-        detail_availability = _candidate_detail_availability(identity, evidence)
-        display_name = _candidate_display_name(identity, evidence, fallback="候选人")
-        city = identity.location or _candidate_location(evidence)
-        work_years = _candidate_experience_years(evidence)
-        source_kinds = _candidate_source_kinds(evidence)
+        canonical_evidence = _canonical_candidate_evidence(identity, retained_evidence)
+        detail_evidence = _select_candidate_detail_evidence(identity, retained_evidence)
+        display_evidence = detail_evidence or canonical_evidence
+        detail_availability = _candidate_detail_availability(identity, detail_evidence)
+        display_name = _candidate_display_name(identity, display_evidence, fallback="候选人")
+        city = identity.location or _candidate_location(display_evidence)
+        work_years = _candidate_experience_years(display_evidence)
+        source_kinds = _candidate_source_kinds(display_evidence)
         return {
             "candidateId": identity.identity_id,
             "displayName": display_name,
             "avatarLabel": _candidate_avatar_label(display_name),
             "avatarColorKey": _candidate_avatar_color_key(identity.identity_id),
-            "headline": _candidate_headline(identity, evidence),
-            "company": identity.company or _candidate_company(evidence),
-            "currentTitle": _candidate_current_title(identity, evidence),
-            "currentCompany": _candidate_current_company(identity, evidence),
+            "headline": _candidate_headline(identity, display_evidence),
+            "company": identity.company or _candidate_company(display_evidence),
+            "currentTitle": _candidate_current_title(identity, display_evidence),
+            "currentCompany": _candidate_current_company(identity, display_evidence),
             "location": city,
             "city": city,
-            "education": _candidate_education(evidence),
+            "education": _candidate_education(display_evidence),
             "experienceYears": work_years,
             "workYears": work_years,
-            "age": _candidate_age(evidence),
-            "gender": _candidate_gender(evidence),
-            "activeStatus": _candidate_active_status(evidence),
-            "jobStatus": _candidate_job_status(evidence),
+            "age": _candidate_age(display_evidence),
+            "gender": _candidate_gender(display_evidence),
+            "activeStatus": _candidate_active_status(display_evidence),
+            "jobStatus": _candidate_job_status(display_evidence),
             "sourceKinds": source_kinds,
             "sourceLabel": _candidate_source_label(source_kinds),
-            "matchScore": _candidate_score(identity, evidence),
-            "match": _candidate_match(identity, evidence),
-            "jobIntention": _candidate_job_intention(evidence),
-            "workExperience": _candidate_timeline(evidence, "workExperience"),
-            "projectExperience": _candidate_timeline(evidence, "projectExperience"),
-            "educationExperience": _candidate_timeline(evidence, "educationExperience"),
-            "skills": _candidate_skills(evidence),
-            "sourceReferences": _candidate_source_references(identity, retained_evidence),
-            "sections": _candidate_detail_sections(identity, evidence),
-            "evidence": _candidate_detail_evidence(evidence),
+            "matchScore": _candidate_score(identity, canonical_evidence),
+            "match": _candidate_match(identity, canonical_evidence),
+            "jobIntention": _candidate_job_intention(detail_evidence),
+            "workExperience": _candidate_timeline(detail_evidence, "workExperience"),
+            "projectExperience": _candidate_timeline(detail_evidence, "projectExperience"),
+            "educationExperience": _candidate_timeline(detail_evidence, "educationExperience"),
+            "skills": _candidate_skills(detail_evidence),
+            "sourceReferences": _candidate_source_references(
+                identity,
+                retained_evidence,
+                detail_evidence=detail_evidence,
+            ),
+            "sections": _candidate_detail_sections(identity, detail_evidence),
+            "evidence": _candidate_detail_evidence(detail_evidence or canonical_evidence),
             "detailAvailability": detail_availability,
             "accessState": "allowed" if detail_availability != "unavailable" else "denied",
-            "evidenceLevel": _candidate_evidence_level(evidence),
-            "reasonCode": _candidate_reason_code(evidence),
+            "evidenceLevel": _candidate_evidence_level(detail_evidence or canonical_evidence),
+            "reasonCode": _candidate_reason_code(detail_evidence or canonical_evidence),
         }
 
     def submit_next_round_requirement(
@@ -624,7 +653,7 @@ class WorkbenchV2RuntimeService:
             text=text,
             target_section_hint=None,
             idempotency_key=idempotency_key,
-            provenance={"source": "workbench_v2_agent", "runtimeRunId": runtime_run_id},
+            provenance={"intentDecision": {"intent": "update_requirements"}},
         )
         return {
             "amendmentId": result.amendment_id,
@@ -696,13 +725,19 @@ def _canonical_candidate_evidence(
 def _candidate_source_references(
     identity: RuntimeControlCandidateIdentity,
     evidence: Sequence[RuntimeControlCandidateEvidence],
+    *,
+    detail_evidence: Sequence[RuntimeControlCandidateEvidence] = (),
 ) -> list[dict[str, str]]:
-    display_evidence_ids = set(identity.display_source_evidence_ids)
+    trusted_resume_ids = {
+        identity.canonical_resume_id,
+        *identity.equivalent_latest_resume_ids,
+        *(item.resume_id for item in detail_evidence),
+    } - set(identity.conflicting_resume_ids)
     references = sorted(
         (
             reference
             for item in evidence
-            if item.evidence_id in display_evidence_ids
+            if item.resume_id in trusted_resume_ids
             for reference in item.source_references
         ),
         key=lambda reference: (reference.display_label, reference.source_kind, reference.url),
@@ -1056,13 +1091,88 @@ def _candidate_detail_availability(
     identity: RuntimeControlCandidateIdentity,
     evidence: Sequence[RuntimeControlCandidateEvidence],
 ) -> str:
-    if (
-        identity.summary
-        or _candidate_wts_detail(evidence)
-        or any(_candidate_evidence_sections(item) for item in evidence)
-    ):
+    if _has_structured_candidate_detail(identity, evidence):
         return "available"
     return "unavailable"
+
+
+def _select_candidate_detail_evidence(
+    identity: RuntimeControlCandidateIdentity,
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+) -> list[RuntimeControlCandidateEvidence]:
+    evidence_by_resume_id: dict[str, list[RuntimeControlCandidateEvidence]] = {}
+    for item in evidence:
+        evidence_by_resume_id.setdefault(item.resume_id, []).append(item)
+
+    canonical = evidence_by_resume_id.get(identity.canonical_resume_id, [])
+    if _has_structured_candidate_detail(identity, canonical):
+        return canonical
+
+    equivalent_groups = [
+        evidence_by_resume_id.get(resume_id, [])
+        for resume_id in identity.equivalent_latest_resume_ids
+        if resume_id != identity.canonical_resume_id
+    ]
+    selected = _best_detail_evidence_group(identity, equivalent_groups)
+    if selected:
+        return selected
+
+    trusted_provider_hashes = {
+        item.provider_candidate_key_hash
+        for resume_id in {
+            identity.canonical_resume_id,
+            *identity.equivalent_latest_resume_ids,
+        }
+        for item in evidence_by_resume_id.get(resume_id, [])
+        if item.provider_candidate_key_hash
+    }
+    conflicting_resume_ids = set(identity.conflicting_resume_ids)
+    same_provider_groups = [
+        items
+        for resume_id, items in evidence_by_resume_id.items()
+        if resume_id not in conflicting_resume_ids
+        and resume_id != identity.canonical_resume_id
+        and any(item.provider_candidate_key_hash in trusted_provider_hashes for item in items)
+    ]
+    return _best_detail_evidence_group(identity, same_provider_groups)
+
+
+def _best_detail_evidence_group(
+    identity: RuntimeControlCandidateIdentity,
+    groups: Sequence[Sequence[RuntimeControlCandidateEvidence]],
+) -> list[RuntimeControlCandidateEvidence]:
+    eligible = [list(group) for group in groups if _has_structured_candidate_detail(identity, group)]
+    if not eligible:
+        return []
+    return max(
+        eligible,
+        key=lambda group: (
+            max((_candidate_evidence_level_priority(item.evidence_level) for item in group), default=0),
+            sum(_candidate_detail_payload_size(item.payload) for item in group),
+            max((item.updated_at for item in group), default=""),
+            min((item.resume_id for item in group), default=""),
+        ),
+    )
+
+
+def _has_structured_candidate_detail(
+    identity: RuntimeControlCandidateIdentity,
+    evidence: Sequence[RuntimeControlCandidateEvidence],
+) -> bool:
+    if not any(item.evidence_level in {"detail", "final"} for item in evidence):
+        return False
+    return any(
+        section["title"] != "匹配程度" and bool(section["items"])
+        for section in _candidate_detail_sections(identity, evidence)
+    )
+
+
+def _candidate_detail_payload_size(value: object) -> int:
+    if isinstance(value, Mapping):
+        return sum(_candidate_detail_payload_size(item) for item in value.values())
+    if isinstance(value, Sequence) and not isinstance(value, str | bytes | bytearray):
+        return sum(_candidate_detail_payload_size(item) for item in value)
+    return 1 if _payload_value_present(value) else 0
 
 
 def _candidate_detail_sections(
@@ -1466,10 +1576,20 @@ def _draft_with_supplement_items(
     )
     for supplement_section in supplement_draft.sections:
         target_section = draft.section(supplement_section.section_id)
-        seen = {_draft_item_key(item) for item in target_section.items if item.status != "deleted"}
+        existing_by_key = {
+            requirement_draft_item_key(item): item
+            for item in target_section.items
+            if item.status != "deleted"
+        }
         for item in supplement_section.items:
-            key = _draft_item_key(item)
-            if key in seen:
+            key = requirement_draft_item_key(item)
+            existing = existing_by_key.get(key)
+            if existing is not None:
+                merge_duplicate_requirement_draft_item(
+                    existing,
+                    item,
+                    section_id=supplement_section.section_id,
+                )
                 continue
             target_section.items.append(
                 item.model_copy(
@@ -1481,15 +1601,8 @@ def _draft_with_supplement_items(
                     },
                 )
             )
-            seen.add(key)
+            existing_by_key[key] = target_section.items[-1]
     return draft
-
-
-def _draft_item_key(item: object) -> tuple[str, str, str]:
-    text = str(getattr(item, "text", "") or "").strip().casefold()
-    value = getattr(item, "value", None)
-    encoded_value = json.dumps(value, ensure_ascii=False, sort_keys=True) if isinstance(value, dict) else repr(value)
-    return (text, type(value).__name__, encoded_value)
 
 
 def _start_operation_key(*, conversation_id: str, idempotency_key: str | None) -> str:

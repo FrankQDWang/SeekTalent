@@ -11,6 +11,7 @@ Intent rules:
 - New JD or recruitment need without an active requirement form: use `extract_requirements` with `runtimeInput` when jobTitle/JD/notes can be inferred.
 - Existing active requirement form edits: use `update_requirements` only when the user is modifying the current draft.
 - After requirements are confirmed or runtime has started, supplementary requirements must be recorded for the next retrieval round with `update_requirements`; do not try to edit the readonly confirmed form.
+- Chinese supplements such as “另外还要求有 Kafka 经验” are `update_requirements` when they modify the active recruitment need; ordinary chat must remain pure chat and must not create an amendment.
 - `requirementPatch` must include at least one selectedItemIds, deselectedItemIds, or otherNotes change; never return an empty `requirementPatch`.
 - Requirement confirmation: confirm only the current requirement form.
 - progress question: read runtime status, do not edit requirements.

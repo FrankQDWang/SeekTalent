@@ -5,6 +5,7 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 from seektalent.evaluation import TOP_K
+from seektalent.candidate_quality import is_recommendation_eligible
 from seektalent.models import (
     NormalizedResume,
     ResumeCandidate,
@@ -142,8 +143,13 @@ def select_identity_top_candidates(run_state: RunState) -> list[ScoredCandidate]
         canonical = run_state.canonical_resume_by_identity_id.get(identity_id)
         selected_resume_id = canonical.canonical_resume_id if canonical is not None else scored.resume_id
         selected_score = run_state.scorecards_by_resume_id.get(selected_resume_id, scored)
-        selected.append(selected_score)
         seen_identity_ids.add(identity_id)
+        if not is_recommendation_eligible(
+            score=selected_score.overall_score,
+            fit_bucket=selected_score.fit_bucket,
+        ):
+            continue
+        selected.append(selected_score)
         if len(selected) >= TOP_K:
             break
     run_state.top_pool_ids = [candidate.resume_id for candidate in selected]

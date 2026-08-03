@@ -4,6 +4,11 @@ from collections.abc import Mapping, Sequence
 import hashlib
 import re
 
+from seektalent.candidate_observation_merge import (
+    candidate_observation_rank,
+    merge_resume_candidate_observations,
+    merge_runtime_source_evidence,
+)
 from seektalent.models import (
     NormalizedResume,
     ResumeCandidate,
@@ -14,8 +19,8 @@ from seektalent.models import (
     RuntimeIdentitySignals,
     RuntimeSourceEvidence,
 )
-from seektalent.runtime.candidate_intake import normalize_runtime_candidates
 from seektalent.runtime.resume_versions import ResumeContentVersion, materially_consistent, resume_content_version
+from seektalent.normalization import normalize_resume
 from seektalent.source_contracts import (
     DEFAULT_RUNTIME_SOURCE_BUDGET_POLICY,
     RuntimeApprovedDetailLease,
@@ -147,18 +152,27 @@ def merge_source_lane_result_updates(
     if result.status == "blocked":
         return
 
+    incoming_evidence_by_resume_id: dict[str, list[RuntimeSourceEvidence]] = {}
+    for evidence in result.source_evidence_updates:
+        incoming_evidence_by_resume_id.setdefault(evidence.candidate_resume_id, []).append(evidence)
+
     for resume_id, candidate in result.candidate_store_updates.items():
-        run_state.candidate_store[resume_id] = candidate
+        existing = run_state.candidate_store.get(resume_id)
+        if existing is None:
+            run_state.candidate_store[resume_id] = candidate
+            run_state.normalized_store[resume_id] = normalize_resume(candidate)
+        else:
+            merged_candidate, merged_normalized = merge_resume_candidate_observations(
+                existing,
+                candidate,
+                left_evidence=run_state.source_evidence_by_resume_id.get(resume_id, ()),
+                right_evidence=incoming_evidence_by_resume_id.get(resume_id, ()),
+            )
+            run_state.candidate_store[resume_id] = merged_candidate
+            run_state.normalized_store[resume_id] = merged_normalized
         if resume_id not in run_state.seen_resume_ids:
             run_state.seen_resume_ids.append(resume_id)
 
-    run_state.normalized_store.update(result.normalized_store_updates)
-    normalize_runtime_candidates(
-        run_state=run_state,
-        candidates=result.candidate_store_updates.values(),
-        round_no=0,
-        tracer=None,
-    )
     append_source_evidence_once(
         run_state,
         result.source_evidence_updates,
@@ -241,9 +255,14 @@ def append_source_evidence_once(
 ) -> None:
     for evidence in evidence_updates:
         entries = run_state.source_evidence_by_resume_id.setdefault(evidence.candidate_resume_id, [])
-        if any(item.evidence_id == evidence.evidence_id for item in entries):
-            continue
-        entries.append(evidence)
+        existing_index = next(
+            (index for index, item in enumerate(entries) if item.evidence_id == evidence.evidence_id),
+            None,
+        )
+        if existing_index is None:
+            entries.append(evidence)
+        else:
+            entries[existing_index] = merge_runtime_source_evidence(entries[existing_index], evidence)
         entries.sort(key=lambda item: _evidence_sort_key(item, source_order))
 
 
@@ -297,7 +316,12 @@ def _rebuild_identity_state(
             run_state.source_evidence_by_resume_id.get(resume_id, [])
         )
     for identity_id, evidence_items in source_evidence_by_identity_id.items():
-        unique: dict[str, RuntimeSourceEvidence] = {item.evidence_id: item for item in evidence_items}
+        unique: dict[str, RuntimeSourceEvidence] = {}
+        for item in evidence_items:
+            existing = unique.get(item.evidence_id)
+            unique[item.evidence_id] = (
+                item if existing is None else merge_runtime_source_evidence(existing, item)
+            )
         source_evidence_by_identity_id[identity_id] = sorted(
             unique.values(),
             key=lambda item: _evidence_sort_key(item, source_order),
@@ -600,23 +624,32 @@ def choose_canonical_resume_for_identity(
         latest_versions = versions
         reason_codes.append("content_freshness_unknown")
 
-    def canonical_rank(version: ResumeContentVersion) -> tuple[int, str, str]:
+    def canonical_rank(version: ResumeContentVersion) -> tuple[int, int, int, int, str, str]:
         resume_id = version.resume_id
-        completeness = normalized_store[resume_id].completeness_score if resume_id in normalized_store else 0
+        candidate = candidates.get(resume_id)
+        normalized = normalized_store.get(resume_id)
+        if candidate is None or normalized is None:
+            observation_rank = (0, 0, 0, 0)
+        else:
+            observation_rank = candidate_observation_rank(
+                candidate,
+                normalized,
+                evidence_by_resume_id.get(resume_id, ()),
+            )[:4]
         return (
-            -completeness if known_versions else 0,
+            *observation_rank,
             version.content_key,
             resume_id,
         )
 
-    selected_version = min(latest_versions, key=canonical_rank)
+    selected_version = max(latest_versions, key=canonical_rank)
     equivalent_ids = [selected_version.resume_id]
     equivalent_versions = [selected_version]
     conflicting_ids: list[str] = []
     incomparable_ids = [version.resume_id for version in versions if version.freshness is None and known_versions]
     has_conflict = False
     has_incomparable = bool(incomparable_ids)
-    for version in sorted(latest_versions, key=canonical_rank):
+    for version in sorted(latest_versions, key=canonical_rank, reverse=True):
         if version.resume_id == selected_version.resume_id:
             continue
         consistencies = [materially_consistent(existing, version) for existing in equivalent_versions]
@@ -638,9 +671,14 @@ def choose_canonical_resume_for_identity(
         for resume_id in equivalent_ids
         for item in evidence_by_resume_id.get(resume_id, [])
     )
-    selected_evidence = min(
+    selected_evidence = max(
         evidence_by_resume_id.get(selected_version.resume_id, []),
-        key=lambda item: item.evidence_id,
+        key=lambda item: (
+            {"card": 1, "detail": 2, "final": 3}.get(item.evidence_level, 0),
+            len(item.source_references),
+            item.collected_at,
+            item.evidence_id,
+        ),
         default=None,
     )
     if len(equivalent_ids) > 1:

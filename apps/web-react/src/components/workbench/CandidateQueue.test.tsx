@@ -67,4 +67,41 @@ describe("CandidateQueue", () => {
     expect(within(queue).getByText("候选人 B")).toBeInTheDocument();
     expect(within(queue).getByText("共 3 位")).toBeInTheDocument();
   });
+
+  it("preserves backend order when display scores tie", () => {
+    expect.hasAssertions();
+    const [firstCandidate, secondCandidate] = candidates;
+    if (!firstCandidate || !secondCandidate) {
+      throw new Error("candidate queue fixtures are incomplete");
+    }
+
+    render(
+      <CandidateQueue
+        candidates={[
+          {
+            ...firstCandidate,
+            candidateId: "candidate_raw_1",
+            displayName: "原始分 1",
+            matchScore: 1,
+            rank: 1,
+            status: "fit" as const,
+          },
+          {
+            ...secondCandidate,
+            candidateId: "candidate_raw_0",
+            displayName: "原始分 0",
+            matchScore: 0,
+            rank: 2,
+            status: "fit" as const,
+          },
+        ]}
+      />,
+    );
+
+    const cards = screen.getAllByRole("article");
+    expect(cards).toHaveLength(2);
+    expect(cards[0]).toHaveAccessibleName("原始分 1");
+    expect(cards[1]).toHaveAccessibleName("原始分 0");
+    expect(screen.getAllByText("60分")).toHaveLength(2);
+  });
 });

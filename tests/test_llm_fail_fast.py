@@ -499,7 +499,7 @@ def test_scorer_retries_model_output_with_inapplicable_risk_score(
     real = build_model("openai-responses:gpt-5.4-mini")
     model = TestModel(
         custom_output_text=(
-            '{"fit_bucket":"fit","must_have_match_score":80,'
+            '{"hard_conflicts":[],"must_have_match_score":80,'
             '"preferred_match_score":null,"risk_score":10,'
             '"reasoning_summary":"Python evidence matches the must-have."}'
         ),
@@ -542,10 +542,10 @@ def test_scorer_recovers_after_one_applicability_correction_retry(
 ) -> None:
     scorer = ResumeScorer(_settings(monkeypatch, tmp_path), _prompt("scoring"))
     responses = [
-        '{"fit_bucket":"fit","must_have_match_score":80,'
+        '{"hard_conflicts":[],"must_have_match_score":80,'
         '"preferred_match_score":null,"risk_score":10,'
         '"reasoning_summary":"Initial response includes inapplicable risk."}',
-        '{"fit_bucket":"fit","must_have_match_score":80,'
+        '{"hard_conflicts":[],"must_have_match_score":80,'
         '"preferred_match_score":null,"risk_score":null,'
         '"reasoning_summary":"Python evidence matches the must-have."}',
     ]
@@ -590,18 +590,70 @@ def test_scorer_recovers_after_one_applicability_correction_retry(
     assert scored[0].overall_score == 80
 
 
-def test_scorer_retries_fit_output_below_recommendation_floor(
+def test_scorer_accepts_low_score_without_hard_conflict(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
 ) -> None:
     scorer = ResumeScorer(_settings(monkeypatch, tmp_path), _prompt("scoring"))
     responses = [
-        '{"fit_bucket":"fit","must_have_match_score":1,'
+        '{"hard_conflicts":[],"must_have_match_score":1,'
         '"preferred_match_score":null,"risk_score":null,'
-        '"reasoning_summary":"Initial response uses a boolean-like score."}',
-        '{"fit_bucket":"fit","must_have_match_score":80,'
+        '"reasoning_summary":"Evidence is weak, but no hard conflict is present."}',
+    ]
+    calls = 0
+
+    def sequential_response(messages, agent_info):  # noqa: ANN001
+        nonlocal calls
+        del messages, agent_info
+        response = responses[calls]
+        calls += 1
+        return ModelResponse(parts=[TextPart(content=response)])
+
+    real = build_model("openai-responses:gpt-5.4-mini")
+    model = FunctionModel(sequential_response, profile=real.profile)
+    monkeypatch.setattr("seektalent.scoring.scorer.build_model", lambda model_config: model)
+
+    class StubTracer:
+        def __init__(self) -> None:
+            self.session = StubSession()
+
+        def emit(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return None
+
+        def append_jsonl(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return None
+
+    class StubSession:
+        def register_path(self, *args, **kwargs):  # noqa: ANN002, ANN003
+            return None
+
+    scored, failures = asyncio.run(
+        scorer.score_candidates_parallel(
+            contexts=[_scoring_context()],
+            tracer=cast(Any, StubTracer()),
+        )
+    )
+
+    assert calls == 1
+    assert failures == []
+    assert len(scored) == 1
+    assert scored[0].fit_bucket == "fit"
+    assert scored[0].overall_score == 1
+
+
+def test_scorer_retries_an_unapproved_hard_conflict_reference(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    scorer = ResumeScorer(_settings(monkeypatch, tmp_path), _prompt("scoring"))
+    responses = [
+        '{"hard_conflicts":[{"policy_reference":"hard_constraints.locations",'
+        '"resume_evidence":"The location conflicts."}],"must_have_match_score":80,'
         '"preferred_match_score":null,"risk_score":null,'
-        '"reasoning_summary":"Python evidence matches the must-have."}',
+        '"reasoning_summary":"An unapproved conflict reference was used."}',
+        '{"hard_conflicts":[],"must_have_match_score":40,'
+        '"preferred_match_score":null,"risk_score":null,'
+        '"reasoning_summary":"Evidence is weak, but no approved hard conflict exists."}',
     ]
     calls = 0
 
@@ -641,7 +693,7 @@ def test_scorer_retries_fit_output_below_recommendation_floor(
     assert failures == []
     assert len(scored) == 1
     assert scored[0].fit_bucket == "fit"
-    assert scored[0].overall_score == 80
+    assert scored[0].overall_score == 40
 
 
 def test_scorer_reports_final_structural_failure_after_applicability_retry(
@@ -650,7 +702,7 @@ def test_scorer_reports_final_structural_failure_after_applicability_retry(
 ) -> None:
     scorer = ResumeScorer(_settings(monkeypatch, tmp_path), _prompt("scoring"))
     responses = [
-        '{"fit_bucket":"fit","must_have_match_score":80,'
+        '{"hard_conflicts":[],"must_have_match_score":80,'
         '"preferred_match_score":null,"risk_score":10,'
         '"reasoning_summary":"Initial response includes inapplicable risk."}',
         "{}",

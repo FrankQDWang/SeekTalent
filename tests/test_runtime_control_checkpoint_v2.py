@@ -510,6 +510,237 @@ def test_exact_latest_checkpoint_recovers_same_run_without_replaying_source_effe
     assert operation_count == 1
 
 
+def test_before_round_controller_checkpoint_resumes_same_revision_gate(tmp_path) -> None:
+    store = _seed_running_store(tmp_path)
+    state = _run_state()
+    checkpoint = store.write_checkpoint_v2(
+        checkpoint_id="checkpoint-before-controller",
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-1",
+        attempt_no=1,
+        stage="round",
+        round_no=1,
+        safe_boundary="before_round_controller",
+        accepted_requirement_revision_id="approved-1",
+        source_ids=["liepin"],
+        projection=checkpoint_projection(state),
+        detail_claim_revision=0,
+        detail_claim_hash=None,
+        continuation_cursor={
+            "nextPhase": "rounds",
+            "completedRounds": 0,
+            "stopReason": "max_rounds_reached",
+        },
+        created_at="2026-07-28T00:00:02.000000Z",
+    )
+    assert store.get_latest_recoverable_checkpoint(
+        runtime_run_id="runtime_run_1"
+    ) == checkpoint
+    recovered = RecoveryStateAssembler(store).assemble(checkpoint)
+    runtime = orchestrator_module.WorkflowRuntime(
+        make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts")
+    )
+
+    continuation = runtime._resume_continuation(
+        resume_checkpoint=checkpoint.model_dump(mode="json"),
+        run_state=recovered,
+    )
+
+    assert continuation is not None
+    assert continuation.next_phase == "rounds"
+    assert continuation.completed_rounds == 0
+    assert recovered.requirement_sheet == state.requirement_sheet
+
+
+def test_before_round_controller_survives_expired_lease_and_executor_resume(
+    tmp_path,
+) -> None:
+    from seektalent_runtime_control.recovery import RuntimeRecoveryService
+
+    store = _seed_running_store(tmp_path)
+    state = _run_state()
+    checkpoint = store.write_checkpoint_v2(
+        checkpoint_id="checkpoint-before-controller-recovery",
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-1",
+        attempt_no=1,
+        stage="round",
+        round_no=1,
+        safe_boundary="before_round_controller",
+        accepted_requirement_revision_id="approved-1",
+        source_ids=["liepin"],
+        projection=checkpoint_projection(state),
+        detail_claim_revision=0,
+        detail_claim_hash=None,
+        continuation_cursor={
+            "nextPhase": "rounds",
+            "completedRounds": 0,
+            "stopReason": "max_rounds_reached",
+        },
+        created_at="2026-07-28T00:00:02.000000Z",
+    )
+
+    decisions = RuntimeRecoveryService(
+        store=store,
+        now=lambda: "2026-07-28T00:10:01.000000Z",
+    ).recover_start_timeouts(resume_recoverable=True)
+    lease = store.acquire_executor_lease(
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-2",
+        acquired_at="2026-07-28T00:10:02.000000Z",
+        lease_expires_at="2026-07-28T00:20:02.000000Z",
+    )
+    with store._connect() as conn:
+        snapshot_row = conn.execute(
+            """
+            SELECT snapshot_json
+            FROM runtime_control_snapshots
+            WHERE runtime_run_id = 'runtime_run_1'
+            """
+        ).fetchone()
+        snapshot_payload = json.loads(snapshot_row["snapshot_json"])
+        snapshot_payload["claimReason"] = "resume_requested"
+        conn.execute(
+            """
+            UPDATE runtime_control_snapshots
+            SET snapshot_json = ?
+            WHERE runtime_run_id = 'runtime_run_1'
+            """,
+            (json.dumps(snapshot_payload),),
+        )
+    observed: dict[str, object] = {}
+
+    class ResumeProbe:
+        async def run_async(self, **kwargs: object) -> None:
+            observed.update(kwargs)
+            start = kwargs["runtime_start_callback"]
+            assert callable(start)
+            start("workflow-resumed")
+
+    executor = WorkflowRuntimeExecutor(
+        store=store,
+        runtime_factory=lambda **_kwargs: ResumeProbe(),
+        now=lambda: "2026-07-28T00:10:03.000000Z",
+    )
+    settled = asyncio.run(
+        executor.execute_claimed_run(
+            runtime_run_id="runtime_run_1",
+            executor_id=lease.executor_id,
+            attempt_no=lease.attempt_no,
+        )
+    )
+
+    assert [decision.reason_code for decision in decisions] == [
+        "runtime_checkpoint_restored"
+    ]
+    assert observed["resume_checkpoint"]["checkpoint_id"] == checkpoint.checkpoint_id
+    assert observed["resume_run_state"]["requirement_sheet"] == state.requirement_sheet.model_dump(
+        mode="json"
+    )
+    assert settled.status == "completed"
+
+
+def test_legacy_not_fit_scorecard_is_rescored_before_resume_continues(
+    tmp_path,
+) -> None:
+    from seektalent.models import SCORING_SEMANTICS_VERSION, ScoredCandidate
+    from seektalent.normalization import normalize_resume
+    from seektalent.tracing import RunTracer
+
+    store = _seed_running_store(tmp_path)
+    state = _run_state()
+    candidate = _candidate("legacy-not-fit", "cts")
+    state.candidate_store[candidate.resume_id] = candidate
+    state.normalized_store[candidate.resume_id] = normalize_resume(candidate)
+    state.scorecards_by_resume_id[candidate.resume_id] = ScoredCandidate(
+        resume_id=candidate.resume_id,
+        source_provider="cts",
+        source_round=1,
+        fit_bucket="not_fit",
+        overall_score=55,
+        must_have_match_score=55,
+        reasoning_summary="Legacy low-score exclusion.",
+        confidence="low",
+    )
+    state.top_pool_ids = [candidate.resume_id]
+    checkpoint = store.write_checkpoint_v2(
+        checkpoint_id="checkpoint-legacy-scoring-semantics",
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-1",
+        attempt_no=1,
+        stage="round",
+        round_no=1,
+        safe_boundary="before_round_controller",
+        accepted_requirement_revision_id="approved-1",
+        source_ids=["liepin"],
+        projection=checkpoint_projection(state),
+        detail_claim_revision=0,
+        detail_claim_hash=None,
+        continuation_cursor={
+            "nextPhase": "rounds",
+            "completedRounds": 0,
+            "stopReason": "max_rounds_reached",
+        },
+        created_at="2026-07-28T00:00:03.000000Z",
+    )
+
+    recovered = RecoveryStateAssembler(store).assemble(checkpoint)
+    recovered_score = recovered.scorecards_by_resume_id[candidate.resume_id]
+    runtime = orchestrator_module.WorkflowRuntime(
+        make_settings(
+            runs_dir=str(tmp_path / "runs"),
+            mock_cts=True,
+            provider_name="cts",
+        )
+    )
+    continuation = runtime._resume_continuation(
+        resume_checkpoint=checkpoint.model_dump(mode="json"),
+        run_state=recovered,
+    )
+    assert continuation is not None
+    observed_checkpoints: list[object] = []
+
+    class CurrentSemanticsScorer:
+        async def score_candidates_parallel(self, *, contexts, tracer):
+            del tracer
+            assert [context.normalized_resume.resume_id for context in contexts] == [
+                candidate.resume_id
+            ]
+            return (
+                [
+                    ScoredCandidate.model_validate(
+                        {
+                            **recovered_score.model_dump(mode="json"),
+                            "fit_bucket": "fit",
+                            "hard_conflicts": [],
+                            "scoring_semantics_version": SCORING_SEMANTICS_VERSION,
+                        }
+                    )
+                ],
+                [],
+            )
+
+    runtime.resume_scorer = CurrentSemanticsScorer()
+    tracer = RunTracer(tmp_path / "trace")
+    try:
+        asyncio.run(
+            runtime._refresh_recovered_scoring_semantics(
+                run_state=recovered,
+                continuation=continuation,
+                resume_checkpoint=checkpoint.model_dump(mode="json"),
+                tracer=tracer,
+                runtime_checkpoint_callback=observed_checkpoints.append,
+            )
+        )
+    finally:
+        tracer.close()
+
+    refreshed = recovered.scorecards_by_resume_id[candidate.resume_id]
+    assert refreshed.fit_bucket == "fit"
+    assert refreshed.scoring_semantics_version == SCORING_SEMANTICS_VERSION
+    assert len(observed_checkpoints) == 1
+
+
 def test_checkpoint_rejects_injected_detail_claim_binding(tmp_path) -> None:
     store = _seed_running_store(tmp_path)
 
@@ -1642,6 +1873,7 @@ def test_finalization_revision_is_immutable_until_manifest_rehome(
     "safe_boundary",
     [
         "before_source_dispatch",
+        "before_round_controller",
         "after_source_result_commit",
         "runtime_candidate_checkpoint",
         "after_round_controller",

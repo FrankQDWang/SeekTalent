@@ -64,6 +64,14 @@ def test_checkpoint_persists_compact_candidate_truth_without_artifacts(tmp_path:
     ]
     assert [(item.revision, item.candidate_identity_ids) for item in revisions] == [(1, ["identity_1"])]
     assert revisions[0].source_checkpoint_id == "rtcheckpoint_candidates"
+    assert store.resolve_candidate_identity_id(
+        runtime_run_id="runtime_run_candidates",
+        candidate_id="identity_legacy",
+    ) == "identity_1"
+    assert store.resolve_candidate_identity_id(
+        runtime_run_id="runtime_run_candidates",
+        candidate_id="identity_missing",
+    ) is None
 
 
 def test_legacy_candidate_identity_reads_version_fields_with_safe_defaults(tmp_path: Path) -> None:
@@ -627,6 +635,9 @@ def _run_state_payload() -> dict[str, object]:
 
 def _versioned_run_state_payload() -> dict[str, object]:
     payload = _run_state_payload()
+    payload["identity_aliases_by_canonical_id"] = {
+        "identity_1": ["identity_1", "identity_legacy"]
+    }
     identities = payload["candidate_identities"]
     canonical_by_identity = payload["canonical_resume_by_identity_id"]
     evidence_by_identity = payload["source_evidence_by_identity_id"]

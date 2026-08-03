@@ -26,6 +26,7 @@ from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
 from seektalent_runtime_control.requirements import draft_from_requirement_sheet
 from seektalent_runtime_control.store import RuntimeControlStore
 from seektalent_workbench_v2.agent_loop import WorkbenchV2RuntimeInput
+from seektalent_workbench_v2.errors import CandidateNotFoundError
 import seektalent_workbench_v2.runtime_service as runtime_service_module
 from seektalent_workbench_v2.runtime_service import (
     WorkbenchV2RequirementExtractor,
@@ -266,7 +267,7 @@ class CandidateThresholdStore:
                 updated_at=NOW,
             )
             for identity_id, score, fit_bucket in (
-                ("low", 59, "fit"),
+                ("low", 20, "fit"),
                 ("edge", 60, "fit"),
                 ("high", 90, "fit"),
                 ("hard-fail", 95, "not_fit"),
@@ -279,13 +280,49 @@ class CandidateThresholdStore:
         return []
 
 
-def test_candidate_summary_hides_scores_below_sixty_and_reranks() -> None:
+def test_candidate_summary_includes_low_fit_scores_but_hides_hard_conflicts() -> None:
     service = WorkbenchV2RuntimeService(store=CandidateThresholdStore())  # type: ignore[arg-type]
     summaries = service.list_candidate_summaries("rtrun_candidate")
     assert [(item["candidateId"], item["rank"]) for item in summaries] == [
         ("high", 1),
         ("edge", 2),
+        ("low", 3),
     ]
+    assert [item["matchScore"] for item in summaries] == [90, 60, 20]
+
+
+class CandidateLimitStore:
+    def list_candidate_identities(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateIdentity]:
+        return [
+            RuntimeControlCandidateIdentity(
+                runtime_run_id=runtime_run_id,
+                identity_id=f"identity-{score:02d}",
+                canonical_resume_id=f"resume-{score:02d}",
+                display_name=f"candidate-{score:02d}",
+                title="AI Agent Engineer",
+                company="Accio",
+                location="Hangzhou",
+                summary="limit fixture",
+                score=score,
+                fit_bucket="fit",
+                payload_hash=f"hash-{score:02d}",
+                updated_at=NOW,
+            )
+            for score in range(25)
+        ]
+
+    def list_candidate_evidence(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateEvidence]:
+        del runtime_run_id
+        return []
+
+
+def test_candidate_summary_keeps_top_twenty_in_raw_score_order() -> None:
+    service = WorkbenchV2RuntimeService(store=CandidateLimitStore())  # type: ignore[arg-type]
+
+    summaries = service.list_candidate_summaries("rtrun_candidate")
+
+    assert len(summaries) == 20
+    assert [item["matchScore"] for item in summaries] == list(range(24, 4, -1))
 
 
 class CandidateIdentityOnlyStore:
@@ -300,7 +337,7 @@ class CandidateIdentityOnlyStore:
                 title="",
                 company="",
                 location="",
-                summary="",
+                summary="这只是评分摘要，不是候选人详情。",
                 score=60,
                 fit_bucket="fit",
                 payload_hash="identity_hash",
@@ -372,7 +409,7 @@ def _rich_version_evidence(
             url=f"https://example.test/source/{version}",
         )
     ]
-    if version == "canonical":
+    if version == "canonical" and source_kind == "cts":
         source_references.append(
             SourceReference(
                 source_kind=source_kind,
@@ -541,6 +578,12 @@ def test_runtime_service_amends_requirement_bundle_without_losing_deselected_ite
     assert must_have_items[0].selected is False
     assert any(item.text == "熟悉 LangGraph" and item.selected for item in must_have_items)
     assert bundle.requirement_sheet.must_have_capabilities == ["Agent 工作流经验", "熟悉 LangGraph"]
+    langgraph = next(
+        item
+        for item in bundle.requirement_sheet.initial_query_term_pool
+        if item.term == "LangGraph"
+    )
+    assert langgraph.first_added_round == 1
 
 
 def test_runtime_service_extracts_requirement_form_from_runtime_factory(tmp_path: Path) -> None:
@@ -746,12 +789,244 @@ def test_runtime_service_does_not_claim_source_without_evidence() -> None:
     detail = service.get_candidate_detail("rtrun_candidate", "identity_1")
 
     assert summary["sourceKinds"] == []
+    assert summary["detailAvailability"] == "unavailable"
+    assert summary["accessState"] == "denied"
     assert summary["avatarColorKey"] in {f"avatar-{index}" for index in range(6)}
     assert detail["sourceKinds"] == []
+    assert detail["detailAvailability"] == "unavailable"
+    assert detail["accessState"] == "denied"
     assert detail["sourceReferences"] == []
     assert "sourceUrl" not in detail
     assert detail["avatarColorKey"] in {f"avatar-{index}" for index in range(6)}
     assert detail["evidenceLevel"] == "unknown"
+
+
+class CandidateProjectionStore:
+    def __init__(
+        self,
+        *,
+        identity: RuntimeControlCandidateIdentity,
+        evidence: list[RuntimeControlCandidateEvidence],
+        aliases: dict[str, str] | None = None,
+    ) -> None:
+        self.identity = identity
+        self.evidence = evidence
+        self.aliases = aliases or {}
+
+    def list_candidate_identities(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateIdentity]:
+        assert runtime_run_id == "rtrun_candidate"
+        return [self.identity]
+
+    def list_candidate_evidence(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateEvidence]:
+        assert runtime_run_id == "rtrun_candidate"
+        return self.evidence
+
+    def resolve_candidate_identity_id(self, *, runtime_run_id: str, candidate_id: str) -> str | None:
+        assert runtime_run_id == "rtrun_candidate"
+        if candidate_id == self.identity.identity_id:
+            return candidate_id
+        return self.aliases.get(candidate_id)
+
+
+def _projection_identity(
+    *,
+    equivalent_resume_ids: list[str] | None = None,
+    conflicting_resume_ids: list[str] | None = None,
+    display_evidence_ids: list[str] | None = None,
+) -> RuntimeControlCandidateIdentity:
+    return RuntimeControlCandidateIdentity(
+        runtime_run_id="rtrun_candidate",
+        identity_id="identity_projection",
+        canonical_resume_id="resume_canonical",
+        merged_resume_ids=["resume_canonical", "resume_detail"],
+        equivalent_latest_resume_ids=equivalent_resume_ids or ["resume_canonical"],
+        display_source_evidence_ids=display_evidence_ids or ["evidence_canonical"],
+        conflicting_resume_ids=conflicting_resume_ids or [],
+        display_name="Canonical Name",
+        title="Canonical Title",
+        company="Canonical Company",
+        summary="Canonical match summary",
+        score=70,
+        fit_bucket="fit",
+        payload_hash="projection_identity_hash",
+        updated_at=NOW,
+    )
+
+
+def _projection_evidence(
+    version: str,
+    *,
+    evidence_level: str,
+    provider_hash: str,
+    include_detail: bool,
+) -> RuntimeControlCandidateEvidence:
+    evidence = _rich_version_evidence(
+        "rtrun_candidate",
+        version,
+        source_kind="liepin",
+        score=95 if version == "detail" else 70,
+    )
+    payload = evidence.payload if include_detail else {"match": evidence.payload["match"]}
+    return evidence.model_copy(
+        update={
+            "identity_id": "identity_projection",
+            "resume_id": f"resume_{version}",
+            "evidence_id": f"evidence_{version}",
+            "evidence_level": evidence_level,
+            "provider_candidate_key_hash": provider_hash,
+            "payload": payload,
+        }
+    )
+
+
+def test_candidate_detail_uses_equivalent_detail_when_canonical_has_only_summary() -> None:
+    store = CandidateProjectionStore(
+        identity=_projection_identity(
+            equivalent_resume_ids=["resume_canonical", "resume_detail"],
+            display_evidence_ids=["evidence_canonical", "evidence_detail"],
+        ),
+        evidence=[
+            _projection_evidence(
+                "canonical",
+                evidence_level="card",
+                provider_hash="canonical-provider",
+                include_detail=False,
+            ),
+            _projection_evidence(
+                "detail",
+                evidence_level="detail",
+                provider_hash="equivalent-provider",
+                include_detail=True,
+            ),
+        ],
+    )
+    service = WorkbenchV2RuntimeService(store=store)  # type: ignore[arg-type]
+
+    summary = service.list_candidate_summaries("rtrun_candidate")[0]
+    detail = service.get_candidate_detail("rtrun_candidate", "identity_projection")
+
+    assert summary["detailAvailability"] == "available"
+    assert detail["candidateId"] == "identity_projection"
+    assert detail["displayName"] == "Canonical Name"
+    assert detail["matchScore"] == 70
+    assert detail["workExperience"] == [
+        {"title": "Detail Work Title", "company": "Detail Work Company"}
+    ]
+    assert detail["detailAvailability"] == "available"
+    assert detail["evidenceLevel"] == "detail"
+
+
+def test_candidate_detail_uses_same_provider_detail_without_mixing_unrelated_version() -> None:
+    canonical = _projection_evidence(
+        "canonical",
+        evidence_level="card",
+        provider_hash="shared-provider",
+        include_detail=False,
+    )
+    detail_evidence = _projection_evidence(
+        "detail",
+        evidence_level="final",
+        provider_hash="shared-provider",
+        include_detail=True,
+    )
+    unrelated = _rich_version_evidence(
+        "rtrun_candidate",
+        "incomparable",
+        source_kind="liepin",
+        score=99,
+    ).model_copy(update={"identity_id": "identity_projection"})
+    store = CandidateProjectionStore(
+        identity=_projection_identity(),
+        evidence=[canonical, detail_evidence, unrelated],
+    )
+    service = WorkbenchV2RuntimeService(store=store)  # type: ignore[arg-type]
+
+    detail = service.get_candidate_detail("rtrun_candidate", "identity_projection")
+
+    assert detail["workExperience"] == [
+        {"title": "Detail Work Title", "company": "Detail Work Company"}
+    ]
+    assert detail["evidenceLevel"] == "final"
+    serialized = json.dumps(detail, ensure_ascii=False)
+    assert "Incomparable" not in serialized
+    assert "/source/incomparable" not in serialized
+
+
+def test_candidate_detail_never_projects_explicitly_conflicting_detail() -> None:
+    store = CandidateProjectionStore(
+        identity=_projection_identity(conflicting_resume_ids=["resume_detail"]),
+        evidence=[
+            _projection_evidence(
+                "canonical",
+                evidence_level="card",
+                provider_hash="shared-provider",
+                include_detail=False,
+            ),
+            _projection_evidence(
+                "detail",
+                evidence_level="detail",
+                provider_hash="shared-provider",
+                include_detail=True,
+            ),
+        ],
+    )
+    service = WorkbenchV2RuntimeService(store=store)  # type: ignore[arg-type]
+
+    summary = service.list_candidate_summaries("rtrun_candidate")[0]
+    detail = service.get_candidate_detail("rtrun_candidate", "identity_projection")
+
+    assert summary["detailAvailability"] == "unavailable"
+    assert detail["detailAvailability"] == "unavailable"
+    assert detail["accessState"] == "denied"
+    assert detail["workExperience"] == []
+    assert detail["sourceReferences"] == [
+        {
+            "sourceKind": "liepin",
+            "displayLabel": "猎聘",
+            "url": "https://example.test/source/canonical",
+        }
+    ]
+    assert "Detail" not in json.dumps(detail, ensure_ascii=False)
+
+
+def test_candidate_detail_resolves_legacy_identity_alias() -> None:
+    store = CandidateProjectionStore(
+        identity=_projection_identity(
+            equivalent_resume_ids=["resume_canonical", "resume_detail"],
+            display_evidence_ids=["evidence_canonical", "evidence_detail"],
+        ),
+        evidence=[
+            _projection_evidence(
+                "canonical",
+                evidence_level="card",
+                provider_hash="canonical-provider",
+                include_detail=False,
+            ),
+            _projection_evidence(
+                "detail",
+                evidence_level="detail",
+                provider_hash="detail-provider",
+                include_detail=True,
+            ),
+        ],
+        aliases={"identity_legacy": "identity_projection"},
+    )
+    service = WorkbenchV2RuntimeService(store=store)  # type: ignore[arg-type]
+
+    detail = service.get_candidate_detail("rtrun_candidate", "identity_legacy")
+
+    assert detail["candidateId"] == "identity_projection"
+
+
+def test_candidate_detail_rejects_unknown_identity_with_candidate_specific_error() -> None:
+    store = CandidateProjectionStore(
+        identity=_projection_identity(),
+        evidence=[],
+    )
+    service = WorkbenchV2RuntimeService(store=store)  # type: ignore[arg-type]
+
+    with pytest.raises(CandidateNotFoundError):
+        service.get_candidate_detail("rtrun_candidate", "identity_missing")
 
 
 @pytest.mark.parametrize(
@@ -873,6 +1148,9 @@ def test_runtime_service_submits_next_round_requirement_to_runtime_control(tmp_p
     )
     assert len(amendments) == 1
     assert amendments[0].input_text == "补充：候选人必须有 LangGraph 经验。"
+    assert amendments[0].provenance == {
+        "intentDecision": {"intent": "update_requirements"}
+    }
     assert extractor.calls[-1] == {
         "job_title": "AI 平台工程师",
         "jd_text": "补充：候选人必须有 LangGraph 经验。",

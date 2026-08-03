@@ -196,7 +196,7 @@ def _scoring_context() -> ScoringContext:
 def test_scorer_materializes_public_fields_from_draft() -> None:
     candidate = _materialize_scored_candidate(
         draft=ScoredCandidateDraft(
-            fit_bucket="fit",
+            hard_conflicts=[],
             must_have_match_score=90,
             preferred_match_score=75,
             risk_score=20,
@@ -227,7 +227,7 @@ def test_scorer_materializes_public_fields_from_draft() -> None:
 def test_scorer_materialization_fallback_does_not_invent_evidence() -> None:
     candidate = _materialize_scored_candidate(
         draft=ScoredCandidateDraft(
-            fit_bucket="fit",
+            hard_conflicts=[],
             must_have_match_score=62,
             preferred_match_score=50,
             risk_score=45,
@@ -427,10 +427,9 @@ def test_scorer_times_out_one_branch_without_blocking_round(
         )
     )
 
-    assert failures == []
-    assert len(scored) == 1
-    assert scored[0].fit_bucket == "not_fit"
-    assert scored[0].risk_flags == ["scoring_timeout"]
-    assert scored[0].confidence == "low"
+    assert scored == []
+    assert len(failures) == 1
+    assert failures[0].failure_kind == "timeout"
+    assert failures[0].provider_failure_kind == "provider_timeout"
     assert any(event_type == "score_branch_failed" for event_type, _ in tracer.events)
     assert tracer.rows[0][1]["failure_kind"] == "timeout"

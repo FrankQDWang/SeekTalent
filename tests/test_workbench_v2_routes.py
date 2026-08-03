@@ -23,6 +23,7 @@ from seektalent_workbench_v2.models import (
     WorkbenchV2ConversationView,
     WorkbenchV2TranscriptEventView,
 )
+from seektalent_workbench_v2.errors import CandidateNotFoundError
 from tests.settings_factory import make_settings
 
 
@@ -106,6 +107,8 @@ class FakeWorkbenchV2Service:
         self.detail_calls.append((conversation_id, candidate_id))
         if conversation_id == "missing":
             raise KeyError(conversation_id)
+        if candidate_id == "missing":
+            raise CandidateNotFoundError(candidate_id)
         return WorkbenchV2CandidateDetailView(
             candidateId=candidate_id,
             displayName="吴所谓",
@@ -272,6 +275,30 @@ def test_candidate_detail_route_returns_runtime_backed_v2_detail(tmp_path: Path)
         {"title": "匹配程度", "items": ["推荐理由：做过复杂 B 端业务流程。"]}
     ]
     assert fake.detail_calls == [("agentv2_existing", "identity_1")]
+
+
+def test_missing_candidate_detail_returns_candidate_specific_reason_code(tmp_path: Path) -> None:
+    client, fake = _client(tmp_path)
+
+    response = client.get(
+        "/api/agent/workbench/v2/conversations/agentv2_existing/candidates/missing/detail"
+    )
+
+    assert response.status_code == 404, response.text
+    assert response.json() == {"detail": {"reasonCode": "workbench_v2_candidate_not_found"}}
+    assert fake.detail_calls == [("agentv2_existing", "missing")]
+
+
+def test_missing_candidate_detail_conversation_keeps_conversation_reason_code(tmp_path: Path) -> None:
+    client, fake = _client(tmp_path)
+
+    response = client.get(
+        "/api/agent/workbench/v2/conversations/missing/candidates/identity_1/detail"
+    )
+
+    assert response.status_code == 404, response.text
+    assert response.json() == {"detail": {"reasonCode": "workbench_v2_conversation_not_found"}}
+    assert fake.detail_calls == [("missing", "identity_1")]
 
 
 def test_missing_list_events_returns_public_reason_code(tmp_path: Path) -> None:
@@ -588,6 +615,9 @@ def test_openapi_declares_v2_error_responses(tmp_path: Path) -> None:
     recheck_responses = paths["/api/agent/workbench/v2/conversations/{conversation_id}/runtime/recheck"]["post"][
         "responses"
     ]
+    candidate_detail_responses = paths[
+        "/api/agent/workbench/v2/conversations/{conversation_id}/candidates/{candidate_id}/detail"
+    ]["get"]["responses"]
 
     assert {"201", "400", "409", "503"}.issubset(create_responses)
     assert {"404"}.issubset(get_responses)
@@ -595,6 +625,12 @@ def test_openapi_declares_v2_error_responses(tmp_path: Path) -> None:
     assert {"404"}.issubset(submit_responses)
     assert {"400", "404", "409", "503"}.issubset(action_responses)
     assert {"400", "404", "409", "503"}.issubset(recheck_responses)
+    assert candidate_detail_responses["404"]["content"]["application/json"]["schema"]["properties"]["detail"][
+        "properties"
+    ]["reasonCode"]["enum"] == [
+        "workbench_v2_conversation_not_found",
+        "workbench_v2_candidate_not_found",
+    ]
     assert create_responses["400"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
     assert create_responses["409"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")
     assert create_responses["503"]["content"]["application/json"]["schema"]["$ref"].endswith("/ProblemDetails")

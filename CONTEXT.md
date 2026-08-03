@@ -2,6 +2,70 @@
 
 SeekTalent coordinates recruiting work across local application state and external data-source browser sessions.
 
+## Candidate assessment
+
+**Hard conflict**:
+Resume-grounded evidence that directly contradicts an explicit hard constraint or exclusion policy. Missing information, weak evidence, and ordinary capability gaps are not hard conflicts.
+_Avoid_: Low score, missing must-have, general risk
+
+**Fit**:
+A candidate assessment with no evidenced hard conflict. Fit is an eligibility verdict and does not mean the candidate reaches recommendation quality.
+_Avoid_: Recommended, qualified, high score
+
+**Not fit**:
+A candidate assessment supported by at least one explicit hard conflict. A candidate cannot be not fit solely because evidence is incomplete or the match score is low.
+_Avoid_: Low fit, weak candidate, below threshold
+
+**Raw match score**:
+The authoritative weighted role-match score derived from the applicable assessment dimensions. It determines score-based quality decisions and ordering.
+_Avoid_: Display score, fit bucket
+
+**Recommendation threshold**:
+The raw-match-score boundary for treating an otherwise fit candidate as recommendation-quality. It is distinct from eligibility and visibility.
+_Avoid_: Fit threshold, display floor
+
+**Display score**:
+A presentation-only projection of the raw match score. It never changes candidate ordering, eligibility, recommendation quality, or stored assessment truth.
+_Avoid_: Raw score, final score
+
+**Scoring semantics version**:
+The persisted contract version that makes a scorecard interpretable. A recovered scorecard without the current version must be re-scored as a complete candidate set; an old `not_fit` value can never be converted into hard-conflict evidence.
+_Avoid_: Cache version, checkpoint schema version, inferred conflict
+
+**Candidate identity**:
+The person-level continuity record that groups known resume observations and resolves historical aliases to one current canonical identity. It does not choose or combine resume content.
+_Avoid_: Resume version, candidate card, provider candidate ID
+
+**Resume content version**:
+One internally coherent, source-observed body of candidate information. Its normalized resume is derived from that body; explicitly conflicting versions remain separate.
+_Avoid_: Candidate identity, merged profile, scoring summary
+
+**Verified source reference**:
+A validated external locator attached to retained source evidence. It may supplement other verified references but is independent of resume content selection and scoring.
+_Avoid_: Raw source URL, guessed link, resume content
+
+**Candidate detail**:
+A presentation of one eligible detail or final resume content version for a candidate identity. A scoring summary alone is not candidate detail, and conflicting content is never mixed into the projection.
+_Avoid_: Match explanation, candidate identity, combined resume
+
+## Requirement execution
+
+**Approved requirement revision**:
+The sole durable requirement truth accepted for a run. A supplemental user requirement creates the next revision in the same chain; draft UI state, chat text, and RunState fields are not parallel requirement authorities.
+_Avoid_: Requirement form snapshot, runtime notes, scoring policy
+
+**Requirement amendment**:
+A structured request to derive a later approved requirement revision at a specific unlocked round boundary. It reserves that boundary while extraction or review is pending and never acts as an independent executable requirement.
+_Avoid_: Requirement queue, free-form runtime instruction, scoring override
+
+**Requirement execution projection**:
+The RunState requirement sheet, scoring policy, and requirement-owned query terms derived together from one approved requirement revision. Runtime reflection and candidate-feedback terms remain dynamic inputs, but none of these projections can become a second requirement truth.
+_Avoid_: Approved requirement revision, independent query pool, independent scoring policy
+
+**Round input lock**:
+The durable event that closes one round's requirement input before its Controller runs. An amendment reserved first blocks that boundary until it resolves; an amendment arriving after the lock targets the next unlocked round.
+_Avoid_: Controller decision, amendment status, checkpoint
+
 ## Browser lifecycle
 
 **Source run**:

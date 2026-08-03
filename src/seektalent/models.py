@@ -11,6 +11,23 @@ from pydantic import AliasChoices, BaseModel, ConfigDict, Field, StrictInt, Stri
 from seektalent.source_references import SourceReference
 
 FitBucket = Literal["fit", "not_fit"]
+SCORING_SEMANTICS_VERSION = "hard_conflict_v1"
+RECOMMENDATION_MIN_SCORE = 60
+
+
+def is_recommendation_eligible(
+    *,
+    score: int | None,
+    fit_bucket: str | None,
+) -> bool:
+    return (
+        fit_bucket == "fit"
+        and score is not None
+        and 0 <= score <= 100
+        and score >= RECOMMENDATION_MIN_SCORE
+    )
+
+
 DecisionType = Literal["continue", "stop"]
 ControllerAction = Literal["source_search", "search_cts", "stop"]
 PoolDecisionType = Literal["selected", "retained", "dropped"]
@@ -1124,10 +1141,26 @@ class ScoringContext(BaseModel):
     runtime_only_constraints: list[RuntimeConstraint] = Field(default_factory=list)
 
 
+class HardConflictEvidence(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    policy_reference: str = Field(
+        min_length=1,
+        description="Exact reference to an allowed hard-conflict policy in the scoring prompt.",
+    )
+    resume_evidence: str = Field(
+        min_length=1,
+        description="Concise resume-grounded evidence that explicitly conflicts with that policy.",
+    )
+
+
 class ScoredCandidateDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    fit_bucket: FitBucket = Field(description="Top-level keep-or-drop decision for this resume.")
+    hard_conflicts: list[HardConflictEvidence] = Field(
+        max_length=3,
+        description="Explicit hard conflicts only; an empty list means no hard conflict is evidenced.",
+    )
     must_have_match_score: int = Field(ge=0, le=100, description="Score for critical must-have alignment.")
     preferred_match_score: int | None = Field(default=None, ge=0, le=100, description="Score for preferred-signal alignment.")
     risk_score: int | None = Field(default=None, ge=0, le=100, description="Risk score where higher means more concern.")
@@ -1144,7 +1177,16 @@ class ScoredCandidate(BaseModel):
 
     resume_id: str = Field(description="Stable resume identifier from the candidate source.")
     source_provider: str | None = None
-    fit_bucket: FitBucket = Field(description="Top-level keep-or-drop decision for this resume.")
+    fit_bucket: FitBucket = Field(description="Derived hard-conflict eligibility verdict for this resume.")
+    scoring_semantics_version: Literal["hard_conflict_v1"] | None = Field(
+        default=None,
+        description="Persisted scoring semantics; missing values require a full rescore on recovery.",
+    )
+    hard_conflicts: list[HardConflictEvidence] = Field(
+        default_factory=list,
+        max_length=3,
+        description="Explicit policy-linked evidence supporting a not_fit verdict.",
+    )
     overall_score: int = Field(ge=0, le=100, description="Overall role-fit score.")
     must_have_match_score: int = Field(ge=0, le=100, description="Score for critical must-have alignment.")
     preferred_match_score: int | None = Field(default=None, ge=0, le=100, description="Score for preferred-signal alignment.")
@@ -1167,6 +1209,16 @@ class ScoredCandidate(BaseModel):
     detail_open_reason: str | None = None
     detail_open_policy_version: str | None = None
 
+    @model_validator(mode="after")
+    def validate_current_scoring_semantics(self) -> ScoredCandidate:
+        if self.scoring_semantics_version == SCORING_SEMANTICS_VERSION:
+            expected_bucket: FitBucket = (
+                "not_fit" if self.hard_conflicts else "fit"
+            )
+            if self.fit_bucket != expected_bucket:
+                raise ValueError("scored_candidate_hard_conflict_semantics_invalid")
+        return self
+
 
 class ScoringFailure(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -1178,12 +1230,14 @@ class ScoringFailure(BaseModel):
     error_message: str
     latency_ms: int | None = None
     failure_kind: Literal[
+        "timeout",
         "transport_error",
         "provider_error",
         "response_validation_error",
         "score_applicability_error",
     ] = "response_validation_error"
     provider_failure_kind: Literal[
+        "provider_timeout",
         "provider_auth_error",
         "provider_access_denied",
         "provider_rate_limited",
@@ -1217,9 +1271,9 @@ class StopGuidance(BaseModel):
     productive_round_count: int = 0
     zero_gain_round_count: int = 0
     top_pool_strength: TopPoolStrength
-    fit_count: int = 0
-    strong_fit_count: int = 0
-    high_risk_fit_count: int = 0
+    recommendation_count: int = 0
+    strong_recommendation_count: int = 0
+    high_risk_recommendation_count: int = 0
     quality_gate_status: StopQualityGateStatus = "pass"
     broadening_attempted: bool = False
 

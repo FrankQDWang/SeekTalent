@@ -315,11 +315,13 @@ def test_real_scorer_success_path_writes_scoring_calls_to_migrated_round_layout(
 
     monkeypatch.setattr(scorer, "_build_agent", fake_build_agent)
 
-    async def fake_score_one_live(*, prompt: str, agent, applicability):  # noqa: ANN001
-        del prompt, agent, applicability
+    async def fake_score_one_live(  # noqa: ANN001
+        *, prompt: str, agent, applicability, allowed_hard_conflict_references
+    ):
+        del prompt, agent, applicability, allowed_hard_conflict_references
         return (
             ScoredCandidateDraft(
-                fit_bucket="fit",
+                hard_conflicts=[],
                 must_have_match_score=91,
                 preferred_match_score=77,
                 risk_score=None,

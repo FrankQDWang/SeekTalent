@@ -300,8 +300,12 @@ class BoundaryCallbackRuntime:
     async def run_async(self, **kwargs: object) -> object:
         runtime_start_callback = kwargs["runtime_start_callback"]
         runtime_round_boundary_callback = kwargs["runtime_round_boundary_callback"]
+        runtime_round_boundary_commit_callback = kwargs[
+            "runtime_round_boundary_commit_callback"
+        ]
         assert callable(runtime_start_callback)
         assert callable(runtime_round_boundary_callback)
+        assert callable(runtime_round_boundary_commit_callback)
         runtime_start_callback("workflow_run_1")
         self.command_service.submit_next_round_requirement(
             runtime_run_id="runtime_run_1",
@@ -310,6 +314,10 @@ class BoundaryCallbackRuntime:
             idempotency_key="amend-boundary",
         )
         self.boundary_sheet = runtime_round_boundary_callback(1)
+        assert self.command_service.store.get_run(
+            "runtime_run_1"
+        ).approved_requirement_revision_id == "reqapproved_1"
+        runtime_round_boundary_commit_callback(1)
         return object()
 
 

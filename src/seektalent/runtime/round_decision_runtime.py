@@ -6,6 +6,7 @@ from collections.abc import Awaitable, Callable
 from seektalent.models import (
     ControllerContext,
     ControllerDecision,
+    QueryTermCandidate,
     ReflectionAdvice,
     RunState,
     SearchControllerDecision,
@@ -48,6 +49,7 @@ async def resolve_pre_controller_exhaustion(
     decision = choose_pre_controller_exhaustion_route(
         run_state=run_state,
         candidate_feedback_enabled=candidate_feedback_enabled,
+        round_no=round_no,
     )
     if decision is None:
         return None
@@ -127,9 +129,14 @@ def choose_pre_controller_exhaustion_route(
     *,
     run_state: RunState,
     candidate_feedback_enabled: bool,
+    round_no: int | None = None,
 ) -> RescueDecision | None:
     """Choose the first legal exhaustion route without mutating run state."""
-    if _has_fresh_controller_selectable_family(run_state):
+    effective_round_no = round_no if round_no is not None else len(run_state.round_history) + 1
+    if _has_fresh_controller_selectable_family(
+        run_state,
+        round_no=effective_round_no,
+    ):
         return None
 
     skipped: list[SkippedRescueLane] = []
@@ -153,7 +160,11 @@ def choose_pre_controller_exhaustion_route(
     return RescueDecision(selected_lane="allow_stop", skipped_lanes=skipped)
 
 
-def _has_fresh_controller_selectable_family(run_state: RunState) -> bool:
+def _has_fresh_controller_selectable_family(
+    run_state: RunState,
+    *,
+    round_no: int,
+) -> bool:
     consumed = consumed_non_anchor_term_family_ids(run_state.retrieval_state.query_execution_ledger)
     allowed_inactive = reflection_backed_inactive_terms(
         run_state.round_history[-1].reflection_advice if run_state.round_history else None
@@ -161,7 +172,10 @@ def _has_fresh_controller_selectable_family(run_state: RunState) -> bool:
     return any(
         item.queryability == "admitted"
         and item.retrieval_role not in {"primary_role_anchor", "role_anchor", "secondary_title_anchor"}
-        and item.family not in consumed
+        and (
+            item.family not in consumed
+            or _is_fresh_requirement_term(item, round_no=round_no)
+        )
         and (item.active or normalize_term(item.term).casefold() in allowed_inactive)
         for item in run_state.retrieval_state.query_term_pool
     )
@@ -315,19 +329,35 @@ def sanitize_controller_decision(
     if previous_reflection is not None and not (decision.response_to_reflection or "").strip():
         raise ValueError("response_to_reflection is required after a reflection round")
     if isinstance(decision, StopControllerDecision):
-        return decision.model_copy(
-            update={
-                "decision_rationale": sanitize_premature_max_round_claim(
-                    decision.decision_rationale,
-                    round_no=round_no,
-                    max_rounds=max_rounds,
-                ),
-                "stop_reason": sanitize_premature_max_round_claim(
-                    decision.stop_reason,
-                    round_no=round_no,
-                    max_rounds=max_rounds,
-                ),
-            }
+        if not any(
+            _is_fresh_requirement_term(item, round_no=round_no)
+            for item in run_state.retrieval_state.query_term_pool
+        ):
+            return decision.model_copy(
+                update={
+                    "decision_rationale": sanitize_premature_max_round_claim(
+                        decision.decision_rationale,
+                        round_no=round_no,
+                        max_rounds=max_rounds,
+                    ),
+                    "stop_reason": sanitize_premature_max_round_claim(
+                        decision.stop_reason,
+                        round_no=round_no,
+                        max_rounds=max_rounds,
+                    ),
+                }
+            )
+        decision = SearchControllerDecision(
+            thought_summary=decision.thought_summary,
+            action="source_search",
+            decision_rationale="Apply the newly effective runtime requirement before reconsidering stop.",
+            proposed_query_terms=select_query_terms(
+                run_state.retrieval_state.query_term_pool,
+                round_no=round_no,
+                title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
+            ),
+            proposed_filter_plan=build_default_filter_plan(run_state.requirement_sheet),
+            response_to_reflection=decision.response_to_reflection,
         )
     try:
         query_terms = canonicalize_controller_query_terms(
@@ -364,6 +394,13 @@ def sanitize_controller_decision(
         query_terms=query_terms,
         run_state=run_state,
         allowed_inactive_terms=allowed_inactive_terms,
+        round_no=round_no,
+    )
+    query_terms = _ensure_fresh_requirement_term(
+        query_terms=query_terms,
+        run_state=run_state,
+        round_no=round_no,
+        allowed_inactive_terms=allowed_inactive_terms,
     )
     from seektalent.retrieval.query_identity import build_term_group_key
     from seektalent.runtime.query_identity import used_term_group_keys
@@ -372,7 +409,10 @@ def sanitize_controller_decision(
         query_terms=query_terms,
         query_term_pool=run_state.retrieval_state.query_term_pool,
     )
-    if term_group_key in used_term_group_keys(run_state.retrieval_state.query_execution_ledger):
+    if (
+        term_group_key in used_term_group_keys(run_state.retrieval_state.query_execution_ledger)
+        and not _contains_fresh_requirement_term(query_terms, run_state=run_state, round_no=round_no)
+    ):
         raise ValueError("proposed_term_group_already_executed")
     return decision.model_copy(
         update={
@@ -384,14 +424,23 @@ def sanitize_controller_decision(
 
 
 def _repair_consumed_families(
-    *, query_terms: list[str], run_state: RunState, allowed_inactive_terms: set[str]
+    *,
+    query_terms: list[str],
+    run_state: RunState,
+    allowed_inactive_terms: set[str],
+    round_no: int,
 ) -> list[str]:
     pool = run_state.retrieval_state.query_term_pool
     index = {normalize_term(item.term).casefold(): item for item in pool}
     consumed = consumed_non_anchor_term_family_ids(run_state.retrieval_state.query_execution_ledger)
     selected = [index[normalize_term(term).casefold()] for term in query_terms]
     anchors = [item for item in selected if item.retrieval_role in {"primary_role_anchor", "role_anchor"}]
-    fresh = [item for item in selected if item not in anchors and item.family not in consumed]
+    fresh = [
+        item
+        for item in selected
+        if item not in anchors
+        and (item.family not in consumed or _is_fresh_requirement_term(item, round_no=round_no))
+    ]
     target = len([item for item in selected if item not in anchors])
     if target == 0:
         from seektalent.retrieval.query_identity import build_term_group_key
@@ -407,7 +456,7 @@ def _repair_consumed_families(
             for item in pool
             if item.queryability == "admitted"
             and item.retrieval_role not in {"primary_role_anchor", "role_anchor", "secondary_title_anchor"}
-            and item.family not in consumed
+            and (item.family not in consumed or _is_fresh_requirement_term(item, round_no=round_no))
             and item.family not in seen
             and (item.active or normalize_term(item.term).casefold() in allowed_inactive_terms)
         ),
@@ -421,6 +470,70 @@ def _repair_consumed_families(
     if target and not fresh:
         raise NoFreshControllerSelectableFamilyError("no_fresh_controller_selectable_family")
     return [*(item.term for item in anchors[:1]), *(item.term for item in fresh[:target])]
+
+
+def _ensure_fresh_requirement_term(
+    *,
+    query_terms: list[str],
+    run_state: RunState,
+    round_no: int,
+    allowed_inactive_terms: set[str],
+) -> list[str]:
+    if _contains_fresh_requirement_term(query_terms, run_state=run_state, round_no=round_no):
+        return query_terms
+    fresh_terms = sorted(
+        (
+            item
+            for item in run_state.retrieval_state.query_term_pool
+            if _is_fresh_requirement_term(item, round_no=round_no)
+        ),
+        key=lambda item: (item.priority, item.family, item.term.casefold()),
+    )
+    if not fresh_terms:
+        return query_terms
+    fresh = fresh_terms[0]
+    pool_index = {
+        normalize_term(item.term).casefold(): item
+        for item in run_state.retrieval_state.query_term_pool
+    }
+    selected = [pool_index[normalize_term(term).casefold()] for term in query_terms]
+    anchors = [item for item in selected if item.retrieval_role in {"primary_role_anchor", "role_anchor"}]
+    companions = [item for item in selected if item not in anchors and item.family != fresh.family]
+    max_companions = 1 if round_no == 1 else 2
+    companions = [*companions[: max(0, max_companions - 1)], fresh]
+    projected = [*(item.term for item in anchors[:1]), *(item.term for item in companions)]
+    return canonicalize_controller_query_terms(
+        projected,
+        round_no=round_no,
+        title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
+        query_term_pool=run_state.retrieval_state.query_term_pool,
+        allowed_inactive_non_anchor_terms=allowed_inactive_terms,
+        allow_anchor_only=True,
+    )
+
+
+def _contains_fresh_requirement_term(
+    query_terms: list[str],
+    *,
+    run_state: RunState,
+    round_no: int,
+) -> bool:
+    selected_keys = {normalize_term(term).casefold() for term in query_terms}
+    return any(
+        normalize_term(item.term).casefold() in selected_keys
+        and _is_fresh_requirement_term(item, round_no=round_no)
+        for item in run_state.retrieval_state.query_term_pool
+    )
+
+
+def _is_fresh_requirement_term(item: QueryTermCandidate, *, round_no: int) -> bool:
+    return (
+        item.source in {"job_title", "jd", "notes"}
+        and item.queryability == "admitted"
+        and item.active
+        and item.first_added_round == round_no
+        and item.retrieval_role not in {"primary_role_anchor", "role_anchor", "secondary_title_anchor"}
+    )
 
 
 def reflection_backed_inactive_terms(reflection_advice: ReflectionAdvice | None) -> set[str]:

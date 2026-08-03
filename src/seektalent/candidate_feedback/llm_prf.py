@@ -15,7 +15,7 @@ from seektalent.candidate_feedback.models import CandidateTermType, FeedbackCand
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.models import NormalizedResume, ScoredCandidate, unique_strings
-from seektalent.candidate_quality import risk_at_or_above
+from seektalent.candidate_quality import is_recommendation_eligible, risk_at_or_above
 from seektalent.prompt_safety import render_template_version_block, render_untrusted_json_block
 from seektalent.prompting import LoadedPrompt
 from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
@@ -356,7 +356,11 @@ def select_llm_prf_negative_resumes(candidates: list[ScoredCandidate], *, limit:
     selected = [
         candidate
         for candidate in candidates
-        if candidate.fit_bucket != "fit" or risk_at_or_above(candidate.risk_score, 60)
+        if not is_recommendation_eligible(
+            score=candidate.overall_score,
+            fit_bucket=candidate.fit_bucket,
+        )
+        or risk_at_or_above(candidate.risk_score, 60)
     ]
     selected.sort(
         key=lambda candidate: (

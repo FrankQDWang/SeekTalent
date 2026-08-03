@@ -1010,7 +1010,7 @@ def test_unknown_work_freshness_is_deterministic_and_not_semantically_equivalent
     assert "content_freshness_unknown" in forward.safe_reason_codes
 
 
-def test_unknown_work_freshness_ignores_completeness_and_input_order() -> None:
+def test_unknown_work_freshness_uses_completeness_without_input_order_dependence() -> None:
     equal_completeness = {
         "alpha": _normalized("alpha", current_company="甲公司", current_title="工程师", completeness=50),
         "beta": _normalized("beta", current_company="乙公司", current_title="总监", completeness=50),
@@ -1044,11 +1044,11 @@ def test_unknown_work_freshness_ignores_completeness_and_input_order() -> None:
         evidence=[],
     )
 
-    assert forward.canonical_resume_id == expected_id
-    assert reverse.canonical_resume_id == expected_id
-    assert forward.content_version_key == baseline.content_version_key
+    assert forward.canonical_resume_id == other_id
+    assert reverse.canonical_resume_id == other_id
+    assert forward.content_version_key != baseline.content_version_key
     assert forward.conflicting_resume_ids == ()
-    assert forward.incomparable_resume_ids == (other_id,)
+    assert forward.incomparable_resume_ids == (expected_id,)
 
 
 def test_current_markers_share_one_freshness_layer_even_when_start_dates_differ() -> None:
@@ -1181,7 +1181,7 @@ def test_equivalent_latest_resumes_are_pairwise_materially_consistent() -> None:
         ],
     )
 
-    assert selection.canonical_resume_id == "sparse"
+    assert selection.canonical_resume_id == "engineer"
     assert selection.equivalent_latest_resume_ids == ("engineer", "sparse")
     assert selection.conflicting_resume_ids == ("director",)
     assert selection.incomparable_resume_ids == ()

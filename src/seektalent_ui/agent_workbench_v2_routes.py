@@ -11,6 +11,7 @@ from seektalent_workbench_v2.models import (
     WorkbenchV2ConversationListView,
     WorkbenchV2ConversationView,
 )
+from seektalent_workbench_v2.errors import CandidateNotFoundError
 from seektalent_ui.agent_request_models import (
     MAX_AGENT_MESSAGE_CHARS,
     MAX_IDEMPOTENCY_KEY_CHARS,
@@ -24,6 +25,7 @@ from seektalent_ui.workbench_observability import correlation_id_from_request
 
 router = APIRouter(prefix="/api/agent/workbench/v2")
 CONVERSATION_NOT_FOUND = {"reasonCode": "workbench_v2_conversation_not_found"}
+CANDIDATE_NOT_FOUND = {"reasonCode": "workbench_v2_candidate_not_found"}
 IDEMPOTENCY_CONFLICT = "workbench_v2_idempotency_conflict"
 WORKBENCH_V2_BAD_REQUEST_REASON_CODES = {
     "workbench_v2_requirement_action_invalid",
@@ -68,6 +70,38 @@ WORKBENCH_V2_NOT_FOUND_RESPONSE: dict[str, Any] = {
 WORKBENCH_V2_RESPONSES_WITH_NOT_FOUND = {
     **WORKBENCH_V2_PROBLEM_RESPONSES,
     404: WORKBENCH_V2_NOT_FOUND_RESPONSE,
+}
+WORKBENCH_V2_CANDIDATE_NOT_FOUND_RESPONSE = {
+    "description": "Workbench v2 conversation or candidate not found.",
+    "content": {
+        "application/json": {
+            "schema": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["detail"],
+                "properties": {
+                    "detail": {
+                        "type": "object",
+                        "additionalProperties": False,
+                        "required": ["reasonCode"],
+                        "properties": {
+                            "reasonCode": {
+                                "type": "string",
+                                "enum": [
+                                    "workbench_v2_conversation_not_found",
+                                    "workbench_v2_candidate_not_found",
+                                ],
+                            }
+                        },
+                    }
+                },
+            }
+        }
+    },
+}
+WORKBENCH_V2_CANDIDATE_DETAIL_RESPONSES = {
+    **WORKBENCH_V2_PROBLEM_RESPONSES,
+    404: WORKBENCH_V2_CANDIDATE_NOT_FOUND_RESPONSE,
 }
 
 
@@ -229,7 +263,7 @@ def list_events(
 @router.get(
     "/conversations/{conversation_id}/candidates/{candidate_id}/detail",
     response_model=WorkbenchV2CandidateDetailView,
-    responses=WORKBENCH_V2_RESPONSES_WITH_NOT_FOUND,
+    responses=WORKBENCH_V2_CANDIDATE_DETAIL_RESPONSES,
 )
 def get_candidate_detail(
     conversation_id: str,
@@ -238,6 +272,8 @@ def get_candidate_detail(
 ) -> WorkbenchV2CandidateDetailView | dict[str, object]:
     try:
         return _service(request).get_candidate_detail(conversation_id, candidate_id)
+    except CandidateNotFoundError as exc:
+        raise _candidate_not_found() from exc
     except KeyError as exc:
         raise _not_found() from exc
 
@@ -312,6 +348,10 @@ def _service(request: Request) -> WorkbenchV2RouteService:
 
 def _not_found() -> HTTPException:
     return HTTPException(status_code=404, detail=CONVERSATION_NOT_FOUND)
+
+
+def _candidate_not_found() -> HTTPException:
+    return HTTPException(status_code=404, detail=CANDIDATE_NOT_FOUND)
 
 
 def _raise_known_domain_error(exc: ValueError, request: Request) -> NoReturn:

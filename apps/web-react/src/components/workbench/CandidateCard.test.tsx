@@ -49,7 +49,7 @@ describe("CandidateCard", () => {
     ).toBeInTheDocument();
     expect(screen.getByText("猎聘")).toBeInTheDocument();
     expect(screen.getByText("待复核")).toBeInTheDocument();
-    expect(screen.getByText("92分")).toBeInTheDocument();
+    expect(screen.getByText("96分")).toBeInTheDocument();
     expect(screen.getByText("32岁")).toBeInTheDocument();
     expect(screen.getByText("上海")).toBeInTheDocument();
     expect(screen.getByText("本科")).toBeInTheDocument();
@@ -90,5 +90,61 @@ describe("CandidateCard", () => {
     expect(
       within(article).getByRole("button", { name: "查看详情" }),
     ).toBeEnabled();
+  });
+
+  it("disables the detail action when no real candidate detail is available", () => {
+    expect.hasAssertions();
+
+    render(
+      <CandidateCard
+        candidate={{
+          ...candidateFixture,
+          accessState: "denied",
+          detailAvailability: "unavailable",
+          matchScore: 20,
+          status: "fit",
+        }}
+      />,
+    );
+
+    const article = screen.getByRole("article", { name: "候选人 A" });
+    expect(
+      within(article).getByRole("button", { name: "暂无详情" }),
+    ).toBeDisabled();
+    expect(within(article).getByText("66分")).toBeInTheDocument();
+    expect(within(article).getByText("当前最接近要求")).toBeInTheDocument();
+  });
+
+  it("labels a visible low raw score without changing its candidate rank", () => {
+    expect.hasAssertions();
+
+    render(
+      <CandidateCard
+        candidate={{
+          ...candidateFixture,
+          rank: 7,
+          matchScore: 20,
+          status: "fit",
+        }}
+      />,
+    );
+
+    const article = screen.getByRole("article", { name: "候选人 A" });
+    expect(article).toHaveAttribute("data-rank", "7");
+    expect(screen.getByText("66分")).toBeInTheDocument();
+    expect(screen.getByText("当前最接近要求")).toBeInTheDocument();
+  });
+
+  it("labels a recommended raw score after applying the display mapping", () => {
+    expect.hasAssertions();
+
+    render(
+      <CandidateCard
+        candidate={{ ...candidateFixture, matchScore: 60, status: "fit" }}
+      />,
+    );
+
+    expect(screen.getByText("80分")).toBeInTheDocument();
+    expect(screen.getByText("推荐")).toBeInTheDocument();
   });
 });

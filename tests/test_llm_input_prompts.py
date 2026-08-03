@@ -598,6 +598,9 @@ def test_scoring_prompt_keeps_match_and_risk_scales_directionally_distinct() -> 
     assert "Higher risk scores mean greater concern" in prompt
     assert "0 means no explicit exclusion risk is evidenced" in prompt
     assert "Do not use 0 or 1 as boolean substitutes for match scores" in prompt
+    assert "Do not output `fit_bucket`" in prompt
+    assert "low scores are not hard conflicts" in prompt
+    assert "deterministic weighted overall score is at least 60" not in prompt
 
 
 def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> None:
@@ -656,7 +659,14 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
                     source="notes",
                     rationale="Age not projected to CTS.",
                     blocking=False,
-                )
+                ),
+                RuntimeConstraint(
+                    field="company_names",
+                    normalized_value=["阿里巴巴"],
+                    source="notes",
+                    rationale="Company constraint stayed runtime-only.",
+                    blocking=True,
+                ),
             ],
         )
     )
@@ -666,6 +676,7 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
     assert 'UNTRUSTED DATA "SCORING_POLICY_TEXT"' in prompt
     assert 'UNTRUSTED DATA "RESUME_CARD_TEXT"' in prompt
     assert 'UNTRUSTED DATA "STRUCTURED_RESUME_EVIDENCE"' in prompt
+    assert 'UNTRUSTED DATA "HARD_CONFLICT_POLICY_REFERENCES"' in prompt
     assert "RECENT EXPERIENCE" not in prompt
     assert "RAW EXCERPT" not in prompt
     assert "RESUME_RAW_EXCERPT" not in prompt
@@ -683,6 +694,11 @@ def test_scoring_prompt_contains_policy_resume_card_and_exact_resume_id() -> Non
     assert "Preferences" in prompt
     assert "字节跳动" in prompt
     assert "Runtime-only constraints" in prompt
+    assert '"hard_constraints.locations"' in prompt
+    assert '"hard_constraints.company_names"' in prompt
+    assert '"exclusion_signals[0]"' in prompt
+    assert '"runtime_only_constraints[1]"' in prompt
+    assert '"runtime_only_constraints[0]"' not in prompt
     assert "age_requirement" in prompt
     assert "gender_requirement" in prompt
     assert "school_names" in prompt

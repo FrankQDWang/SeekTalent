@@ -1,9 +1,24 @@
 from __future__ import annotations
 
-from seektalent.models import FinalCandidate, FinalResult, FinalizeContext, RuntimeEvidenceLevel, ScoredCandidate
+from seektalent.models import (
+    FinalCandidate,
+    FinalResult,
+    FinalizeContext,
+    RuntimeEvidenceLevel,
+    ScoredCandidate,
+    is_recommendation_eligible,
+)
 
 
 def build_deterministic_final_result(finalize_context: FinalizeContext) -> FinalResult:
+    recommendation_candidates = [
+        candidate
+        for candidate in finalize_context.top_candidates
+        if is_recommendation_eligible(
+            score=candidate.overall_score,
+            fit_bucket=candidate.fit_bucket,
+        )
+    ]
     candidates = [
         FinalCandidate(
             resume_id=candidate.resume_id,
@@ -27,7 +42,7 @@ def build_deterministic_final_result(finalize_context: FinalizeContext) -> Final
             why_selected=_why_selected(candidate),
             source_round=candidate.source_round,
         )
-        for rank, candidate in enumerate(finalize_context.top_candidates, start=1)
+        for rank, candidate in enumerate(recommendation_candidates, start=1)
     ]
     return FinalResult(
         run_id=finalize_context.run_id,
@@ -35,12 +50,11 @@ def build_deterministic_final_result(finalize_context: FinalizeContext) -> Final
         rounds_executed=finalize_context.rounds_executed,
         stop_reason=finalize_context.stop_reason,
         candidates=candidates,
-        summary=_summary(finalize_context),
+        summary=_summary(len(recommendation_candidates)),
     )
 
 
-def _summary(context: FinalizeContext) -> str:
-    count = len(context.top_candidates)
+def _summary(count: int) -> str:
     return f"Selected {count} final candidate{'s' if count != 1 else ''} by deterministic runtime ranking."
 
 

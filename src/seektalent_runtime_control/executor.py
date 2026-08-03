@@ -25,7 +25,7 @@ from seektalent_runtime_control.models import (
     RuntimeRunRecord,
     RuntimeRunSnapshot,
 )
-from seektalent_runtime_control.requirements import ApprovedRequirementRevision
+from seektalent_runtime_control.requirements import ApprovedRequirementRevision, RequirementAmendment
 from seektalent_runtime_control.recovery_state import RecoveryStateAssembler
 from seektalent_runtime_control.store import RuntimeCheckpointLoadFailure, RuntimeControlStore
 from seektalent.wtscli_lifecycle_supervisor import WtsCliLifecycleSupervisor
@@ -271,6 +271,16 @@ class WorkflowRuntimeExecutor:
             attempt_no=attempt_no,
             claim_reason=claim_reason,
         )
+        projected_requirement_revision_id = (
+            resume_checkpoint.accepted_requirement_revision_id
+            if resume_checkpoint is not None
+            and resume_checkpoint.accepted_requirement_revision_id is not None
+            else (
+                ""
+                if resume_checkpoint is not None
+                else approved.approved_requirement_revision_id
+            )
+        )
         if (
             resume_checkpoint is not None
             and resume_checkpoint.safe_boundary
@@ -397,21 +407,52 @@ class WorkflowRuntimeExecutor:
                 )
             )
 
+        prepared_requirement_boundaries: dict[
+            int,
+            tuple[list[RequirementAmendment], ApprovedRequirementRevision],
+        ] = {}
+
         def runtime_round_boundary_callback(round_no: int) -> object | None:
-            nonlocal approved
             if self.command_service is None:
                 return None
-            self.command_service.apply_next_round_requirements_at_boundary(
+            amendments = self.command_service.prepare_next_round_requirements_at_boundary(
                 runtime_run_id=run.runtime_run_id,
                 executor_id=executor_id,
                 attempt_no=attempt_no,
                 round_no=round_no,
             )
-            current_run = self.store.get_run(run.runtime_run_id)
-            if current_run.approved_requirement_revision_id == approved.approved_requirement_revision_id:
+            if amendments:
+                target_revision_id = amendments[0].result_approved_requirement_revision_id
+                if target_revision_id is None:
+                    raise RuntimeControlError("requirement_amendment_stale")
+            else:
+                target_revision_id = self.store.get_run(
+                    run.runtime_run_id
+                ).approved_requirement_revision_id
+            if target_revision_id == projected_requirement_revision_id:
                 return None
-            approved = self.store.get_approved_requirement(current_run.approved_requirement_revision_id)
-            return approved.requirement_sheet
+            target = self.store.get_approved_requirement(target_revision_id)
+            prepared_requirement_boundaries[round_no] = (amendments, target)
+            return target.requirement_sheet
+
+        def runtime_round_boundary_commit_callback(round_no: int) -> None:
+            nonlocal approved, projected_requirement_revision_id
+            prepared = prepared_requirement_boundaries.pop(round_no, None)
+            if prepared is None:
+                return
+            amendments, target = prepared
+            if amendments:
+                if self.command_service is None:
+                    raise RuntimeControlError("runtime_command_service_required")
+                self.command_service.commit_next_round_requirements_at_boundary(
+                    runtime_run_id=run.runtime_run_id,
+                    executor_id=executor_id,
+                    attempt_no=attempt_no,
+                    round_no=round_no,
+                    amendments=amendments,
+                )
+            approved = target
+            projected_requirement_revision_id = target.approved_requirement_revision_id
 
         try:
             runtime_kwargs: dict[str, object] = {
@@ -428,6 +469,10 @@ class WorkflowRuntimeExecutor:
                 runtime_kwargs["source_context"] = resolved_source_context
             if _runtime_accepts_round_boundary_callback(runtime):
                 runtime_kwargs["runtime_round_boundary_callback"] = runtime_round_boundary_callback
+            if _runtime_accepts_round_boundary_commit_callback(runtime):
+                runtime_kwargs[
+                    "runtime_round_boundary_commit_callback"
+                ] = runtime_round_boundary_commit_callback
             if _runtime_accepts_detail_claim_callback(runtime):
                 runtime_kwargs[
                     "runtime_detail_claim_callback"
@@ -915,6 +960,16 @@ def _runtime_accepts_round_boundary_callback(runtime: object) -> bool:
         return False
     parameters = signature(run_async).parameters
     if "runtime_round_boundary_callback" in parameters:
+        return True
+    return any(parameter.kind == Parameter.VAR_KEYWORD for parameter in parameters.values())
+
+
+def _runtime_accepts_round_boundary_commit_callback(runtime: object) -> bool:
+    run_async = getattr(runtime, "run_async", None)
+    if not callable(run_async):
+        return False
+    parameters = signature(run_async).parameters
+    if "runtime_round_boundary_commit_callback" in parameters:
         return True
     return any(parameter.kind == Parameter.VAR_KEYWORD for parameter in parameters.values())
 
