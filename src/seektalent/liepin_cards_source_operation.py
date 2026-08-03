@@ -227,6 +227,13 @@ class LiepinCardsSourceOperationExecutor:
         # Durable admission, replay, and fencing remain store/journal owned.
         self._channel_lock = threading.Lock()
 
+    def activate_requirement_revision(
+        self,
+        accepted_requirement_revision_id: str,
+    ) -> None:
+        """Bind future source operations to the activated run requirement."""
+        self._accepted_requirement_revision_id = accepted_requirement_revision_id
+
     def bind_lane(self, source_lane_run_id: str, query_instance_id: str) -> None:
         existing = self._lane_queries.setdefault(
             source_lane_run_id,

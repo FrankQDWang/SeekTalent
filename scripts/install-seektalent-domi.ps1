@@ -1,5 +1,5 @@
 param(
-  [string]$Version = "0.8.0rc2",
+  [string]$Version = "0.8.1",
   [string]$DomiPython = "",
   [string]$DomiNode = "",
   [string]$WtscliBundleDir = $env:SEEKTALENT_WTSCLI_BUNDLE_DIR,
@@ -15,7 +15,7 @@ function Fail($ReasonCode, $Message) {
 
 function Install-SeekTalentDomi {
   param(
-    [string]$Version = "0.8.0rc2",
+    [string]$Version = "0.8.1",
     [string]$DomiPython = "",
     [string]$DomiNode = "",
     [string]$WtscliBundleDir = $env:SEEKTALENT_WTSCLI_BUNDLE_DIR,
