@@ -213,6 +213,11 @@ def test_delivery_uses_one_cross_platform_builder_and_workflow() -> None:
     assert "scripts/build_domi_delivery_bundle.py" in workflow
     assert "delivery_platform: windows-x64" in workflow
     assert "delivery_platform: macos-x86_64" in workflow
+    assert "${{ runner.temp }}/seektalent-native" in workflow
+    assert 'Path("dist/wheel")' not in workflow
+    assert 'Path("dist/wheelhouse")' not in workflow
+    assert '"dist/delivery"' not in workflow
+    assert workflow.count("path: wtscli-browser-bridge") == 1
 
 
 def test_delivery_installers_default_to_the_adjacent_exact_product_bundle() -> None:
