@@ -8,12 +8,16 @@ import pytest
 from seektalent.opencli_browser.contracts import OpenCliBrowserError
 from seektalent.providers.liepin.liepin_city_picker import (
     decide_picker_action,
+    observe_picker_ready,
     parse_picker_probe_output,
     picker_confirm_ref,
     picker_control_ref,
     pending_confirm_ref,
     picker_selection_contains,
+    reconcile_city_filter_effect,
 )
+from seektalent.opencli_browser.contracts import OpenCliBrowserResult
+from seektalent.providers.liepin import liepin_city_picker as city_picker_module
 
 
 _REPLAY_FIXTURE = Path(__file__).parent / "fixtures" / "liepin" / "city-picker-observations-v1.json"
@@ -152,3 +156,99 @@ def test_city_picker_has_one_action_authority() -> None:
     ):
         assert fallback_name not in picker_source
     assert 'control_authority = "state_fallback"' not in adapter_source
+
+
+def test_city_picker_readiness_uses_the_configured_deadline_instead_of_three_attempts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    elapsed = 0.0
+
+    class Site:
+        def state(self) -> OpenCliBrowserResult:
+            return OpenCliBrowserResult(ok=True, action="state", private_output="")
+
+        def wait_time(self, *, seconds: int) -> OpenCliBrowserResult:
+            nonlocal elapsed
+            elapsed += seconds
+            return OpenCliBrowserResult(ok=True, action="wait_time")
+
+    monkeypatch.setattr(
+        city_picker_module,
+        "native_filter_selection_applied",
+        lambda *_args, **_kwargs: False,
+    )
+
+    def picker_state(*_args: object, **_kwargs: object):
+        decision = "fill_search" if elapsed >= 3 else "closed"
+        payload = {
+            "open": decision == "fill_search",
+            "searchInputRef": "60" if decision == "fill_search" else None,
+            "candidates": [],
+            "selectedCities": [],
+            "confirmRefs": [],
+        }
+        return payload, {
+            "probe_status": "observed",
+            "probe_search_input_present": decision == "fill_search",
+            "probe_search_input_visible": decision == "fill_search",
+            "probe_city_surface_present": decision == "fill_search",
+            "probe_confirm_present": False,
+        }
+
+    monkeypatch.setattr(city_picker_module, "_picker_state_for_readiness", picker_state)
+    monkeypatch.setattr(city_picker_module.time, "monotonic", lambda: elapsed)
+
+    def sleep(seconds: float) -> None:
+        nonlocal elapsed
+        elapsed += seconds
+
+    monkeypatch.setattr(city_picker_module.time, "sleep", sleep)
+
+    events: list[dict[str, object]] = []
+    result = observe_picker_ready(
+        Site(),  # type: ignore[arg-type]
+        section="expected",
+        label="Shanghai",
+        events=events,
+        timeout_seconds=4,
+    )
+
+    assert result.ok is True
+    assert elapsed == 3
+    assert len(events) == 4
+
+
+def test_city_picker_reconciliation_transient_observation_stops_at_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    elapsed = 0.0
+
+    class Site:
+        def state(self) -> OpenCliBrowserResult:
+            return OpenCliBrowserResult(
+                ok=False,
+                action="state",
+                safe_reason_code="liepin_opencli_timeout",
+            )
+
+    monkeypatch.setattr(city_picker_module.time, "monotonic", lambda: elapsed)
+
+    def sleep(seconds: float) -> None:
+        nonlocal elapsed
+        elapsed += seconds
+
+    monkeypatch.setattr(city_picker_module.time, "sleep", sleep)
+    events: list[dict[str, object]] = []
+
+    with pytest.raises(OpenCliBrowserError, match="liepin_opencli_timeout"):
+        reconcile_city_filter_effect(
+            Site(),  # type: ignore[arg-type]
+            section="expected",
+            label="Shanghai",
+            events=events,
+            allow_pending_confirm=False,
+            timeout_seconds=2,
+        )
+
+    assert elapsed == 2
+    assert len(events) == 3

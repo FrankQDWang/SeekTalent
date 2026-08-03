@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-VERSION="${1:-0.8.0rc1}"
+VERSION="${1:-0.8.0rc2}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 STAGING_ROOT="${SEEKTALENT_STAGING_ROOT:-${HOME}/.seektalent-staging}"

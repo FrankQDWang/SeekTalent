@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Callable, Mapping
 from typing import TYPE_CHECKING, Literal
 
@@ -21,10 +22,12 @@ def observe_picker_ready(
     section: str,
     label: str,
     events: list[dict[str, object]],
+    timeout_seconds: float,
 ) -> OpenCliBrowserResult:
-    for attempt in range(1, 4):
-        if attempt > 1:
-            site.wait_time(seconds=1)
+    deadline = _deadline(timeout_seconds)
+    attempt = 0
+    while True:
+        attempt += 1
         state = site.state()
         reason = state.safe_reason_code
         probe_evidence: dict[str, object] = {
@@ -85,6 +88,8 @@ def observe_picker_ready(
             "city_picker_probe_unavailable",
         }:
             return state
+        if not _wait_for_next_observation(deadline):
+            break
     raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
 
 
@@ -96,6 +101,7 @@ def find_liepin_city_filter_option(
     current_state: OpenCliBrowserResult,
     events: list[dict[str, object]],
     before_effect: Callable[[], None],
+    timeout_seconds: float,
 ) -> tuple[OpenCliBrowserResult, str | None]:
     state = current_state
     decision, ref = decide_picker_action(
@@ -116,6 +122,7 @@ def find_liepin_city_filter_option(
             label=label,
             phase="search",
             events=events,
+            timeout_seconds=timeout_seconds,
         )
         decision, ref = decide_picker_action(picker_state, label=label)
         if decision == "select_candidate" and ref is not None:
@@ -130,10 +137,12 @@ def _observe_city_option(
     label: str,
     phase: str,
     events: list[dict[str, object]],
+    timeout_seconds: float,
 ) -> tuple[OpenCliBrowserResult, dict[str, object]]:
-    for attempt in range(1, 3):
-        if attempt > 1:
-            site.wait_time(seconds=1)
+    deadline = _deadline(timeout_seconds)
+    attempt = 0
+    while True:
+        attempt += 1
         state = site.state()
         picker_state: dict[str, object] | None = None
         decision = "wait"
@@ -156,6 +165,8 @@ def _observe_city_option(
             raise OpenCliBrowserError(state.safe_reason_code)
         if picker_state is not None and decision == "select_candidate":
             return state, picker_state
+        if not _wait_for_next_observation(deadline):
+            break
     raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
 
 
@@ -228,6 +239,7 @@ def resolve_picker_action(
     state: OpenCliBrowserResult,
     events: list[dict[str, object]],
     before_effect: Callable[[], None],
+    timeout_seconds: float,
 ) -> tuple[OpenCliBrowserResult, str | None, bool, str | None]:
     pending_confirm, confirm_ref = pending_confirm_ref(
         site,
@@ -245,6 +257,7 @@ def resolve_picker_action(
         current_state=state,
         events=events,
         before_effect=before_effect,
+        timeout_seconds=timeout_seconds,
     )
     return state, option_ref, False, None
 
@@ -256,6 +269,7 @@ def reconcile_city_filter_effect(
     label: str,
     events: list[dict[str, object]],
     allow_pending_confirm: bool,
+    timeout_seconds: float,
 ) -> tuple[
     OpenCliBrowserResult,
     Literal["applied", "selected", "open_unselected"],
@@ -264,9 +278,10 @@ def reconcile_city_filter_effect(
     last_state: OpenCliBrowserResult | None = None
     reasons: list[str] = []
     unavailable_reason = "liepin_opencli_status_unavailable"
-    for attempt in range(1, 4):
-        if attempt > 1:
-            site.wait_time(seconds=1)
+    deadline = _deadline(timeout_seconds)
+    attempt = 0
+    while True:
+        attempt += 1
         state = site.state()
         last_state = state
         reason = state.safe_reason_code
@@ -313,6 +328,8 @@ def reconcile_city_filter_effect(
                 "liepin_opencli_timeout",
             }:
                 reasons.append("city_picker_observation_unavailable")
+                if not _wait_for_next_observation(deadline):
+                    break
                 continue
             raise OpenCliBrowserError(state.safe_reason_code)
         if reason == "requested_city_applied":
@@ -323,17 +340,37 @@ def reconcile_city_filter_effect(
             if allow_pending_confirm:
                 return state, "selected", confirm_ref
             reasons.append("requested_city_selected")
+            if not _wait_for_next_observation(deadline):
+                break
             continue
         reasons.append(str(reason))
+        if not _wait_for_next_observation(deadline):
+            break
     if last_state is None:
         raise AssertionError("unreachable")
-    if reasons == ["requested_city_not_selected"] * 3:
+    if reasons and all(
+        reason == "requested_city_not_selected" for reason in reasons
+    ):
         return last_state, "open_unselected", None
     if all(reason == "city_picker_probe_unavailable" for reason in reasons):
         raise OpenCliBrowserError("liepin_opencli_status_unavailable")
     if all(reason == "city_picker_observation_unavailable" for reason in reasons):
         raise OpenCliBrowserError(unavailable_reason)
     raise OpenCliBrowserError("liepin_opencli_filter_unapplied")
+
+
+def _deadline(timeout_seconds: float) -> float:
+    if timeout_seconds <= 0:
+        raise ValueError("timeout_seconds must be positive")
+    return time.monotonic() + timeout_seconds
+
+
+def _wait_for_next_observation(deadline: float) -> bool:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        return False
+    time.sleep(min(1.0, remaining))
+    return True
 
 
 def parse_picker_probe_output(

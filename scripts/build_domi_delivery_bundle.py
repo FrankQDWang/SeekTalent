@@ -5,7 +5,6 @@ import hashlib
 import json
 import shutil
 import stat
-import subprocess
 import sys
 import tempfile
 import zipfile
@@ -23,6 +22,7 @@ from seektalent.domi_host_runtime import (
     probe_runtime_with_python,
     validate_delivery_runtime_contract,
 )
+from seektalent.release_source import source_revision as checkout_source_revision
 from seektalent.version import __version__
 
 
@@ -55,7 +55,7 @@ def build_delivery_bundle(
     if platform_name not in SUPPORTED_PLATFORMS:
         raise ValueError(f"unsupported delivery platform: {platform_name}")
     admitted = load_browser_bridge_bundle(browser_bridge_bundle)
-    exact_source_revision = source_revision or _source_revision()
+    exact_source_revision = source_revision or checkout_source_revision(ROOT)
     if (
         len(exact_source_revision) != 40
         or any(character not in "0123456789abcdef" for character in exact_source_revision)
@@ -271,16 +271,6 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _source_revision() -> str:
-    return subprocess.run(
-        ["git", "rev-parse", "HEAD"],
-        cwd=ROOT,
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
-
-
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="Build a platform SeekTalent package with the exact WTSCLI pair.",
@@ -303,6 +293,12 @@ def _parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    source_revision = checkout_source_revision(ROOT)
+    if (
+        args.source_revision is not None
+        and args.source_revision != source_revision
+    ):
+        raise ValueError("source_revision_does_not_match_checkout")
     archive = build_delivery_bundle(
         output_dir=args.output_dir,
         browser_bridge_bundle=args.wtscli_bundle_dir,
@@ -311,7 +307,7 @@ def main(argv: list[str] | None = None) -> int:
         domi_python=args.domi_python,
         node=args.node,
         platform_name=args.platform_name,
-        source_revision=args.source_revision,
+        source_revision=source_revision,
     )
     print(archive)
     return 0

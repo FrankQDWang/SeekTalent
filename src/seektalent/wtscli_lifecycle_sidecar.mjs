@@ -13,6 +13,7 @@ const parentPid = optionalIntegerArg("parent-pid");
 const lifecycleId = optionalArg("lifecycle-id");
 const supervisorRestartCount = optionalIntegerArg("supervisor-restart-count") ?? 0;
 const supervisorFirstFailureCode = optionalArg("supervisor-first-failure-code");
+const daemonListenerTimeoutMilliseconds = optionalIntegerArg("daemon-listener-timeout-ms") ?? 40000;
 const maxRestarts = 3;
 const pollMilliseconds = 500;
 const restartDelayMilliseconds = 250;
@@ -123,7 +124,10 @@ async function monitor() {
       // A live child without its listener is not healthy. Give startup one
       // bounded heartbeat, then terminate only the child this owner spawned.
       if (daemonOwned) {
-        if (childStartedAt !== null && Date.now() - childStartedAt >= 5000) {
+        if (
+          childStartedAt !== null
+          && Date.now() - childStartedAt >= daemonListenerTimeoutMilliseconds
+        ) {
           await stopOwnedChild();
         } else {
           writeStatus({ state: "warming", status: null });

@@ -103,6 +103,8 @@ def test_supervisor_starts_one_sidecar_and_shutdowns_only_its_child(
     process, command, kwargs = process_calls[0]
     assert command[0] == "/domi/node"
     assert command[1].endswith("wtscli_lifecycle_sidecar.mjs")
+    listener_timeout_index = command.index("--daemon-listener-timeout-ms")
+    assert command[listener_timeout_index + 1] == "40000"
     assert kwargs["start_new_session"] is True
     assert supervisor.status().state == "warming"
 
@@ -110,6 +112,56 @@ def test_supervisor_starts_one_sidecar_and_shutdowns_only_its_child(
 
     assert process.terminated is False
     assert supervisor.status().state == "stopped"
+
+
+def test_supervisor_normalizes_state_directory_os_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    supervisor = WtsCliLifecycleSupervisor(runtime=_runtime())
+    monkeypatch.setattr(supervisor, "_verify_bundle", lambda _runtime: None)
+
+    def fail_configure(_runtime: WtsCliRuntime) -> None:
+        raise PermissionError("private filesystem detail")
+
+    monkeypatch.setattr(supervisor, "_configure_paths", fail_configure)
+
+    with pytest.raises(
+        WtsCliLifecycleError,
+        match="wtscli_supervisor_start_failed",
+    ):
+        supervisor.start()
+
+    assert supervisor.status().state == "stopped"
+
+
+def test_owner_handshake_uses_the_configured_startup_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    elapsed = 0.0
+
+    def monotonic() -> float:
+        return elapsed
+
+    def sleep(seconds: float) -> None:
+        nonlocal elapsed
+        elapsed += seconds
+
+    supervisor = WtsCliLifecycleSupervisor(
+        runtime=_runtime(),
+        startup_timeout_seconds=3.5,
+        monotonic_clock=monotonic,
+        sleep=sleep,
+    )
+    supervisor._process = _FakeProcess()
+    monkeypatch.setattr(supervisor, "_read_owner_lock", lambda: None)
+
+    with pytest.raises(
+        WtsCliLifecycleError,
+        match="wtscli_supervisor_owner_timeout",
+    ):
+        supervisor._wait_for_sidecar_owner()
+
+    assert elapsed == pytest.approx(3.5)
 
 
 def test_supervisor_waits_for_control_shutdown_before_force_termination(
@@ -991,3 +1043,48 @@ def test_create_app_lifespan_starts_and_stops_the_single_supervisor(
     with TestClient(create_app(settings=settings, runtime_factory=_NoopRuntime)):
         assert events == ["start"]
     assert events == ["start", "shutdown"]
+
+
+def test_create_app_lifespan_keeps_running_when_supervisor_hits_os_error(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failures: list[str] = []
+
+    class FailingSupervisor:
+        def start(self) -> None:
+            raise PermissionError("private filesystem detail")
+
+        def record_startup_failure(self, error: Exception) -> None:
+            failures.append(type(error).__name__)
+
+        def shutdown(self) -> None:
+            return None
+
+        def health_snapshot(self) -> dict[str, object]:
+            return {
+                "component": "wtscli_lifecycle_supervisor",
+                "status": "not_ready",
+                "state": "needs_attention",
+                "processHealthy": False,
+                "extensionConnected": False,
+            }
+
+    monkeypatch.setattr(
+        "seektalent_ui.server.build_wtscli_lifecycle_supervisor",
+        lambda _settings: FailingSupervisor(),
+    )
+    settings = make_settings(
+        workspace_root=str(tmp_path),
+        runtime_mode="prod",
+        liepin_worker_mode="opencli",
+        liepin_browser_action_backend="opencli",
+        liepin_api_token="production-test-api-token",
+        liepin_account_binding_secret="production-test-binding-secret",
+        liepin_stream_token_secret="production-test-stream-secret",
+    )
+
+    with TestClient(create_app(settings=settings, runtime_factory=_NoopRuntime)) as client:
+        assert client.get("/api/health/execution-ready").status_code == 503
+
+    assert failures == ["PermissionError"]

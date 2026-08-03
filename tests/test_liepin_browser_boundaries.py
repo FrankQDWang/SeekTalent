@@ -1050,6 +1050,47 @@ def test_detail_url_unavailable_never_falls_back_to_clicking_card_ref(
     assert "_click_liepin_detail_ref" not in adapter_source
 
 
+def test_detail_navigation_observes_until_the_absolute_deadline(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    elapsed = 0.0
+    runner = LiepinSiteAdapter(
+        browser_config=OpenCliBrowserConfig(
+            session="seektalent-detail-deadline",
+            timeout_seconds=10,
+            pacing_enabled=False,
+        ),
+        site_config=LiepinOpenCliSiteConfig(
+            allowed_hosts=("h.liepin.com",),
+            allowed_start_urls=(LIEPIN_RECRUITER_SEARCH_URL,),
+            detail_open_timeout_seconds=3,
+        ),
+        automation=object(),  # type: ignore[arg-type]
+    )
+
+    monkeypatch.setattr(
+        runner,
+        "_current_url",
+        lambda: (
+            "https://h.liepin.com/resume/showresumedetail/?res_id_encode=accepted"
+            if elapsed >= 2.5
+            else "about:blank"
+        ),
+    )
+    monkeypatch.setattr(runner, "_tab_url_for_page_id", lambda _page_id: None)
+    monkeypatch.setattr(liepin_site_adapter_module.time, "monotonic", lambda: elapsed)
+
+    def sleep(seconds: float) -> None:
+        nonlocal elapsed
+        elapsed += seconds
+
+    monkeypatch.setattr(liepin_site_adapter_module.time, "sleep", sleep)
+
+    runner._wait_for_controlled_detail_navigation(page_id="page-1")
+
+    assert 2.5 <= elapsed < 3
+
+
 def _opencli_tab_url_is_blocked(runner: LiepinSiteAdapter, url: str) -> bool:
     try:
         runner._validate_tab_new_url(url)
