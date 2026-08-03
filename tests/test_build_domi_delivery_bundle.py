@@ -211,6 +211,8 @@ def test_delivery_uses_one_cross_platform_builder_and_workflow() -> None:
     assert not (root / ".github" / "workflows" / "build-macos-intel-offline.yml").exists()
     assert not (root / "scripts" / "build_offline_macos_intel.py").exists()
     assert "scripts/build_domi_delivery_bundle.py" in workflow
+    assert "build-exact-seektalent-wheel:" in workflow
+    assert "name: exact-seektalent-wheel" in workflow
     assert "delivery_platform: windows-x64" in workflow
     assert "delivery_platform: macos-x86_64" in workflow
     assert "${{ runner.temp }}/seektalent-native" in workflow

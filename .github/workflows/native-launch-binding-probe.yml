@@ -38,9 +38,36 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  build-exact-seektalent-wheel:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install build tooling
+        uses: astral-sh/setup-uv@v8.1.0
+
+      - name: Build the exact shared SeekTalent wheel
+        run: uv build --wheel --out-dir "${{ runner.temp }}/seektalent-wheel"
+
+      - name: Upload the exact shared SeekTalent wheel
+        uses: actions/upload-artifact@v4
+        with:
+          name: exact-seektalent-wheel
+          path: ${{ runner.temp }}/seektalent-wheel/seektalent-0.8.1-py3-none-any.whl
+          if-no-files-found: error
+          retention-days: 14
+
   native-launch-binding:
     name: ${{ matrix.name }}
-    needs: build-exact-wtscli-bundle
+    needs:
+      - build-exact-wtscli-bundle
+      - build-exact-seektalent-wheel
     strategy:
       fail-fast: false
       matrix:
@@ -111,6 +138,12 @@ jobs:
           name: exact-wtscli-browser-bridge
           path: ${{ runner.temp }}/seektalent-native/wtscli-browser-bridge
 
+      - name: Download the exact shared SeekTalent wheel
+        uses: actions/download-artifact@v4
+        with:
+          name: exact-seektalent-wheel
+          path: ${{ runner.temp }}/seektalent-native/wheel
+
       - name: Assert deterministic native evidence contract
         env:
           SEEKTALENT_NATIVE_LAUNCH_BINDING_EVIDENCE: ${{ runner.temp }}/seektalent-native/native-launch-binding-evidence.json
@@ -151,7 +184,6 @@ jobs:
           wheel_dir = build_root / "wheel"
           wheelhouse_dir = build_root / "wheelhouse"
           delivery_dir = build_root / "delivery"
-          check_call([uv, "build", "--wheel", "--out-dir", str(wheel_dir)])
           wheels = list(wheel_dir.glob("seektalent-*.whl"))
           assert len(wheels) == 1, wheels
           wheelhouse_dir.mkdir(parents=True)
