@@ -41,6 +41,7 @@ from seektalent.runtime.source_lanes import (
     rebuild_candidate_identities,
 )
 from seektalent.runtime.orchestrator import RunArtifacts, WorkflowRuntime
+from seektalent.resume_normalizers.registry import normalize_resume
 from seektalent.runtime.source_round_dispatch import SourceRoundAdapterResult, SourceRoundDispatchResult
 from seektalent.source_adapters import build_default_source_registry
 from seektalent.source_contracts import (
@@ -53,7 +54,8 @@ from seektalent.source_contracts import (
     SourceRegistry,
 )
 from seektalent.sources.provider_card_lane import run_provider_card_lane
-from seektalent.sources.liepin.runtime_lane import run_liepin_logical_query_bundle
+from seektalent.source_references import SourceReference
+from seektalent.sources.liepin.runtime_lane import merge_liepin_card_lane_results, run_liepin_logical_query_bundle
 from seektalent.tracing import RunTracer
 from seektalent.storage.json import sha256_json
 from tests.settings_factory import make_settings
@@ -199,6 +201,111 @@ def _evidence(
     )
 
 
+_VERIFIED_LIEPIN_REFERENCE = SourceReference(
+    source_kind="liepin",
+    display_label="猎聘",
+    url="https://h.liepin.com/resume/showresumedetail/?res_id_encode=verified",
+)
+
+
+def _liepin_observation(*, detail: bool) -> ResumeCandidate:
+    raw: dict[str, object] = {
+        "provider": "liepin",
+        "candidateName": "王明",
+        "currentTitle": "数据平台工程师" if detail else "",
+        "currentCompany": "星河科技" if detail else "",
+        "score_evidence_source": "detail" if detail else "card",
+    }
+    if detail:
+        raw.update(
+            {
+                "skills": ["Python", "Spark"],
+                "workExperienceList": [
+                    {
+                        "company": "星河科技",
+                        "title": "数据平台工程师",
+                        "summary": "建设实时数据平台",
+                    }
+                ],
+            }
+        )
+    return ResumeCandidate(
+        resume_id="resume-shared",
+        source_resume_id="provider-shared",
+        snapshot_sha256="detail-snapshot" if detail else "card-snapshot",
+        dedup_key="person-shared",
+        source_references=(_VERIFIED_LIEPIN_REFERENCE,) if detail else (),
+        search_text="王明 数据平台工程师" if detail else "王明",
+        raw=raw,
+    )
+
+
+def _liepin_observation_result(*, detail: bool, lane_id: str) -> RuntimeSourceLaneResult:
+    candidate = _liepin_observation(detail=detail)
+    evidence = RuntimeSourceEvidence(
+        evidence_id="evidence-shared",
+        source="liepin",
+        provider="liepin",
+        evidence_level="detail" if detail else "card",
+        candidate_resume_id=candidate.resume_id,
+        provider_candidate_key_hash="provider-hash-shared",
+        query_fingerprint=f"query-{lane_id}",
+        provider_snapshot_ref="artifact://detail" if detail else None,
+        collected_at="2026-08-03T10:00:00Z" if detail else "2026-08-03T11:00:00Z",
+        source_references=(_VERIFIED_LIEPIN_REFERENCE,) if detail else (),
+    )
+    return RuntimeSourceLaneResult(
+        runtime_run_id="run-merge",
+        source_plan_id="plan-liepin",
+        source_lane_run_id=lane_id,
+        source="liepin",
+        lane_mode="card",
+        attempt=1,
+        status="completed",
+        candidate_store_updates={candidate.resume_id: candidate},
+        normalized_store_updates={candidate.resume_id: normalize_resume(candidate)},
+        source_evidence_updates=(evidence,),
+    )
+
+
+@pytest.mark.parametrize("detail_first", [True, False])
+def test_merge_liepin_card_lane_results_is_monotonic_for_duplicate_candidate(detail_first: bool) -> None:
+    detail = _liepin_observation_result(detail=True, lane_id="lane-detail")
+    card = _liepin_observation_result(detail=False, lane_id="lane-card")
+    first, second = (detail, card) if detail_first else (card, detail)
+
+    merged = merge_liepin_card_lane_results(first, second)
+
+    candidate = merged.candidate_store_updates["resume-shared"]
+    assert candidate.raw["workExperienceList"][0]["company"] == "星河科技"
+    assert merged.normalized_store_updates["resume-shared"] == normalize_resume(candidate)
+    assert merged.normalized_store_updates["resume-shared"].score_evidence_source == "detail"
+    assert len(merged.source_evidence_updates) == 1
+    assert merged.source_evidence_updates[0].evidence_level == "detail"
+    assert merged.source_evidence_updates[0].source_references == (_VERIFIED_LIEPIN_REFERENCE,)
+
+
+@pytest.mark.parametrize("detail_first", [True, False])
+def test_cross_round_candidate_write_is_monotonic_and_checkpoint_safe(detail_first: bool) -> None:
+    detail = _liepin_observation_result(detail=True, lane_id="lane-detail")
+    card = _liepin_observation_result(detail=False, lane_id="lane-card")
+    first, second = (detail, card) if detail_first else (card, detail)
+    run_state = _run_state()
+
+    apply_source_lane_result(run_state=run_state, result=first, source_order={"liepin": 0})
+    restored = RunState.model_validate(run_state.model_dump(mode="json"))
+    apply_source_lane_result(run_state=restored, result=second, source_order={"liepin": 0})
+
+    candidate = restored.candidate_store["resume-shared"]
+    assert candidate.raw["workExperienceList"][0]["company"] == "星河科技"
+    assert restored.normalized_store["resume-shared"] == normalize_resume(candidate)
+    assert restored.normalized_store["resume-shared"].score_evidence_source == "detail"
+    assert len(restored.source_evidence_by_resume_id["resume-shared"]) == 1
+    evidence = restored.source_evidence_by_resume_id["resume-shared"][0]
+    assert evidence.evidence_level == "detail"
+    assert evidence.source_references == (_VERIFIED_LIEPIN_REFERENCE,)
+
+
 def test_provider_specific_reason_code_uses_canonical_public_problem() -> None:
     event = RuntimeSourceLaneEvent(
         schema_version="runtime_source_lane_event_v1",
@@ -303,11 +410,11 @@ def test_apply_source_lane_result_populates_identity_store_and_canonical_selecti
         "evidence-liepin-detail",
     ]
     selection = run_state.canonical_resume_by_identity_id[identity_id]
-    assert selection.canonical_resume_id == "resume-cts"
-    assert selection.equivalent_latest_resume_ids == ("resume-cts",)
-    assert selection.display_source_evidence_ids == ("evidence-cts",)
+    assert selection.canonical_resume_id == "resume-liepin"
+    assert selection.equivalent_latest_resume_ids == ("resume-liepin",)
+    assert selection.display_source_evidence_ids == ("evidence-liepin-detail",)
     assert selection.conflicting_resume_ids == ()
-    assert selection.incomparable_resume_ids == ("resume-liepin",)
+    assert selection.incomparable_resume_ids == ("resume-cts",)
     assert "content_freshness_unknown" in selection.safe_reason_codes
 
 
@@ -390,6 +497,40 @@ def test_apply_source_lane_result_normalizes_raw_candidates_before_identity_rebu
     assert len(run_state.candidate_identities) == 1
     identity_id = run_state.candidate_identity_by_resume_id["resume-cts"]
     assert run_state.candidate_identity_by_resume_id["resume-liepin"] == identity_id
+
+
+def test_apply_source_lane_result_derives_normalized_resume_from_candidate_body() -> None:
+    run_state = _run_state()
+    candidate = _liepin_observation(detail=True)
+    inconsistent_normalized = normalize_resume(candidate).model_copy(
+        update={"candidate_name": "独立覆盖值", "completeness_score": 1}
+    )
+    result = RuntimeSourceLaneResult(
+        runtime_run_id="run-1",
+        source_plan_id="plan-liepin",
+        source_lane_run_id="lane-liepin",
+        source="liepin",
+        lane_mode="detail",
+        attempt=1,
+        status="completed",
+        candidate_store_updates={candidate.resume_id: candidate},
+        normalized_store_updates={candidate.resume_id: inconsistent_normalized},
+        source_evidence_updates=(
+            RuntimeSourceEvidence(
+                evidence_id="evidence-body-authority",
+                source="liepin",
+                provider="liepin",
+                evidence_level="detail",
+                candidate_resume_id=candidate.resume_id,
+                provider_candidate_key_hash="provider-hash-shared",
+                collected_at="2026-08-03T10:00:00Z",
+            ),
+        ),
+    )
+
+    apply_source_lane_result(run_state=run_state, result=result, source_order={"liepin": 0})
+
+    assert run_state.normalized_store[candidate.resume_id] == normalize_resume(candidate)
 
 
 def test_apply_source_lane_result_does_not_merge_masked_liepin_card_into_visible_cts_candidate() -> None:
@@ -1724,12 +1865,12 @@ def test_source_round_dispatch_merge_finalizes_top_10_by_identity_not_raw_resume
 
     identity_top_candidates = runtime._apply_identity_top_pool(run_state)
 
-    assert [candidate.resume_id for candidate in identity_top_candidates] == ["resume-cts"]
-    assert run_state.top_pool_ids == ["resume-cts"]
+    assert [candidate.resume_id for candidate in identity_top_candidates] == ["resume-liepin"]
+    assert run_state.top_pool_ids == ["resume-liepin"]
     assert len(run_state.candidate_identities) == 1
     identity_id = run_state.candidate_identity_by_resume_id["resume-cts"]
     assert run_state.candidate_identity_by_resume_id["resume-liepin"] == identity_id
-    assert run_state.canonical_resume_by_identity_id[identity_id].canonical_resume_id == "resume-cts"
+    assert run_state.canonical_resume_by_identity_id[identity_id].canonical_resume_id == "resume-liepin"
     assert [item.source for item in run_state.source_evidence_by_identity_id[identity_id]] == ["cts", "liepin"]
 
 

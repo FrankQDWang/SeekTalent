@@ -212,6 +212,7 @@ class FakeWorker:
                     dedup_key="dedup-secret-id",
                     search_text="FastAPI retrieval ranking systems.",
                     raw={
+                        "provider": "liepin",
                         "safe_card_summary": {
                             "current_or_recent_title": "Backend Engineer",
                             "current_or_recent_company": "Retrieval Ranking Systems",

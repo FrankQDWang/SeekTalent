@@ -1,16 +1,99 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from time import perf_counter
 from typing import Any
+import unicodedata
 
 from seektalent.llm import resolve_stage_model_config
-from seektalent.models import RequirementSheet, RetrievalState, RunState
+from seektalent.models import QueryTermCandidate, RequirementSheet, RetrievalState, RunState
 from seektalent.progress import ProgressCallback
 from seektalent.requirements import build_input_truth, build_scoring_policy
 from seektalent.requirements.extractor import render_requirements_prompt
 from seektalent.tracing import RunTracer
+
+
+_REQUIREMENT_QUERY_TERM_SOURCES = frozenset({"job_title", "jd", "notes"})
+_RUNTIME_QUERY_TERM_SOURCES = frozenset({"reflection", "candidate_feedback"})
+
+
+@dataclass(frozen=True)
+class RequirementRuntimeProjection:
+    scoring_policy_changed: bool
+    query_terms_changed: bool
+
+
+def apply_approved_requirement_revision(
+    *,
+    run_state: RunState,
+    requirement_sheet: RequirementSheet,
+    effective_round_no: int,
+) -> RequirementRuntimeProjection:
+    """Project one approved revision into all requirement-owned runtime inputs."""
+    previous_policy = run_state.scoring_policy
+    previous_terms = list(run_state.retrieval_state.query_term_pool)
+    previous_by_key = {_query_term_key(item.term): item for item in previous_terms}
+
+    projected_terms: list[QueryTermCandidate] = []
+    seen: set[str] = set()
+    for item in requirement_sheet.initial_query_term_pool:
+        if item.source not in _REQUIREMENT_QUERY_TERM_SOURCES:
+            continue
+        key = _query_term_key(item.term)
+        if not key or key in seen:
+            continue
+        previous = previous_by_key.get(key)
+        if item.queryability != "admitted":
+            projected = item.model_copy(
+                update={
+                    "active": False,
+                    "first_added_round": (
+                        effective_round_no
+                        if previous is None
+                        else previous.first_added_round
+                    ),
+                }
+            )
+        elif previous is None:
+            projected = item.model_copy(
+                update={"active": True, "first_added_round": effective_round_no}
+            )
+        elif item.first_added_round == effective_round_no:
+            projected = item.model_copy(update={"active": True})
+        else:
+            projected = item.model_copy(
+                update={
+                    "active": previous.active,
+                    "first_added_round": previous.first_added_round,
+                }
+            )
+        projected_terms.append(projected)
+        seen.add(key)
+
+    for item in previous_terms:
+        if item.source not in _RUNTIME_QUERY_TERM_SOURCES:
+            continue
+        key = _query_term_key(item.term)
+        if not key or key in seen:
+            continue
+        projected_terms.append(item)
+        seen.add(key)
+
+    scoring_policy = build_scoring_policy(requirement_sheet)
+    run_state.requirement_sheet = requirement_sheet
+    run_state.scoring_policy = scoring_policy
+    run_state.retrieval_state.query_term_pool = projected_terms
+    return RequirementRuntimeProjection(
+        scoring_policy_changed=scoring_policy != previous_policy,
+        query_terms_changed=projected_terms != previous_terms,
+    )
+
+
+def _query_term_key(term: str) -> str:
+    normalized = unicodedata.normalize("NFKC", term)
+    return " ".join(normalized.split()).casefold()
 
 
 def _register_runtime_artifacts(tracer: RunTracer) -> None:

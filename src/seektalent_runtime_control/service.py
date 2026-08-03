@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from copy import deepcopy
 from datetime import UTC, datetime
 from typing import Protocol
@@ -8,7 +7,10 @@ from uuid import uuid4
 
 from seektalent.models import RequirementSheet
 from seektalent_runtime_control.errors import RuntimeControlError
-from seektalent_runtime_control.normalizer import merge_requirement_sheet_supplement
+from seektalent_runtime_control.normalizer import (
+    merge_requirement_sheet_supplement,
+    prepare_requirement_supplement,
+)
 from seektalent_runtime_control.requirements import (
     ApprovedRequirementRevision,
     DraftOperation,
@@ -20,6 +22,8 @@ from seektalent_runtime_control.requirements import (
     ReviewItem,
     ReviewResolutionOperation,
     draft_from_requirement_sheet,
+    merge_duplicate_requirement_draft_item,
+    requirement_draft_item_key,
     requirement_sheet_from_draft,
 )
 from seektalent_runtime_control.store import RuntimeControlStore
@@ -145,6 +149,10 @@ class RuntimeControlService:
             jd_text=text,
             notes=None,
             requirement_cache_scope=base.conversation_id,
+        )
+        supplement = prepare_requirement_supplement(
+            supplement,
+            effective_round_no=1,
         )
         merged_sheet = merge_requirement_sheet_supplement(base_sheet, supplement)
         normalized = {
@@ -321,10 +329,20 @@ def _append_extracted_supplement(
     added_item_ids: list[str] = []
     for supplement_section in supplement_draft.sections:
         target_section = draft.section(supplement_section.section_id)
-        seen = {_draft_item_key(item) for item in target_section.items if item.status != "deleted"}
+        existing_by_key = {
+            requirement_draft_item_key(item): item
+            for item in target_section.items
+            if item.status != "deleted"
+        }
         for item in supplement_section.items:
-            key = _draft_item_key(item)
-            if key in seen:
+            key = requirement_draft_item_key(item)
+            existing = existing_by_key.get(key)
+            if existing is not None:
+                merge_duplicate_requirement_draft_item(
+                    existing,
+                    item,
+                    section_id=supplement_section.section_id,
+                )
                 continue
             appended = item.model_copy(
                 deep=True,
@@ -336,17 +354,9 @@ def _append_extracted_supplement(
                 },
             )
             target_section.items.append(appended)
-            seen.add(key)
+            existing_by_key[key] = appended
             added_item_ids.append(appended.item_id)
     return added_item_ids
-
-
-def _draft_item_key(item: RequirementDraftItem) -> tuple[str, str, str]:
-    return (
-        item.text.strip().casefold(),
-        type(item.value).__name__,
-        json.dumps(item.value, ensure_ascii=False, sort_keys=True) if isinstance(item.value, dict) else repr(item.value),
-    )
 
 
 def _refresh_draft_state(draft: RequirementDraft) -> None:

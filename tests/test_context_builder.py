@@ -165,7 +165,36 @@ def test_absent_risk_is_not_counted_as_high_risk() -> None:
         max_rounds=4,
         target_new=5,
     )
-    assert context.stop_guidance.high_risk_fit_count == 0
+    assert context.stop_guidance.high_risk_recommendation_count == 0
+
+
+@pytest.mark.parametrize("build_context", CONTROLLER_CONTEXT_BUILDERS)
+def test_low_score_fit_candidate_does_not_count_as_recommendation_quality(build_context) -> None:
+    candidates = [
+        _scored_candidate(
+            f"low-{index}",
+            round_no=1,
+            overall_score=20,
+            must_have_match_score=20,
+            risk_score=20,
+        )
+        for index in range(10)
+    ]
+    context = build_context(
+        run_state=_run_state_for_stop_gate(
+            candidates=candidates,
+            completed_rounds=1,
+            include_untried_family=True,
+        ),
+        round_no=2,
+        min_rounds=1,
+        max_rounds=4,
+        target_new=5,
+    )
+
+    assert context.stop_guidance.recommendation_count == 0
+    assert context.stop_guidance.top_pool_strength == "weak"
+    assert context.stop_guidance.can_stop is False
 
 
 def _run_state_for_stop_gate(
@@ -793,10 +822,10 @@ def test_stop_guidance_blocks_usable_low_quality_pool_before_budget_threshold(bu
     assert context.near_budget_limit is False
     assert context.stop_guidance.can_stop is False
     assert context.stop_guidance.top_pool_strength == "usable"
-    assert context.stop_guidance.fit_count == 10
-    assert context.stop_guidance.strong_fit_count == 2
+    assert context.stop_guidance.recommendation_count == 10
+    assert context.stop_guidance.strong_recommendation_count == 2
     assert context.stop_guidance.quality_gate_status == "continue_low_quality"
-    assert "strong-fit candidates" in context.stop_guidance.reason
+    assert "strong recommendations" in context.stop_guidance.reason
 
 
 @pytest.mark.parametrize("build_context", CONTROLLER_CONTEXT_BUILDERS)
@@ -905,7 +934,7 @@ def test_stop_guidance_allows_strong_pool_before_budget_threshold(build_context)
 
     assert context.stop_guidance.can_stop is True
     assert context.stop_guidance.top_pool_strength == "strong"
-    assert context.stop_guidance.strong_fit_count == 5
+    assert context.stop_guidance.strong_recommendation_count == 5
     assert context.stop_guidance.quality_gate_status == "pass"
 
 

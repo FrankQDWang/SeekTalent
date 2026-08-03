@@ -15,7 +15,11 @@ from seektalent.models import (
     is_title_anchor_role,
 )
 from seektalent.requirements import build_requirement_digest
-from seektalent.candidate_quality import risk_at_or_above, risk_at_or_below
+from seektalent.candidate_quality import (
+    is_recommendation_eligible,
+    risk_at_or_above,
+    risk_at_or_below,
+)
 
 from seektalent.runtime.context_views import (
     _reflection_summary,
@@ -26,8 +30,8 @@ from seektalent.runtime.context_views import (
 from seektalent.runtime.query_identity import consumed_non_anchor_term_family_ids, logical_outcomes_from_receipts, used_term_group_keys
 
 BUDGET_STOP_RATIO = 0.8
-STRONG_FIT_STOP_MIN = 3
-HIGH_RISK_FIT_THRESHOLD = 70
+STRONG_RECOMMENDATION_STOP_MIN = 3
+HIGH_RISK_RECOMMENDATION_THRESHOLD = 70
 
 
 def build_controller_context(
@@ -112,10 +116,19 @@ def _build_stop_guidance(
     max_rounds: int,
 ) -> StopGuidance:
     top_pool_strength = _top_pool_strength(top_pool)
-    fit_candidates = [item for item in top_pool if item.fit_bucket == "fit"]
-    strong_fit_count = len(_strong_fit_candidates(top_pool))
-    high_risk_fit_count = sum(
-        1 for item in fit_candidates if risk_at_or_above(item.risk_score, HIGH_RISK_FIT_THRESHOLD)
+    recommendation_candidates = [
+        item
+        for item in top_pool
+        if is_recommendation_eligible(
+            score=item.overall_score,
+            fit_bucket=item.fit_bucket,
+        )
+    ]
+    strong_recommendation_count = len(_strong_recommendation_candidates(top_pool))
+    high_risk_recommendation_count = sum(
+        1
+        for item in recommendation_candidates
+        if risk_at_or_above(item.risk_score, HIGH_RISK_RECOMMENDATION_THRESHOLD)
     )
     tried_families = _tried_families(
         run_state.retrieval_state.query_term_pool,
@@ -162,21 +175,22 @@ def _build_stop_guidance(
                     "one broaden round is required before stopping."
                 )
                 quality_gate_status = "broaden_required"
-        elif top_pool_strength == "usable" and strong_fit_count < STRONG_FIT_STOP_MIN:
+        elif top_pool_strength == "usable" and strong_recommendation_count < STRONG_RECOMMENDATION_STOP_MIN:
             if untried_families:
                 continue_reasons.append(
-                    f"top pool is usable but has only {strong_fit_count} strong-fit candidates; admitted families remain untried."
+                    "top pool is usable but has only "
+                    f"{strong_recommendation_count} strong recommendations; admitted families remain untried."
                 )
                 quality_gate_status = "continue_low_quality"
             elif broadening_attempted:
                 quality_gate_status = "low_quality_exhausted"
                 reason = (
-                    f"top pool is usable with only {strong_fit_count} strong-fit candidates, "
+                    f"top pool is usable with only {strong_recommendation_count} strong recommendations, "
                     "but no admitted families remain untried."
                 )
             else:
                 continue_reasons.append(
-                    f"top pool is usable but has only {strong_fit_count} strong-fit candidates, "
+                    f"top pool is usable but has only {strong_recommendation_count} strong recommendations, "
                     "and no active admitted families remain untried; one broaden round is required before stopping."
                 )
                 quality_gate_status = "broaden_required"
@@ -199,9 +213,9 @@ def _build_stop_guidance(
         productive_round_count=productive_round_count,
         zero_gain_round_count=zero_gain_round_count,
         top_pool_strength=top_pool_strength,
-        fit_count=len(fit_candidates),
-        strong_fit_count=strong_fit_count,
-        high_risk_fit_count=high_risk_fit_count,
+        recommendation_count=len(recommendation_candidates),
+        strong_recommendation_count=strong_recommendation_count,
+        high_risk_recommendation_count=high_risk_recommendation_count,
         quality_gate_status=quality_gate_status,
         broadening_attempted=broadening_attempted,
     )
@@ -210,15 +224,22 @@ def _build_stop_guidance(
 def _top_pool_strength(top_pool: list[ScoredCandidate]) -> TopPoolStrength:
     if not top_pool:
         return "empty"
-    fit_candidates = [item for item in top_pool if item.fit_bucket == "fit"]
-    if len(top_pool) < 5 or not fit_candidates:
+    recommendation_candidates = [
+        item
+        for item in top_pool
+        if is_recommendation_eligible(
+            score=item.overall_score,
+            fit_bucket=item.fit_bucket,
+        )
+    ]
+    if len(top_pool) < 5 or not recommendation_candidates:
         return "weak"
-    if len(top_pool) >= 10 and len(_strong_fit_candidates(top_pool)) >= 5:
+    if len(top_pool) >= 10 and len(_strong_recommendation_candidates(top_pool)) >= 5:
         return "strong"
     return "usable"
 
 
-def _strong_fit_candidates(top_pool: list[ScoredCandidate]) -> list[ScoredCandidate]:
+def _strong_recommendation_candidates(top_pool: list[ScoredCandidate]) -> list[ScoredCandidate]:
     return [
         item
         for item in top_pool

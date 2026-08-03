@@ -30,6 +30,7 @@ from seektalent_workbench_v2.agent_loop import (
     WorkbenchV2RequirementPatch,
     WorkbenchV2RuntimeInput,
 )
+from seektalent_workbench_v2.errors import CandidateNotFoundError
 from seektalent_workbench_v2.models import (
     WorkbenchV2CandidateDetailView,
     WorkbenchV2CandidateSummaryView,
@@ -72,6 +73,7 @@ AGENT_PATCH_ERROR_MESSAGES = {
 REQUIREMENT_FORM_READY_MESSAGE = "已根据你的输入生成需求确认表单，请检查、取消不需要的条件，或补充其他要求。"
 POST_CONFIRM_SUPPLEMENTAL_SUMMARY = "已记录补充要求，将在下一轮检索时使用。"
 POST_CONFIRM_SUPPLEMENTAL_NEXT_RUN_SUMMARY = "本次运行已结束，补充要求已记录为后续重新运行或下一次检索参考。"
+POST_CONFIRM_SUPPLEMENTAL_IN_PROGRESS_SUMMARY = "上一条补充要求仍在处理中，请稍后再补充。"
 REQUIREMENT_EXTRACT_FAILED_MESSAGE = "需求整理失败，请稍后重试。"
 RUNTIME_STATUS_UNAVAILABLE_MESSAGE = "暂时无法读取运行状态，请稍后重试。"
 RUNTIME_RESULTS_UNAVAILABLE_MESSAGE = "暂时无法读取运行结果，请稍后重试。"
@@ -320,7 +322,7 @@ class WorkbenchV2Service:
         record = self.store.get_conversation(conversation_id)
         runtime_run_id = record.conversation.runtime_run_id
         if runtime_run_id is None:
-            raise KeyError(candidate_id)
+            raise CandidateNotFoundError(candidate_id)
         payload = self.runtime_service.get_candidate_detail(runtime_run_id, candidate_id)
         return WorkbenchV2CandidateDetailView.model_validate(payload)
 
@@ -1332,6 +1334,15 @@ class WorkbenchV2Service:
                 idempotency_key=runtime_idempotency_key,
             )
         except RuntimeControlError as exc:
+            if exc.reason_code == "runtime_requirement_amendment_in_progress":
+                return WorkbenchV2RuntimeSubmission(
+                    summary=POST_CONFIRM_SUPPLEMENTAL_IN_PROGRESS_SUMMARY,
+                    assistant_override=POST_CONFIRM_SUPPLEMENTAL_IN_PROGRESS_SUMMARY,
+                    payload={
+                        "runtimeSubmissionStatus": "not_applied",
+                        "reasonCode": exc.reason_code,
+                    },
+                )
             if str(exc) not in {"runtime_command_conflict", "runtime_no_future_round_available"}:
                 raise
             return WorkbenchV2RuntimeSubmission(

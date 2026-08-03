@@ -133,7 +133,10 @@ from seektalent.runtime import round_decision_runtime
 from seektalent.runtime import rescue_execution_runtime
 from seektalent.runtime.controller_context import build_controller_context
 from seektalent.runtime.finalize_context import build_finalize_context
-from seektalent.runtime.requirements_runtime import build_run_state as build_requirements_run_state
+from seektalent.runtime.requirements_runtime import (
+    apply_approved_requirement_revision,
+    build_run_state as build_requirements_run_state,
+)
 from seektalent.runtime.runtime_diagnostics import (
     build_replay_snapshot as build_replay_snapshot_direct,
     build_judge_packet as build_judge_packet_direct,
@@ -225,6 +228,7 @@ from seektalent.runtime.scoring_runtime import (
     ScoringRoundResult,
     combine_round_intake_summaries,
     finalize_round_pool,
+    rescore_requirement_revision_candidates,
     scoring_failures_are_recoverable,
     score_round as score_round_direct,
 )
@@ -364,6 +368,7 @@ RuntimeStartCallback = Callable[[str], None]
 RuntimeCheckpointCallback = Callable[[object], None]
 RuntimeDetailClaimCallback = Callable[[object], None]
 RuntimeRoundBoundaryCallback = Callable[[int], RequirementSheet | None]
+RuntimeRoundBoundaryCommitCallback = Callable[[int], None]
 RuntimeSourceLaneRunner = Callable[[RuntimeSourceLanePlan], Awaitable[RuntimeSourceLaneResult]]
 
 
@@ -581,6 +586,7 @@ class WorkflowRuntime:
         runtime_checkpoint_callback: RuntimeCheckpointCallback | None = None,
         runtime_detail_claim_callback: RuntimeDetailClaimCallback | None = None,
         runtime_round_boundary_callback: RuntimeRoundBoundaryCallback | None = None,
+        runtime_round_boundary_commit_callback: RuntimeRoundBoundaryCommitCallback | None = None,
         requirement_cache_scope: str | None = None,
         approved_requirement_sheet: RequirementSheet | None = None,
     ) -> RunArtifacts:
@@ -596,6 +602,7 @@ class WorkflowRuntime:
                 runtime_checkpoint_callback=runtime_checkpoint_callback,
                 runtime_detail_claim_callback=runtime_detail_claim_callback,
                 runtime_round_boundary_callback=runtime_round_boundary_callback,
+                runtime_round_boundary_commit_callback=runtime_round_boundary_commit_callback,
                 requirement_cache_scope=requirement_cache_scope,
                 approved_requirement_sheet=approved_requirement_sheet,
             )
@@ -876,6 +883,7 @@ class WorkflowRuntime:
         runtime_checkpoint_callback: RuntimeCheckpointCallback | None = None,
         runtime_detail_claim_callback: RuntimeDetailClaimCallback | None = None,
         runtime_round_boundary_callback: RuntimeRoundBoundaryCallback | None = None,
+        runtime_round_boundary_commit_callback: RuntimeRoundBoundaryCommitCallback | None = None,
         requirement_cache_scope: str | None = None,
         approved_requirement_sheet: RequirementSheet | None = None,
         resume_checkpoint: Mapping[str, object] | None = None,
@@ -967,6 +975,7 @@ class WorkflowRuntime:
                     progress_callback=progress_callback,
                     runtime_checkpoint_callback=runtime_checkpoint_callback,
                     runtime_round_boundary_callback=runtime_round_boundary_callback,
+                    runtime_round_boundary_commit_callback=runtime_round_boundary_commit_callback,
                     completed_rounds=(
                         continuation.completed_rounds
                         if continuation is not None
@@ -1296,6 +1305,7 @@ class WorkflowRuntime:
         if not isinstance(stop_reason, str) or not stop_reason.strip():
             stop_reason = "max_rounds_reached"
         expected_phase = {
+            "before_round_controller": "rounds",
             "after_round_controller": "rounds",
             "before_finalization": "finalization",
             "after_finalization_commit": "complete",
@@ -2195,6 +2205,7 @@ class WorkflowRuntime:
         progress_callback: ProgressCallback | None = None,
         runtime_checkpoint_callback: RuntimeCheckpointCallback | None = None,
         runtime_round_boundary_callback: RuntimeRoundBoundaryCallback | None = None,
+        runtime_round_boundary_commit_callback: RuntimeRoundBoundaryCommitCallback | None = None,
         completed_rounds: int = 0,
     ) -> tuple[list[ScoredCandidate], str, int, TerminalControllerRound | None]:
         if source_plan is None:
@@ -2219,7 +2230,53 @@ class WorkflowRuntime:
             if runtime_round_boundary_callback is not None:
                 updated_requirement_sheet = runtime_round_boundary_callback(round_no)
                 if updated_requirement_sheet is not None:
-                    run_state.requirement_sheet = updated_requirement_sheet
+                    projected_state = run_state.model_copy(
+                        update={
+                            "retrieval_state": run_state.retrieval_state.model_copy(deep=True),
+                            "scorecards_by_resume_id": dict(run_state.scorecards_by_resume_id),
+                            "top_pool_ids": list(run_state.top_pool_ids),
+                        }
+                    )
+                    projection = apply_approved_requirement_revision(
+                        run_state=projected_state,
+                        requirement_sheet=updated_requirement_sheet,
+                        effective_round_no=round_no,
+                    )
+                    if projection.scoring_policy_changed:
+                        rescored = await rescore_requirement_revision_candidates(
+                            round_no=round_no,
+                            run_state=projected_state,
+                            tracer=tracer,
+                            runtime_only_constraints=[],
+                            resume_scorer=self.resume_scorer,
+                            format_scoring_failure_message=self._format_scoring_failure_message,
+                            run_stage_error=RunStageError,
+                        )
+                        projected_state.scorecards_by_resume_id = rescored
+                        select_identity_top_candidates(projected_state)
+                    if runtime_round_boundary_commit_callback is not None:
+                        runtime_round_boundary_commit_callback(round_no)
+                    run_state.requirement_sheet = projected_state.requirement_sheet
+                    run_state.scoring_policy = projected_state.scoring_policy
+                    run_state.retrieval_state.query_term_pool = list(
+                        projected_state.retrieval_state.query_term_pool
+                    )
+                    run_state.scorecards_by_resume_id = dict(
+                        projected_state.scorecards_by_resume_id
+                    )
+                    run_state.top_pool_ids = list(projected_state.top_pool_ids)
+                    self._refresh_runtime_candidate_checkpoint(
+                        runtime_checkpoint_callback=runtime_checkpoint_callback,
+                        tracer=tracer,
+                        run_state=run_state,
+                        safe_boundary="before_round_controller",
+                        round_no=round_no,
+                        continuation_cursor={
+                            "nextPhase": "rounds",
+                            "completedRounds": len(run_state.round_history),
+                            "stopReason": stop_reason,
+                        },
+                    )
             target_new = TOP_K
             controller_context = build_controller_context(
                 run_state=run_state,
@@ -5007,7 +5064,11 @@ class WorkflowRuntime:
         negatives = [
             item
             for item in run_state.scorecards_by_resume_id.values()
-            if item.fit_bucket == "not_fit" or risk_at_or_above(item.risk_score, 60)
+            if not is_recommendation_eligible(
+                score=item.overall_score,
+                fit_bucket=item.fit_bucket,
+            )
+            or risk_at_or_above(item.risk_score, 60)
         ]
         return seeds, negatives
 

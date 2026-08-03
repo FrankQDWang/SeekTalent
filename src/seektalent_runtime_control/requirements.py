@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -235,6 +236,30 @@ def requirement_sheet_from_draft(draft: RequirementDraft, extracted_sheet: Requi
             "initial_query_term_pool": query_terms,
         }
     )
+
+
+def requirement_draft_item_key(item: RequirementDraftItem) -> tuple[str, str, str]:
+    value = item.value
+    if isinstance(value, dict) and "term" in value:
+        value = {
+            key: field_value
+            for key, field_value in value.items()
+            if key not in {"active", "first_added_round"}
+        }
+    encoded = json.dumps(value, ensure_ascii=False, sort_keys=True) if isinstance(value, dict) else repr(value)
+    return (item.text.strip().casefold(), type(value).__name__, encoded)
+
+
+def merge_duplicate_requirement_draft_item(
+    existing: RequirementDraftItem,
+    incoming: RequirementDraftItem,
+    *,
+    section_id: str,
+) -> None:
+    if section_id != "initial_query_term_pool":
+        return
+    existing.value = incoming.value
+    existing.enabled = incoming.enabled
 
 
 def _active_items(section: RequirementDraftSection) -> list[RequirementDraftItem]:

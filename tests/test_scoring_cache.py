@@ -7,9 +7,11 @@ from typing import Any, cast
 
 import pytest
 from pydantic import ValidationError
+from pydantic_ai import ModelRetry
 from pydantic_ai.exceptions import ModelHTTPError, UnexpectedModelBehavior
 
 from seektalent.models import (
+    HardConflictEvidence,
     HardConstraintSlots,
     NormalizedResume,
     PreferenceSlots,
@@ -23,12 +25,14 @@ from seektalent.normalization import normalize_resume
 from seektalent.prompting import LoadedPrompt
 from seektalent.cache.exact_llm_cache import get_cached_json, put_cached_json
 from seektalent.scoring.scorer import (
+    SCORING_CACHE_SCHEMA_VERSION,
     ResumeScorer,
     ScoringApplicabilityRetryExhausted,
     _materialize_scored_candidate,
     _scoring_applicability_failure_code,
     _scoring_output_type,
     _schema_applicability_failure_code,
+    _validate_hard_conflict_references,
     render_scoring_prompt,
     scoring_cache_key,
 )
@@ -90,7 +94,7 @@ def _context() -> ScoringContext:
 
 def _draft() -> ScoredCandidateDraft:
     return ScoredCandidateDraft(
-        fit_bucket="fit",
+        hard_conflicts=[],
         must_have_match_score=92,
         preferred_match_score=80,
         risk_score=20,
@@ -254,6 +258,7 @@ def test_scoring_retry_exhaustion_preserves_exact_applicability_code(
                 prompt="score",
                 agent=cast(Any, ExhaustedAgent()),
                 applicability=ScoreDimensionApplicability(preferred=True, risk=False),
+                allowed_hard_conflict_references=frozenset(),
             )
         )
 
@@ -300,7 +305,7 @@ def test_schema_applicability_classification_only_accepts_presence_contract_erro
     expected: str | None,
 ) -> None:
     payload: dict[str, object] = {
-        "fit_bucket": "fit",
+        "hard_conflicts": [],
         "must_have_match_score": 80,
         "preferred_match_score": 80,
         "risk_score": 20,
@@ -396,7 +401,7 @@ def test_scoring_draft_schema_does_not_accept_llm_overall_score() -> None:
     with pytest.raises(ValidationError, match="overall_score"):
         ScoredCandidateDraft.model_validate(
             {
-                "fit_bucket": "fit",
+                "hard_conflicts": [],
                 "overall_score": 99,
                 "must_have_match_score": 70,
                 "preferred_match_score": None,
@@ -406,10 +411,76 @@ def test_scoring_draft_schema_does_not_accept_llm_overall_score() -> None:
         )
 
 
+def test_hard_conflict_references_must_be_allowed_by_the_scoring_context() -> None:
+    draft = _draft().model_copy(
+        update={
+            "hard_conflicts": [
+                HardConflictEvidence(
+                    policy_reference="hard_constraints.locations",
+                    resume_evidence="Resume location explicitly conflicts with the required location.",
+                )
+            ]
+        }
+    )
+
+    assert _validate_hard_conflict_references(
+        draft,
+        frozenset({"hard_constraints.locations"}),
+    ) is draft
+    with pytest.raises(ModelRetry, match="hard_conflict_policy_reference_invalid"):
+        _validate_hard_conflict_references(draft, frozenset())
+
+
+def test_low_score_without_hard_conflict_materializes_as_fit() -> None:
+    result = _materialize_scored_candidate(
+        draft=ScoredCandidateDraft(
+            hard_conflicts=[],
+            must_have_match_score=20,
+            preferred_match_score=20,
+            risk_score=80,
+            reasoning_summary="Weak evidence with material gaps, but no explicit hard conflict.",
+            missing_must_haves=["python"],
+        ),
+        scoring_policy=_policy(preferred=True, risk=True),
+        resume_id="resume-low",
+        source_round=1,
+    )
+
+    assert result.fit_bucket == "fit"
+    assert result.overall_score < 60
+
+
+def test_high_score_with_hard_conflict_materializes_as_not_fit() -> None:
+    conflict = HardConflictEvidence(
+        policy_reference="exclusion_signals[0]",
+        resume_evidence="The resume explicitly shows the excluded background.",
+    )
+    result = _materialize_scored_candidate(
+        draft=ScoredCandidateDraft(
+            hard_conflicts=[conflict],
+            must_have_match_score=95,
+            preferred_match_score=95,
+            risk_score=0,
+            reasoning_summary="Strong capabilities with one explicit exclusion conflict.",
+        ),
+        scoring_policy=_policy(preferred=True, risk=True),
+        resume_id="resume-conflict",
+        source_round=1,
+    )
+
+    assert result.fit_bucket == "not_fit"
+    assert result.overall_score >= 90
+    assert result.hard_conflicts == [conflict]
+
+
+def test_scoring_cache_schema_version_excludes_old_fit_semantics() -> None:
+    assert SCORING_CACHE_SCHEMA_VERSION == "scored_candidate.v3"
+
+
 def test_materializer_calculates_total_and_applicability_from_policy() -> None:
     result = _materialize_scored_candidate(
         draft=ScoredCandidateDraft(
-            fit_bucket="fit",
+            hard_conflicts=[],
             must_have_match_score=75,
             preferred_match_score=80,
             risk_score=None,
@@ -428,7 +499,7 @@ def test_materializer_rejects_model_score_for_inapplicable_dimension() -> None:
     with pytest.raises(ValueError, match="risk_score_not_applicable"):
         _materialize_scored_candidate(
             draft=ScoredCandidateDraft(
-                fit_bucket="fit",
+                hard_conflicts=[],
                 must_have_match_score=80,
                 preferred_match_score=None,
                 risk_score=10,
@@ -454,9 +525,11 @@ def test_scoring_cache_miss_calls_provider_and_stores_result(
     scorer = ResumeScorer(settings, prompt)
     provider_calls = 0
 
-    async def fake_score_one_live(*, prompt: str, agent, applicability):  # noqa: ANN001
+    async def fake_score_one_live(  # noqa: ANN001
+        *, prompt: str, agent, applicability, allowed_hard_conflict_references
+    ):
         nonlocal provider_calls
-        del prompt, agent, applicability
+        del prompt, agent, applicability, allowed_hard_conflict_references
         provider_calls += 1
         return _draft(), _provider_usage()
 
@@ -501,8 +574,10 @@ def test_scoring_failure_records_safe_diagnostic_category(
 ) -> None:
     scorer = ResumeScorer(_settings(tmp_path), _prompt())
 
-    async def fail_scoring(*, prompt: str, agent, applicability):  # noqa: ANN001
-        del prompt, agent, applicability
+    async def fail_scoring(  # noqa: ANN001
+        *, prompt: str, agent, applicability, allowed_hard_conflict_references
+    ):
+        del prompt, agent, applicability, allowed_hard_conflict_references
         raise failure
 
     monkeypatch.setattr(scorer, "_score_one_live", fail_scoring)
@@ -554,8 +629,10 @@ def test_scoring_propagates_safe_score_metadata_from_resume_candidate_raw(
     context = _context().model_copy(update={"normalized_resume": normalize_resume(candidate), "round_no": 2})
     scorer = ResumeScorer(settings, prompt)
 
-    async def fake_score_one_live(*, prompt: str, agent, applicability):  # noqa: ANN001
-        del prompt, agent, applicability
+    async def fake_score_one_live(  # noqa: ANN001
+        *, prompt: str, agent, applicability, allowed_hard_conflict_references
+    ):
+        del prompt, agent, applicability, allowed_hard_conflict_references
         return _draft(), _provider_usage()
 
     monkeypatch.setattr(scorer, "_score_one_live", fake_score_one_live)
@@ -716,8 +793,10 @@ def test_scoring_prompt_cache_key_is_recorded_on_live_snapshot(
         built_prompt_cache_keys.append(prompt_cache_key)
         return object()
 
-    async def fake_score_one_live(*, prompt: str, agent, applicability):  # noqa: ANN001
-        del prompt, agent, applicability
+    async def fake_score_one_live(  # noqa: ANN001
+        *, prompt: str, agent, applicability, allowed_hard_conflict_references
+    ):
+        del prompt, agent, applicability, allowed_hard_conflict_references
         return _draft(), _provider_usage()
 
     monkeypatch.setattr(scorer, "_build_agent", fake_build_agent)

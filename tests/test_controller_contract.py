@@ -1442,6 +1442,164 @@ def test_runtime_repairs_consumed_controller_family_and_retains_fresh_term() -> 
     assert len(sanitized.proposed_query_terms) == 3
 
 
+def test_runtime_forces_fresh_runtime_requirement_term_into_effective_round() -> None:
+    settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True, provider_name="cts")
+    runtime = WorkflowRuntime(settings)
+    run_state = _run_state_with_previous_reflection()
+    run_state.retrieval_state.query_term_pool.append(
+        QueryTermCandidate(
+            term="Kafka",
+            source="notes",
+            category="tooling",
+            priority=90,
+            evidence="Runtime requirement amendment.",
+            first_added_round=2,
+            active=True,
+            retrieval_role="framework_tool",
+            queryability="admitted",
+            family="framework.kafka",
+        )
+    )
+    decision = SearchControllerDecision(
+        thought_summary="Continue.",
+        action="source_search",
+        decision_rationale="Expand retrieval coverage.",
+        proposed_query_terms=["python", "retrieval"],
+        proposed_filter_plan=ProposedFilterPlan(),
+        response_to_reflection="Use the current requirement pool.",
+    )
+
+    sanitized = runtime._sanitize_controller_decision(decision=decision, run_state=run_state, round_no=2)
+
+    assert isinstance(sanitized, SearchControllerDecision)
+    assert "Kafka" in sanitized.proposed_query_terms
+    assert sanitized.proposed_query_terms[0] == "python"
+    assert len(sanitized.proposed_query_terms) <= 3
+
+
+def test_runtime_does_not_stop_before_fresh_requirement_term_is_queried() -> None:
+    settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True, provider_name="cts")
+    runtime = WorkflowRuntime(settings)
+    run_state = _run_state_with_previous_reflection()
+    run_state.retrieval_state.query_term_pool.append(
+        QueryTermCandidate(
+            term="Kafka",
+            source="notes",
+            category="tooling",
+            priority=90,
+            evidence="Runtime requirement amendment.",
+            first_added_round=2,
+            active=True,
+            retrieval_role="framework_tool",
+            queryability="admitted",
+            family="framework.kafka",
+        )
+    )
+    decision = StopControllerDecision(
+        thought_summary="Stop.",
+        action="stop",
+        decision_rationale="The existing pool is stable.",
+        response_to_reflection="The previous requirement was covered.",
+        stop_reason="quality_sufficient",
+    )
+
+    sanitized = runtime._sanitize_controller_decision(
+        decision=decision,
+        run_state=run_state,
+        round_no=2,
+    )
+
+    assert isinstance(sanitized, SearchControllerDecision)
+    assert "Kafka" in sanitized.proposed_query_terms
+
+
+def test_runtime_does_not_force_restricted_runtime_requirement_term_into_query() -> None:
+    settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True, provider_name="cts")
+    runtime = WorkflowRuntime(settings)
+    run_state = _run_state_with_previous_reflection()
+    run_state.retrieval_state.query_term_pool.append(
+        QueryTermCandidate(
+            term="Kafka",
+            source="notes",
+            category="tooling",
+            priority=90,
+            evidence="Runtime score-only requirement.",
+            first_added_round=2,
+            active=False,
+            retrieval_role="score_only",
+            queryability="score_only",
+            family="framework.kafka",
+        )
+    )
+    decision = SearchControllerDecision(
+        thought_summary="Continue.",
+        action="source_search",
+        decision_rationale="Expand retrieval coverage.",
+        proposed_query_terms=["python", "retrieval"],
+        proposed_filter_plan=ProposedFilterPlan(),
+        response_to_reflection="Use the current requirement pool.",
+    )
+
+    sanitized = runtime._sanitize_controller_decision(decision=decision, run_state=run_state, round_no=2)
+
+    assert isinstance(sanitized, SearchControllerDecision)
+    assert sanitized.proposed_query_terms == ["python", "retrieval"]
+
+
+def test_reemphasized_requirement_family_is_fresh_only_in_effective_round() -> None:
+    settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True, provider_name="cts")
+    runtime = WorkflowRuntime(settings)
+    run_state = _run_state_with_previous_reflection()
+    anchor = run_state.retrieval_state.query_term_pool[0]
+    kafka = QueryTermCandidate(
+        term="Kafka",
+        source="notes",
+        category="tooling",
+        priority=90,
+        evidence="Runtime requirement reemphasis.",
+        first_added_round=2,
+        active=True,
+        retrieval_role="framework_tool",
+        queryability="admitted",
+        family="framework.kafka",
+    )
+    run_state.retrieval_state.query_term_pool = [anchor, kafka]
+    _consume_family(
+        run_state,
+        family=kafka.family,
+        terms=[anchor.term, kafka.term],
+        query_id="kafka-before-amendment",
+    )
+    decision = SearchControllerDecision(
+        thought_summary="Continue.",
+        action="source_search",
+        decision_rationale="Apply the reemphasized requirement.",
+        proposed_query_terms=[anchor.term, kafka.term],
+        proposed_filter_plan=ProposedFilterPlan(),
+        response_to_reflection="Use the reemphasized term once.",
+    )
+
+    route = round_decision_runtime.choose_pre_controller_exhaustion_route(
+        run_state=run_state,
+        candidate_feedback_enabled=False,
+        round_no=2,
+    )
+    effective_round = runtime._sanitize_controller_decision(
+        decision=decision,
+        run_state=run_state,
+        round_no=2,
+    )
+
+    assert route is None
+    assert isinstance(effective_round, SearchControllerDecision)
+    assert effective_round.proposed_query_terms == [anchor.term, kafka.term]
+    assert round_decision_runtime.choose_pre_controller_exhaustion_route(
+        run_state=run_state,
+        candidate_feedback_enabled=False,
+        round_no=3,
+    ) is not None
+
+
 def test_runtime_expands_used_anchor_only_group_with_fresh_family() -> None:
     settings = make_settings(runs_dir=str(Path.cwd() / ".tmp-runs"), mock_cts=True, provider_name="cts")
     runtime = WorkflowRuntime(settings)

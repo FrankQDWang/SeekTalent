@@ -4,6 +4,7 @@ from collections import defaultdict
 from hashlib import sha256
 from typing import Any
 
+from seektalent.candidate_quality import is_recommendation_eligible
 from seektalent.models import QueryOutcomeClassification, QueryOutcomeThresholds
 from seektalent.storage.json import canonical_json
 
@@ -108,7 +109,15 @@ def build_runtime_query_outcome_rows_from_hits(
             float(hit["must_have_match_score"]) for hit in scored_hits if hit.get("must_have_match_score") is not None
         ]
         risk_scores = [float(hit["risk_score"]) for hit in scored_hits if hit.get("risk_score") is not None]
-        new_fit_count = sum(1 for hit in scored_hits if hit.get("scored_fit_bucket") == "fit")
+        new_fit_count = sum(
+            1
+            for hit in scored_hits
+            if hit.get("overall_score") is not None
+            and is_recommendation_eligible(
+                score=int(hit["overall_score"]),
+                fit_bucket=str(hit.get("scored_fit_bucket") or ""),
+            )
+        )
         scored_resume_count = len(scored_hits)
         must_have_match_avg = _avg(must_have_scores) or 0.0
         fit_rate = new_fit_count / scored_resume_count if scored_resume_count else 0.0

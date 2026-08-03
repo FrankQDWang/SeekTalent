@@ -510,6 +510,45 @@ def test_exact_latest_checkpoint_recovers_same_run_without_replaying_source_effe
     assert operation_count == 1
 
 
+def test_before_round_controller_checkpoint_resumes_same_revision_gate(tmp_path) -> None:
+    store = _seed_running_store(tmp_path)
+    state = _run_state()
+    checkpoint = store.write_checkpoint_v2(
+        checkpoint_id="checkpoint-before-controller",
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-1",
+        attempt_no=1,
+        stage="round",
+        round_no=1,
+        safe_boundary="before_round_controller",
+        accepted_requirement_revision_id="approved-1",
+        source_ids=["liepin"],
+        projection=checkpoint_projection(state),
+        detail_claim_revision=0,
+        detail_claim_hash=None,
+        continuation_cursor={
+            "nextPhase": "rounds",
+            "completedRounds": 0,
+            "stopReason": "max_rounds_reached",
+        },
+        created_at="2026-07-28T00:00:02.000000Z",
+    )
+    recovered = RecoveryStateAssembler(store).assemble(checkpoint)
+    runtime = orchestrator_module.WorkflowRuntime(
+        make_settings(runs_dir=str(tmp_path / "runs"), mock_cts=True, provider_name="cts")
+    )
+
+    continuation = runtime._resume_continuation(
+        resume_checkpoint=checkpoint.model_dump(mode="json"),
+        run_state=recovered,
+    )
+
+    assert continuation is not None
+    assert continuation.next_phase == "rounds"
+    assert continuation.completed_rounds == 0
+    assert recovered.requirement_sheet == state.requirement_sheet
+
+
 def test_checkpoint_rejects_injected_detail_claim_binding(tmp_path) -> None:
     store = _seed_running_store(tmp_path)
 
@@ -1642,6 +1681,7 @@ def test_finalization_revision_is_immutable_until_manifest_rehome(
     "safe_boundary",
     [
         "before_source_dispatch",
+        "before_round_controller",
         "after_source_result_commit",
         "runtime_candidate_checkpoint",
         "after_round_controller",

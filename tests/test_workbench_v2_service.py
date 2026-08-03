@@ -2508,6 +2508,45 @@ def test_agent_update_requirements_needs_review_overrides_assistant_message(tmp_
     assert payload["transcriptEvents"][-1]["payload"] == {"text": "补充要求已记录，需要复核后才能在后续检索轮次生效。"}
 
 
+def test_agent_update_requirements_reports_existing_amendment_in_progress(tmp_path: Path) -> None:
+    service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
+    runtime.next_round_requirement_errors.append(
+        RuntimeControlError("runtime_requirement_amendment_in_progress")
+    )
+    service.agent_loop.outputs.append(
+        _agent_output(
+            intent="update_requirements",
+            message="已记录第二条补充要求。",
+            requirementPatch={
+                "selectedItemIds": [],
+                "deselectedItemIds": [],
+                "otherNotes": "还要求有 Flink 经验。",
+            },
+        )
+    )
+
+    view = asyncio.run(
+        service.submit_message(
+            conversation_id,
+            "另外还要求有 Flink 经验。",
+            idempotency_key="patch-in-progress",
+        )
+    )
+    payload = view.model_dump(mode="json")
+
+    assert payload["transcriptEvents"][-2]["payload"] == {
+        "phase": "supplemental_requirement",
+        "runtimeRunId": "rtrun_1",
+        "runtimeSubmissionStatus": "not_applied",
+        "reasonCode": "runtime_requirement_amendment_in_progress",
+        "text": "上一条补充要求仍在处理中，请稍后再补充。",
+        "supplementalRequirement": "还要求有 Flink 经验。",
+    }
+    assert payload["transcriptEvents"][-1]["payload"] == {
+        "text": "上一条补充要求仍在处理中，请稍后再补充。"
+    }
+
+
 def test_agent_update_requirements_after_runtime_completed_records_next_run_note(tmp_path: Path) -> None:
     service, runtime, conversation_id, _item_id, _confirmed_view = _confirmed_requirement_conversation(tmp_path)
     runtime.next_round_requirement_errors.append(RuntimeControlError("runtime_command_conflict"))

@@ -1098,8 +1098,8 @@ def _terminal_stop_guidance_summary(terminal_stop_guidance: StopGuidance | None)
         "terminal_top_pool_strength": (
             terminal_stop_guidance.top_pool_strength if terminal_stop_guidance is not None else None
         ),
-        "terminal_strong_fit_count": (
-            terminal_stop_guidance.strong_fit_count if terminal_stop_guidance is not None else None
+        "terminal_strong_recommendation_count": (
+            terminal_stop_guidance.strong_recommendation_count if terminal_stop_guidance is not None else None
         ),
         "terminal_broadening_attempted": (
             terminal_stop_guidance.broadening_attempted if terminal_stop_guidance is not None else None

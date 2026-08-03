@@ -15,6 +15,7 @@ import httpx
 from seektalent.config import AppSettings
 from seektalent.llm import build_model, build_model_settings, build_output_spec, resolve_stage_model_config
 from seektalent.models import (
+    FitBucket,
     NormalizedResume,
     ScoredCandidate,
     ScoredCandidateDraft,
@@ -38,14 +39,16 @@ from seektalent.tracing import LLMCallSnapshot, RunTracer
 from seektalent.tracing import ProviderUsageSnapshot, provider_usage_from_result
 from seektalent.tracing import json_char_count, json_sha256, text_char_count, text_sha256
 
-SCORING_CACHE_SCHEMA_VERSION = "scored_candidate.v2"
+SCORING_CACHE_SCHEMA_VERSION = "scored_candidate.v3"
 ScoringFailureKind = Literal[
+    "timeout",
     "transport_error",
     "provider_error",
     "response_validation_error",
     "score_applicability_error",
 ]
 ScoringProviderFailureKind = Literal[
+    "provider_timeout",
     "provider_auth_error",
     "provider_access_denied",
     "provider_rate_limited",
@@ -92,10 +95,11 @@ _SCORING_OUTPUT_TYPES: dict[tuple[bool, bool], type[ScoredCandidateDraft]] = {
 @dataclass
 class _ScoringOutputValidationState:
     applicability: ScoreDimensionApplicability
+    allowed_hard_conflict_references: frozenset[str]
     applicability_retry_count: int = 0
     last_applicability_retry: int | None = None
     max_output_retries: int | None = None
-    last_retry_kind: Literal["applicability", "fit_score"] | None = None
+    last_retry_kind: Literal["applicability", "hard_conflict_reference"] | None = None
     last_applicability_failure_code: ScoringApplicabilityFailureCode | None = None
 
 
@@ -209,6 +213,24 @@ def _validate_scoring_draft_applicability(
     return draft
 
 
+def _validate_hard_conflict_references(
+    draft: ScoredCandidateDraft,
+    allowed_references: frozenset[str],
+) -> ScoredCandidateDraft:
+    invalid_references = sorted(
+        {
+            item.policy_reference
+            for item in draft.hard_conflicts
+            if item.policy_reference not in allowed_references
+        }
+    )
+    if invalid_references:
+        raise ModelRetry(
+            "hard_conflict_policy_reference_invalid: " + ", ".join(invalid_references)
+        )
+    return draft
+
+
 def _round_artifact(round_no: int, subsystem: str, name: str, *, extension: str = "json") -> str:
     return f"rounds/{round_no:02d}/{subsystem}/{name}.{extension}"
 
@@ -220,6 +242,34 @@ def _lines(values: list[str], *, limit: int | None = None) -> str:
 
 def _prompt_safe_constraints(payload: dict[str, object]) -> dict[str, object]:
     return {key: value for key, value in payload.items() if key not in PROTECTED_ATTRIBUTE_FIELDS}
+
+
+def _has_policy_value(value: object) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, (list, dict)):
+        return bool(value)
+    return True
+
+
+def _hard_conflict_policy_contract(context: ScoringContext) -> dict[str, object]:
+    contract: dict[str, object] = {}
+    hard_constraints = _prompt_safe_constraints(
+        context.scoring_policy.hard_constraints.model_dump(mode="json")
+    )
+    for field, value in hard_constraints.items():
+        if _has_policy_value(value):
+            contract[f"hard_constraints.{field}"] = value
+    for index, signal in enumerate(context.scoring_policy.exclusion_signals):
+        if signal.strip():
+            contract[f"exclusion_signals[{index}]"] = signal
+    for index, constraint in enumerate(context.runtime_only_constraints):
+        if constraint.field in PROTECTED_ATTRIBUTE_FIELDS or not constraint.blocking:
+            continue
+        contract[f"runtime_only_constraints[{index}]"] = constraint.model_dump(mode="json")
+    return contract
 
 
 def _structured_scoring_evidence_payload(resume: NormalizedResume) -> dict[str, object]:
@@ -259,6 +309,7 @@ def render_scoring_prompt(context: ScoringContext) -> str:
         for item in context.runtime_only_constraints
         if item.field not in PROTECTED_ATTRIBUTE_FIELDS
     ]
+    hard_conflict_policy_contract = _hard_conflict_policy_contract(context)
     scoring_policy_text = (
         f"- Job Title: {policy.job_title}\n"
         f"- Summary: {policy.role_summary}\n"
@@ -290,6 +341,16 @@ def render_scoring_prompt(context: ScoringContext) -> str:
             + render_untrusted_text_block(
                 "STRUCTURED_RESUME_EVIDENCE",
                 _structured_scoring_evidence_json(resume),
+            ),
+            "ALLOWED HARD CONFLICT POLICIES\n"
+            + render_untrusted_text_block(
+                "HARD_CONFLICT_POLICY_REFERENCES",
+                json.dumps(
+                    hard_conflict_policy_contract,
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ": "),
+                ),
             ),
             json_block(
                 "OUTPUT DIMENSION CONTRACT",
@@ -387,20 +448,16 @@ class ResumeScorer:
                     _scoring_applicability_failure_code(draft, context.deps.applicability)
                 )
                 raise
-            overall_score = calculate_overall_score(
-                must_have_match_score=validated.must_have_match_score,
-                preferred_match_score=validated.preferred_match_score,
-                risk_score=validated.risk_score,
-                applicability=context.deps.applicability,
-            )
-            if validated.fit_bucket == "fit" and overall_score < 60:
+            try:
+                return _validate_hard_conflict_references(
+                    validated,
+                    context.deps.allowed_hard_conflict_references,
+                )
+            except ModelRetry:
                 context.deps.last_applicability_retry = context.retry
                 context.deps.max_output_retries = context.max_retries
-                context.deps.last_retry_kind = "fit_score"
-                raise ModelRetry(
-                    "fit candidates must have a deterministic overall score of at least 60"
-                )
-            return validated
+                context.deps.last_retry_kind = "hard_conflict_reference"
+                raise
 
         return agent
 
@@ -613,6 +670,9 @@ class ResumeScorer:
                     prompt=user_prompt,
                     agent=agent,
                     applicability=score_dimension_applicability(context.scoring_policy),
+                    allowed_hard_conflict_references=frozenset(
+                        _hard_conflict_policy_contract(context)
+                    ),
                 ),
                 timeout=self.settings.scoring_timeout_seconds,
             )
@@ -708,9 +768,15 @@ class ResumeScorer:
         except TimeoutError:
             latency_ms = max(1, int((perf_counter() - started_at_clock) * 1000))
             error_message = f"scoring timed out after {self.settings.scoring_timeout_seconds:g}s"
-            result = _timeout_scored_candidate(
-                context=context,
-                timeout_seconds=self.settings.scoring_timeout_seconds,
+            failure = ScoringFailure(
+                resume_id=candidate.resume_id,
+                branch_id=branch_id,
+                round_no=context.round_no,
+                attempts=1,
+                error_message=error_message,
+                latency_ms=latency_ms,
+                failure_kind="timeout",
+                provider_failure_kind="provider_timeout",
             )
             tracer.append_jsonl(
                 f"round.{context.round_no:02d}.scoring.scoring_calls",
@@ -740,21 +806,17 @@ class ResumeScorer:
                         f"resumes/{candidate.resume_id}.json",
                         "input.scoring_policy",
                     ],
-                    output_artifact_refs=[f"round.{context.round_no:02d}.scoring.scorecards"],
+                    output_artifact_refs=[],
                     input_payload_sha256=text_sha256(user_prompt),
-                    structured_output_sha256=json_sha256(result.model_dump(mode="json")),
+                    structured_output_sha256=None,
                     prompt_chars=len(self.prompt.content),
                     input_payload_chars=text_char_count(user_prompt),
-                    output_chars=json_char_count(result.model_dump(mode="json")),
+                    output_chars=0,
                     input_summary=(
                         f"round={context.round_no}; resume_id={candidate.resume_id}; "
                         f"summary={candidate.compact_summary()}"
                     ),
-                    output_summary=(
-                        f"fit_bucket={result.fit_bucket}; overall={result.overall_score}; "
-                        f"must={result.must_have_match_score}; preferred={result.preferred_match_score}; "
-                        f"risk={result.risk_score}"
-                    ),
+                    output_summary=None,
                     error_message=error_message,
                     failure_kind="timeout",
                     provider_failure_kind="provider_timeout",
@@ -779,7 +841,7 @@ class ResumeScorer:
                 artifact_paths=artifact_paths,
                 payload={"attempts": 1, "failure_kind": "timeout"},
             )
-            return result, None
+            return None, failure
         except Exception as exc:  # noqa: BLE001
             latency_ms = max(1, int((perf_counter() - started_at_clock) * 1000))
             failure_kind, provider_failure_kind = _scoring_failure_category(exc)
@@ -868,8 +930,12 @@ class ResumeScorer:
         prompt: str,
         agent: Agent[_ScoringOutputValidationState, ScoredCandidateDraft],
         applicability: ScoreDimensionApplicability,
+        allowed_hard_conflict_references: frozenset[str],
     ) -> tuple[ScoredCandidateDraft, ProviderUsageSnapshot | None]:
-        validation_state = _ScoringOutputValidationState(applicability=applicability)
+        validation_state = _ScoringOutputValidationState(
+            applicability=applicability,
+            allowed_hard_conflict_references=allowed_hard_conflict_references,
+        )
         try:
             result = await agent.run(prompt, deps=validation_state)
         except UnexpectedModelBehavior as exc:
@@ -912,11 +978,13 @@ def _materialize_scored_candidate(
         risk_score=draft.risk_score,
         applicability=applicability,
     )
+    fit_bucket: FitBucket = "not_fit" if draft.hard_conflicts else "fit"
     return ScoredCandidate(
         resume_id=resume_id,
         source_provider=source_provider,
         source_round=source_round,
-        fit_bucket=draft.fit_bucket,
+        fit_bucket=fit_bucket,
+        hard_conflicts=draft.hard_conflicts,
         overall_score=overall_score,
         must_have_match_score=draft.must_have_match_score,
         preferred_match_score=draft.preferred_match_score,
@@ -924,53 +992,23 @@ def _materialize_scored_candidate(
         risk_flags=draft.risk_flags,
         reasoning_summary=draft.reasoning_summary,
         evidence=_derived_evidence(draft),
-        confidence=_derived_confidence(draft=draft, overall_score=overall_score),
+        confidence=_derived_confidence(
+            draft=draft,
+            overall_score=overall_score,
+            fit_bucket=fit_bucket,
+        ),
         matched_must_haves=draft.matched_must_haves,
         missing_must_haves=draft.missing_must_haves,
         matched_preferences=draft.matched_preferences,
         negative_signals=draft.negative_signals,
-        strengths=_derived_strengths(draft),
-        weaknesses=_derived_weaknesses(draft),
+        strengths=_derived_strengths(draft, fit_bucket=fit_bucket),
+        weaknesses=_derived_weaknesses(draft, fit_bucket=fit_bucket),
         score_evidence_source=score_evidence_source,
         card_scorecard_ref=card_scorecard_ref,
         detail_scorecard_ref=detail_scorecard_ref,
         score_delta=score_delta,
         detail_open_reason=detail_open_reason,
         detail_open_policy_version=detail_open_policy_version,
-    )
-
-
-def _timeout_scored_candidate(*, context: ScoringContext, timeout_seconds: float) -> ScoredCandidate:
-    candidate = context.normalized_resume
-    applicability = score_dimension_applicability(context.scoring_policy)
-    return ScoredCandidate(
-        resume_id=candidate.resume_id,
-        fit_bucket="not_fit",
-        overall_score=0,
-        must_have_match_score=0,
-        preferred_match_score=0 if applicability.preferred else None,
-        risk_score=100 if applicability.risk else None,
-        risk_flags=["scoring_timeout"],
-        reasoning_summary=(
-            f"Scoring timed out after {timeout_seconds:g}s before producing a reliable assessment; "
-            "excluded from the ranked pool."
-        ),
-        evidence=[],
-        confidence="low",
-        matched_must_haves=[],
-        missing_must_haves=context.scoring_policy.must_have_capabilities,
-        matched_preferences=[],
-        negative_signals=["scoring_timeout"],
-        strengths=[],
-        weaknesses=["Scoring did not complete within the configured timeout."],
-        source_round=candidate.source_round or context.round_no,
-        source_provider=candidate.source_provider,
-        score_evidence_source=candidate.score_evidence_source,
-        card_scorecard_ref=candidate.card_scorecard_ref,
-        detail_scorecard_ref=candidate.detail_scorecard_ref,
-        score_delta=candidate.score_delta,
-        detail_open_reason=candidate.detail_open_reason,
-        detail_open_policy_version=candidate.detail_open_policy_version,
     )
 
 
@@ -997,17 +1035,23 @@ def _derived_evidence(draft: ScoredCandidateDraft) -> list[str]:
         [
             *draft.matched_must_haves,
             *draft.matched_preferences,
+            *(item.resume_evidence for item in draft.hard_conflicts),
             *draft.negative_signals,
             *draft.risk_flags,
         ]
     )[:8]
 
 
-def _derived_confidence(*, draft: ScoredCandidateDraft, overall_score: int) -> ScoringConfidence:
+def _derived_confidence(
+    *,
+    draft: ScoredCandidateDraft,
+    overall_score: int,
+    fit_bucket: FitBucket,
+) -> ScoringConfidence:
     score_gap = abs(overall_score - draft.must_have_match_score)
     high_risk = risk_at_or_above(draft.risk_score, 65)
     low_risk = risk_at_or_below(draft.risk_score, 35)
-    if draft.fit_bucket == "fit":
+    if fit_bucket == "fit":
         if (
             overall_score >= 75
             and draft.must_have_match_score >= 70
@@ -1025,18 +1069,22 @@ def _derived_confidence(*, draft: ScoredCandidateDraft, overall_score: int) -> S
     return "medium"
 
 
-def _derived_strengths(draft: ScoredCandidateDraft) -> list[str]:
+def _derived_strengths(draft: ScoredCandidateDraft, *, fit_bucket: FitBucket) -> list[str]:
     strengths = [
         *_prefixed("Matched must-have", draft.matched_must_haves),
         *_prefixed("Matched preference", draft.matched_preferences),
     ]
-    return strengths or ([draft.reasoning_summary] if draft.fit_bucket == "fit" else [])
+    return strengths or ([draft.reasoning_summary] if fit_bucket == "fit" else [])
 
 
-def _derived_weaknesses(draft: ScoredCandidateDraft) -> list[str]:
+def _derived_weaknesses(draft: ScoredCandidateDraft, *, fit_bucket: FitBucket) -> list[str]:
     weaknesses = [
+        *_prefixed(
+            "Hard conflict",
+            [item.resume_evidence for item in draft.hard_conflicts],
+        ),
         *_prefixed("Missing must-have", draft.missing_must_haves),
         *_prefixed("Negative signal", draft.negative_signals),
         *_prefixed("Risk flag", draft.risk_flags),
     ]
-    return weaknesses or ([draft.reasoning_summary] if draft.fit_bucket == "not_fit" else [])
+    return weaknesses or ([draft.reasoning_summary] if fit_bucket == "not_fit" else [])

@@ -2046,44 +2046,126 @@ class RuntimeControlStore(
 
     def save_requirement_amendment(self, amendment: RequirementAmendment) -> RequirementAmendment:
         with self._connect() as conn, conn:
-            conn.execute(
-                """
-                INSERT INTO runtime_requirement_amendments (
-                    amendment_id, agent_conversation_id, runtime_run_id, base_draft_revision_id,
-                    result_draft_revision_id, base_approved_requirement_revision_id,
-                    result_approved_requirement_revision_id, target_round_no, effective_boundary,
-                    applied_event_id, input_text, target_section_hint, status, normalized_patch_json,
-                    rejected_fragments_json, review_items_json, provenance_json, resolved_patch_json,
-                    superseded_by_amendment_id, resolved_at, idempotency_key, created_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    amendment.amendment_id,
-                    amendment.agent_conversation_id,
-                    amendment.runtime_run_id,
-                    amendment.base_draft_revision_id,
-                    amendment.result_draft_revision_id,
-                    amendment.base_approved_requirement_revision_id,
-                    amendment.result_approved_requirement_revision_id,
-                    amendment.target_round_no,
-                    amendment.effective_boundary,
-                    amendment.applied_event_id,
-                    amendment.input_text,
-                    amendment.target_section_hint,
-                    amendment.status,
-                    _json(amendment.normalized_patch),
-                    _json(amendment.rejected_fragments),
-                    _json([item.model_dump(mode="json") for item in amendment.review_items]),
-                    _json(amendment.provenance),
-                    _json(amendment.resolved_patch) if amendment.resolved_patch is not None else None,
-                    amendment.superseded_by_amendment_id,
-                    amendment.resolved_at,
-                    amendment.idempotency_key,
-                    amendment.created_at,
-                ),
-            )
+            _insert_requirement_amendment(conn, amendment)
         return amendment
+
+    def reserve_next_round_requirement(
+        self,
+        amendment: RequirementAmendment,
+        *,
+        after_round: int,
+        replace_amendment_id: str | None = None,
+    ) -> tuple[RequirementAmendment, str | None]:
+        """Atomically choose an unlocked round and reserve one amendment chain slot."""
+        if amendment.status != "extracting":
+            raise ValueError("runtime_requirement_amendment_reservation_status_invalid")
+        runtime_run_id = amendment.runtime_run_id
+        if runtime_run_id is None:
+            raise ValueError("runtime_requirement_amendment_run_required")
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                run_row = _run_row(conn, runtime_run_id)
+                if run_row is None:
+                    raise RuntimeControlLookupError("runtime_run_not_found")
+                require_run_truth_mutable(run_row)
+                if run_row["status"] in {
+                    "cancellation_requested",
+                    "cancelled",
+                    "completed",
+                    "failed",
+                }:
+                    raise RuntimeControlError("runtime_no_future_round_available")
+                existing = conn.execute(
+                    """
+                    SELECT *
+                    FROM runtime_requirement_amendments
+                    WHERE agent_conversation_id = ? AND idempotency_key = ?
+                    """,
+                    (amendment.agent_conversation_id, amendment.idempotency_key),
+                ).fetchone()
+                if existing is not None:
+                    conn.commit()
+                    return _amendment_from_row(existing), None
+
+                blocking = conn.execute(
+                    """
+                    SELECT amendment_id, target_round_no
+                    FROM runtime_requirement_amendments
+                    WHERE runtime_run_id = ? AND status IN ('extracting', 'needs_review')
+                    ORDER BY created_at ASC, rowid ASC
+                    LIMIT 1
+                    """,
+                    (runtime_run_id,),
+                ).fetchone()
+                if blocking is not None:
+                    raise RuntimeControlError(
+                        "runtime_requirement_amendment_in_progress",
+                        payload={
+                            "amendmentId": blocking["amendment_id"],
+                            "targetRoundNo": blocking["target_round_no"],
+                        },
+                    )
+
+                target_round_no = _next_unlocked_round_in_transaction(
+                    conn,
+                    runtime_run_id=runtime_run_id,
+                    after_round=after_round,
+                )
+                predecessor = None
+                if replace_amendment_id is not None:
+                    predecessor = conn.execute(
+                        """
+                        SELECT *
+                        FROM runtime_requirement_amendments
+                        WHERE amendment_id = ? AND runtime_run_id = ?
+                          AND target_round_no = ? AND status = 'pending_target_round'
+                          AND superseded_by_amendment_id IS NULL
+                        """,
+                        (replace_amendment_id, runtime_run_id, target_round_no),
+                    ).fetchone()
+                    if predecessor is None:
+                        raise RuntimeControlError("requirement_amendment_stale")
+                else:
+                    predecessor = conn.execute(
+                        """
+                        SELECT *
+                        FROM runtime_requirement_amendments
+                        WHERE runtime_run_id = ? AND target_round_no <= ?
+                          AND status = 'pending_target_round'
+                          AND superseded_by_amendment_id IS NULL
+                          AND result_approved_requirement_revision_id IS NOT NULL
+                        ORDER BY target_round_no DESC, created_at DESC, rowid DESC
+                        LIMIT 1
+                        """,
+                        (runtime_run_id, target_round_no),
+                    ).fetchone()
+                predecessor_id = (
+                    str(predecessor["amendment_id"])
+                    if predecessor is not None
+                    and predecessor["target_round_no"] == target_round_no
+                    else None
+                )
+                run_revision_id = run_row["approved_requirement_revision_id"]
+                if not isinstance(run_revision_id, str) or not run_revision_id:
+                    raise RuntimeControlError("requirement_not_confirmed")
+                base_revision_id = (
+                    str(predecessor["result_approved_requirement_revision_id"])
+                    if predecessor is not None
+                    else run_revision_id
+                )
+                reserved = amendment.model_copy(
+                    update={
+                        "base_approved_requirement_revision_id": base_revision_id,
+                        "target_round_no": target_round_no,
+                    }
+                )
+                _insert_requirement_amendment(conn, reserved)
+                conn.commit()
+            except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
+                conn.rollback()
+                raise
+        return reserved, predecessor_id
 
     def get_requirement_amendment_by_idempotency(
         self,
@@ -2353,13 +2435,31 @@ class RuntimeControlStore(
         self,
         *,
         amendment_id: str,
+        runtime_run_id: str,
         status: str,
-        target_round_no: int,
+        after_round: int,
         result_approved_requirement_revision_id: str,
         resolved_patch: dict[str, object],
         resolved_at: str,
     ) -> RequirementAmendment:
-        with self._connect() as conn, conn:
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            run_row = _run_row(conn, runtime_run_id)
+            if run_row is None:
+                raise RuntimeControlLookupError("runtime_run_not_found")
+            require_run_truth_mutable(run_row)
+            if run_row["status"] in {
+                "cancellation_requested",
+                "cancelled",
+                "completed",
+                "failed",
+            }:
+                raise RuntimeControlError("runtime_no_future_round_available")
+            target_round_no = _next_unlocked_round_in_transaction(
+                conn,
+                runtime_run_id=runtime_run_id,
+                after_round=after_round,
+            )
             conn.execute(
                 """
                 UPDATE runtime_requirement_amendments
@@ -2379,10 +2479,16 @@ class RuntimeControlStore(
                     amendment_id,
                 ),
             )
+            _supersede_requirement_chain_predecessor(
+                conn,
+                amendment_id=amendment_id,
+                resolved_at=resolved_at,
+            )
             row = conn.execute(
                 "SELECT * FROM runtime_requirement_amendments WHERE amendment_id = ?",
                 (amendment_id,),
             ).fetchone()
+            conn.commit()
         if row is None:
             raise RuntimeControlError("requirement_draft_not_found")
         return _amendment_from_row(row)
@@ -2420,6 +2526,12 @@ class RuntimeControlStore(
                     amendment_id,
                 ),
             )
+            if status == "pending_target_round" and result_approved_requirement_revision_id is not None:
+                _supersede_requirement_chain_predecessor(
+                    conn,
+                    amendment_id=amendment_id,
+                    resolved_at=resolved_at,
+                )
             row = conn.execute(
                 "SELECT * FROM runtime_requirement_amendments WHERE amendment_id = ?",
                 (amendment_id,),
@@ -2427,6 +2539,24 @@ class RuntimeControlStore(
         if row is None:
             raise RuntimeControlError("requirement_draft_not_found")
         return _amendment_from_row(row)
+
+    def lock_round_input(
+        self,
+        event: RuntimeControlEventInput,
+        *,
+        executor_id: str,
+        attempt_no: int | None = None,
+    ) -> RuntimeControlEvent:
+        if event.event_type != "runtime_round_input_locked" or event.round_no is None:
+            raise ValueError("runtime_round_input_lock_event_invalid")
+        if event.idempotency_key is None:
+            raise ValueError("runtime_round_input_lock_idempotency_key_required")
+        return self.append_executor_event(
+            event,
+            executor_id=executor_id,
+            attempt_no=attempt_no,
+            run_status="running",
+        )
 
     def activate_run_requirement_revision(
         self,
@@ -3903,6 +4033,54 @@ class RuntimeControlStore(
                 (runtime_run_id,),
             ).fetchall()
         return [_candidate_identity_from_row(row) for row in rows]
+
+    def resolve_candidate_identity_id(
+        self,
+        *,
+        runtime_run_id: str,
+        candidate_id: str,
+    ) -> str | None:
+        with self._connect() as conn:
+            if _run_row(conn, runtime_run_id) is None:
+                raise RuntimeControlLookupError("runtime_run_not_found")
+            exact = conn.execute(
+                """
+                SELECT identity_id
+                FROM runtime_control_candidate_identities
+                WHERE runtime_run_id = ? AND identity_id = ?
+                """,
+                (runtime_run_id, candidate_id),
+            ).fetchone()
+            if exact is not None:
+                return str(exact["identity_id"])
+            truth = conn.execute(
+                """
+                SELECT aliases_json
+                FROM runtime_control_candidate_truth_state
+                WHERE runtime_run_id = ?
+                """,
+                (runtime_run_id,),
+            ).fetchone()
+            if truth is None:
+                return None
+            aliases_by_canonical_id = _strict_json_object(truth["aliases_json"])
+            for canonical_id, aliases in aliases_by_canonical_id.items():
+                if candidate_id != canonical_id and not (
+                    isinstance(aliases, list)
+                    and all(isinstance(alias, str) for alias in aliases)
+                    and candidate_id in aliases
+                ):
+                    continue
+                canonical = conn.execute(
+                    """
+                    SELECT identity_id
+                    FROM runtime_control_candidate_identities
+                    WHERE runtime_run_id = ? AND identity_id = ?
+                    """,
+                    (runtime_run_id, canonical_id),
+                ).fetchone()
+                return str(canonical["identity_id"]) if canonical is not None else None
+        return None
 
     def list_candidate_evidence(self, *, runtime_run_id: str) -> list[RuntimeControlCandidateEvidence]:
         with self._connect() as conn:
@@ -5720,6 +5898,119 @@ def _append_event_in_transaction(
     return _event_from_row(stored)
 
 
+def _insert_requirement_amendment(
+    conn: sqlite3.Connection,
+    amendment: RequirementAmendment,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO runtime_requirement_amendments (
+            amendment_id, agent_conversation_id, runtime_run_id, base_draft_revision_id,
+            result_draft_revision_id, base_approved_requirement_revision_id,
+            result_approved_requirement_revision_id, target_round_no, effective_boundary,
+            applied_event_id, input_text, target_section_hint, status, normalized_patch_json,
+            rejected_fragments_json, review_items_json, provenance_json, resolved_patch_json,
+            superseded_by_amendment_id, resolved_at, idempotency_key, created_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            amendment.amendment_id,
+            amendment.agent_conversation_id,
+            amendment.runtime_run_id,
+            amendment.base_draft_revision_id,
+            amendment.result_draft_revision_id,
+            amendment.base_approved_requirement_revision_id,
+            amendment.result_approved_requirement_revision_id,
+            amendment.target_round_no,
+            amendment.effective_boundary,
+            amendment.applied_event_id,
+            amendment.input_text,
+            amendment.target_section_hint,
+            amendment.status,
+            _json(amendment.normalized_patch),
+            _json(amendment.rejected_fragments),
+            _json([item.model_dump(mode="json") for item in amendment.review_items]),
+            _json(amendment.provenance),
+            _json(amendment.resolved_patch) if amendment.resolved_patch is not None else None,
+            amendment.superseded_by_amendment_id,
+            amendment.resolved_at,
+            amendment.idempotency_key,
+            amendment.created_at,
+        ),
+    )
+
+
+def _next_unlocked_round_in_transaction(
+    conn: sqlite3.Connection,
+    *,
+    runtime_run_id: str,
+    after_round: int,
+) -> int:
+    target = after_round + 1
+    while conn.execute(
+        """
+        SELECT 1
+        FROM runtime_control_events
+        WHERE runtime_run_id = ? AND event_type = 'runtime_round_input_locked'
+          AND round_no = ?
+        LIMIT 1
+        """,
+        (runtime_run_id, target),
+    ).fetchone() is not None:
+        target += 1
+    return target
+
+
+def _supersede_requirement_chain_predecessor(
+    conn: sqlite3.Connection,
+    *,
+    amendment_id: str,
+    resolved_at: str,
+) -> str | None:
+    amendment = conn.execute(
+        "SELECT * FROM runtime_requirement_amendments WHERE amendment_id = ?",
+        (amendment_id,),
+    ).fetchone()
+    if amendment is None:
+        raise RuntimeControlError("requirement_draft_not_found")
+    base_revision_id = amendment["base_approved_requirement_revision_id"]
+    target_round_no = amendment["target_round_no"]
+    if base_revision_id is None or target_round_no is None:
+        return None
+    predecessor = conn.execute(
+        """
+        SELECT amendment_id
+        FROM runtime_requirement_amendments
+        WHERE runtime_run_id = ? AND target_round_no = ?
+          AND amendment_id != ?
+          AND result_approved_requirement_revision_id = ?
+          AND status = 'pending_target_round'
+          AND superseded_by_amendment_id IS NULL
+        ORDER BY created_at DESC, rowid DESC
+        LIMIT 1
+        """,
+        (
+            amendment["runtime_run_id"],
+            target_round_no,
+            amendment_id,
+            base_revision_id,
+        ),
+    ).fetchone()
+    if predecessor is None:
+        return None
+    predecessor_id = str(predecessor["amendment_id"])
+    conn.execute(
+        """
+        UPDATE runtime_requirement_amendments
+        SET status = 'superseded', superseded_by_amendment_id = ?, resolved_at = ?
+        WHERE amendment_id = ?
+        """,
+        (amendment_id, resolved_at, predecessor_id),
+    )
+    return predecessor_id
+
+
 def _next_recovery_lease_row(
     conn: sqlite3.Connection,
     *,
@@ -5872,6 +6163,7 @@ def _checkpoint_continuation_cursor(
     supplied: dict[str, object] | None,
 ) -> dict[str, object]:
     next_phase = {
+        "before_round_controller": "rounds",
         "after_source_result_commit": "rounds",
         "after_round_controller": "rounds",
         "before_finalization": "finalization",

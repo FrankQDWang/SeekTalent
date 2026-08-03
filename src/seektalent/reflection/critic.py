@@ -141,7 +141,7 @@ def _term_bank_rows(context: ReflectionContext) -> str:
 
 
 def _top_pool_is_strong(context: ReflectionContext) -> bool:
-    strong_fit_count = sum(
+    strong_recommendation_count = sum(
         1
         for item in context.top_candidates
         if item.fit_bucket == "fit"
@@ -149,7 +149,7 @@ def _top_pool_is_strong(context: ReflectionContext) -> bool:
         and item.must_have_match_score >= 70
         and risk_at_or_below(item.risk_score, 30)
     )
-    return len(context.top_candidates) >= 10 and strong_fit_count >= 5
+    return len(context.top_candidates) >= 10 and strong_recommendation_count >= 5
 
 
 def _candidate_line(candidate, rank: int) -> str:  # noqa: ANN001
