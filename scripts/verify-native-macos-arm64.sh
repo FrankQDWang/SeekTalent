@@ -36,6 +36,7 @@ build_dir="$ROOT/dist/tmp/0.8.1-${source_revision:0:12}"
 wheel_dir="$build_dir"
 wheelhouse_dir="$build_dir/wheelhouse-macos-arm64"
 delivery_dir="$build_dir"
+release_wheel="${SEEKTALENT_RELEASE_WHEEL:-}"
 
 git init -q "$wtscli_source"
 git -C "$wtscli_source" remote add origin https://github.com/FrankQDWang/wtscli.git
@@ -68,7 +69,16 @@ uv run --group dev python -m pytest \
   -q
 
 mkdir -p "$wheel_dir" "$wheelhouse_dir"
-uv build --out-dir "$wheel_dir"
+if [[ -n "$release_wheel" ]]; then
+  if [[ ! -f "$release_wheel" || "$(basename "$release_wheel")" != "seektalent-0.8.1-py3-none-any.whl" ]]; then
+    echo "SEEKTALENT_RELEASE_WHEEL must name the exact 0.8.1 wheel." >&2
+    exit 1
+  fi
+  cp "$release_wheel" "$wheel_dir/seektalent-0.8.1-py3-none-any.whl"
+  uv build --sdist --out-dir "$wheel_dir"
+else
+  uv build --out-dir "$wheel_dir"
+fi
 wheels=("$wheel_dir"/seektalent-*.whl)
 if [[ "${#wheels[@]}" -ne 1 || ! -f "${wheels[0]}" ]]; then
   echo "Expected exactly one SeekTalent wheel in $wheel_dir." >&2

@@ -186,3 +186,5 @@ def test_apple_silicon_native_evidence_has_a_local_entrypoint() -> None:
     assert "tests/test_packaged_sidecar_artifact.py" in script
     assert "tests/test_installed_slot_lease.py" in script
     assert 'export PYINSTALLER_CONFIG_DIR="$temp_root/pyinstaller-cache"' in script
+    assert 'release_wheel="${SEEKTALENT_RELEASE_WHEEL:-}"' in script
+    assert 'uv build --sdist --out-dir "$wheel_dir"' in script
