@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+from collections.abc import Sequence
 from dataclasses import replace
 
 import pytest
@@ -43,6 +44,7 @@ from seektalent.runtime.source_lanes import (
     RuntimeSourceBudgetPolicy,
     RuntimeSourceLanePlan,
     RuntimeSourceLaneRequest,
+    RuntimeSourceLaneResult,
 )
 from seektalent.runtime.source_query_intent import RuntimeSourceQueryIntent
 from seektalent.source_adapters.query_policy import default_source_query_policies
@@ -265,6 +267,17 @@ class _DeterministicPrivateClaimWorkflowSite:
     def append_agent_event(self, source_run_id: str, event: dict[str, object]) -> None:
         del source_run_id
         self.events.append(event)
+
+    def bind_liepin_detail_work_plan(
+        self,
+        *,
+        source_run_id: str,
+        phase: str,
+        items: Sequence[tuple[int, str, str | None]],
+        target_resumes: int,
+        claim_aware: bool,
+    ) -> None:
+        del source_run_id, phase, items, target_resumes, claim_aware
 
     def search_liepin_cards(
         self,
@@ -2228,6 +2241,113 @@ async def _run_parallel_liepin_bundle(worker: ParallelDetailWorker) -> None:
 
 def test_liepin_logical_query_bundle_runs_independent_child_agents_in_parallel() -> None:
     asyncio.run(_run_parallel_liepin_bundle(ParallelDetailWorker()))
+
+
+def test_reconciliation_unknown_keeps_later_round_lane_pending(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class DurableExecutor:
+        def __init__(self) -> None:
+            self.plan = None
+            self.skipped: list[tuple[str, str]] = []
+
+        def round_work_plan_authority(
+            self,
+            *,
+            round_no: int,
+        ) -> tuple[str, str]:
+            assert round_no == 1
+            return "checkpoint-before-controller", "approved-1"
+
+        def bind_round_work_plan(self, plan) -> None:  # type: ignore[no-untyped-def]
+            self.plan = plan
+
+        def skip_lane(
+            self,
+            *,
+            round_no: int,
+            source_lane_run_id: str,
+            query_instance_id: str,
+        ) -> None:
+            assert round_no == 1
+            self.skipped.append(
+                (source_lane_run_id, query_instance_id)
+            )
+
+    calls: list[str] = []
+
+    async def blocked_lane_run(**kwargs: object) -> RuntimeSourceLaneResult:
+        request = kwargs["request"]
+        assert isinstance(request, RuntimeSourceLaneRequest)
+        calls.append(request.logical_query_instance_id or "")
+        return RuntimeSourceLaneResult(
+            runtime_run_id=request.runtime_run_id or "run-1",
+            source_plan_id=(
+                request.source_plan_id or "run-1:source:1:liepin"
+            ),
+            source_lane_run_id=(
+                request.source_lane_run_id or "lane-missing"
+            ),
+            source="liepin",
+            lane_mode="card",
+            attempt=1,
+            status="blocked",
+            blocked_reason_code="liepin_cards_reconciliation_unknown",
+            stop_reason_code="liepin_cards_reconciliation_unknown",
+        )
+
+    monkeypatch.setattr(
+        runtime_lane,
+        "run_liepin_source_lane",
+        blocked_lane_run,
+    )
+    executor = DurableExecutor()
+    logical_queries = tuple(
+        LogicalQueryDispatch(
+            round_no=1,
+            query_role=("exploit" if index == 1 else "explore"),
+            lane_type=(
+                "exploit" if index == 1 else "generic_explore"
+            ),
+            query_terms=(f"term-{index}",),
+            keyword_query=f"term-{index}",
+            query_instance_id=f"query-{index}",
+            query_fingerprint=str(index) * 64,
+            term_group_key=f"group-{index}",
+            primary_anchor_family_id="role.data-engineer",
+            non_anchor_term_family_ids=("skill.python",),
+            requested_count=1,
+            source_plan_version="1",
+        )
+        for index in (1, 2)
+    )
+
+    result = asyncio.run(
+        run_liepin_logical_query_bundle(
+            settings=make_settings(
+                liepin_worker_mode="opencli",
+                liepin_browser_action_backend="opencli",
+            ),
+            runtime_run_id="run-1",
+            source_plan_id="run-1:source:1:liepin",
+            job_title="Data Engineer",
+            jd="Build data systems.",
+            notes="",
+            requirement_sheet=_requirement_sheet(),
+            logical_queries=logical_queries,
+            source_budget_policy=RuntimeSourceBudgetPolicy.defaults(),
+            liepin_context={"backend_mode": "opencli"},
+            worker_client=object(),  # type: ignore[arg-type]
+            cards_operation_executor=executor,
+            round_resume_context={},
+        )
+    )
+
+    assert result.status == "blocked"
+    assert calls == ["query-1"]
+    assert executor.plan is not None
+    assert len(executor.plan.lanes) == 2
+    assert executor.skipped == []
 
 
 async def _run_opencli_liepin_bundle_serially(worker: ParallelDetailWorker) -> None:

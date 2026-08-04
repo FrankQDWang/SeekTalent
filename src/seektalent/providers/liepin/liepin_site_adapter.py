@@ -1646,6 +1646,26 @@ class LiepinSiteAdapter:
                 )
         return envelope, result
 
+    def _bind_liepin_detail_work_plan(
+        self,
+        *,
+        source_run_id: str,
+        phase: str,
+        items: Sequence[tuple[int, str, str | None]],
+        target_resumes: int,
+        claim_aware: bool,
+    ) -> None:
+        executor = self._cards_operation_executor
+        bind = getattr(executor, "bind_detail_work_plan", None)
+        if callable(bind):
+            bind(
+                source_lane_run_id=source_run_id,
+                phase=phase,
+                items=tuple(items),
+                target_resumes=target_resumes,
+                claim_aware=claim_aware,
+            )
+
     def _ingest_liepin_detail_resume_from_source_artifact(
         self,
         *,

@@ -80,6 +80,25 @@ class DetailOpenClaimLedger:
             del self._claims[provider_candidate_key_hash]
         self._checkpoint()
 
+    def resume_after_no_effect_reconciliation(
+        self,
+        provider_candidate_key_hash: str,
+    ) -> None:
+        """Reopen only an unknown-effect claim after durable no-effect proof."""
+        with self._lock:
+            claim = self._require_claim(provider_candidate_key_hash)
+            if (
+                claim.status != "terminal_failed"
+                or claim.last_safe_reason_code
+                != "liepin_details_effect_unknown"
+            ):
+                raise ValueError(
+                    "detail_open_claim_reconciliation_resume_invalid"
+                )
+            claim.status = "claimed"
+            claim.last_safe_reason_code = None
+        self._checkpoint()
+
     def snapshot(self) -> dict[str, RuntimeDetailOpenClaim]:
         with self._lock:
             return {

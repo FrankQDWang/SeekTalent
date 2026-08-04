@@ -76,6 +76,7 @@ from seektalent.models import (
     ControllerDecision,
     FinalizeContext,
     FinalResult,
+    LaneType,
     LocationExecutionPhase,
     LogicalQueryOutcome,
     NormalizedResume,
@@ -115,6 +116,14 @@ from seektalent.normalization import normalize_resume
 from seektalent.prompting import PromptRegistry
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
 from seektalent.source_contracts.first_page_expansion import SourceFirstPageExpansionResult
+from seektalent.liepin_round_work_plan_contracts import (
+    LiepinRoundLaneWorkItemV1,
+    LiepinRoundWorkPlanV1,
+)
+from seektalent.sources.liepin.runtime_lane import (
+    LiepinPreparedRoundResume,
+    LiepinRoundResumeResult,
+)
 from seektalent.progress import ProgressCallback, ProgressEvent
 from seektalent.artifacts.lifecycle import RuntimeArtifactLifecycleRef
 from seektalent.runtime.candidate_intake import (
@@ -127,7 +136,11 @@ from seektalent.retrieval import (
     build_location_execution_plan,
     build_round_retrieval_plan,
 )
-from seektalent.retrieval.query_identity import build_job_intent_fingerprint, resolve_query_identity
+from seektalent.retrieval.query_identity import (
+    ResolvedQueryIdentity,
+    build_job_intent_fingerprint,
+    resolve_query_identity,
+)
 from seektalent.resumes.snapshots import canonical_resume_snapshot_payload
 from seektalent.runtime.context_views import top_candidates
 from seektalent.runtime import controller_runtime
@@ -243,6 +256,7 @@ from seektalent.source_contracts import (
     SourceRegistry,
     RuntimeQueryCandidateAttribution,
 )
+from seektalent.canonical_json import canonical_json_bytes
 from seektalent.tracing import LLMCallSnapshot, ProviderUsageSnapshot, RunTracer
 from seektalent.tracing import json_char_count, json_sha256, text_char_count, text_sha256
 
@@ -340,6 +354,34 @@ class _PRFBackendSelection:
     llm_prf_snapshot_metadata: dict[str, object] | None = None
 
 
+@dataclass(frozen=True)
+class _RecoveredRoundInputs:
+    round_no: int
+    controller_decision: SearchControllerDecision
+    retrieval_plan: RoundRetrievalPlan
+    projection_result: ConstraintProjectionResult
+    query_states: list[LogicalQueryState]
+    second_lane_decision: SecondLaneDecision
+    prf_selection: _PRFBackendSelection
+    job_intent_fingerprint: str
+    source_raw_targets: dict[str, int]
+    lane_result: RuntimeSourceLaneResult
+
+
+@dataclass(frozen=True)
+class _ValidatedRecoveredRoundPlan:
+    plan: LiepinRoundWorkPlanV1
+    round_no: int
+    controller_decision: SearchControllerDecision
+    retrieval_plan: RoundRetrievalPlan
+    projection_result: ConstraintProjectionResult
+    query_states: list[LogicalQueryState]
+    second_lane_decision: SecondLaneDecision
+    prf_selection: _PRFBackendSelection
+    job_intent_fingerprint: str
+    source_raw_targets: dict[str, int]
+
+
 class RunStageError(RuntimeError):
     def __init__(self, stage: str, message: str) -> None:
         super().__init__(message)
@@ -361,6 +403,8 @@ class RuntimeSourceRoundContext:
     source_context: Mapping[str, str | int | bool | None] | None
     tracer: RunTracer
     detail_open_claim_ledger: DetailOpenClaimLedger
+    runtime_run_id: str = ""
+    round_resume_context: Mapping[str, object] = field(default_factory=dict)
 
 
 RuntimeSourceQueryPolicyProvider = Callable[
@@ -375,6 +419,13 @@ RuntimeDetailClaimCallback = Callable[[object], None]
 RuntimeRoundBoundaryCallback = Callable[[int], RequirementSheet | None]
 RuntimeRoundBoundaryCommitCallback = Callable[[int], None]
 RuntimeSourceLaneRunner = Callable[[RuntimeSourceLanePlan], Awaitable[RuntimeSourceLaneResult]]
+RuntimeSourceWorkflowResumeCallback = Callable[
+    [LiepinPreparedRoundResume, DetailOpenClaimLedger],
+    Awaitable[LiepinRoundResumeResult],
+]
+RuntimeSourceWorkflowPrepareCallback = Callable[
+    [object], LiepinPreparedRoundResume
+]
 
 
 class _UnavailableRetrievalProvider:
@@ -413,6 +464,107 @@ def _source_query_terms_from_logical_queries(
             seen.add(key)
             terms.append(text)
     return tuple(terms)
+
+
+def _required_mapping(
+    value: Mapping[str, object],
+    key: str,
+) -> dict[str, object]:
+    item = value.get(key)
+    if not isinstance(item, Mapping):
+        raise ValueError("runtime_workflow_round_resume_invalid")
+    return {
+        nested_key: nested_value
+        for nested_key, nested_value in item.items()
+        if isinstance(nested_key, str)
+    }
+
+
+def _optional_string(
+    value: Mapping[str, object],
+    key: str,
+) -> str | None:
+    item = value.get(key)
+    if item is None:
+        return None
+    if not isinstance(item, str):
+        raise ValueError("runtime_workflow_round_resume_invalid")
+    return item
+
+
+def _logical_query_states_from_round_plan(
+    plan: LiepinRoundWorkPlanV1,
+) -> list[LogicalQueryState]:
+    grouped: dict[int, list[LiepinRoundLaneWorkItemV1]] = {}
+    for lane in plan.lanes:
+        grouped.setdefault(lane.logical_query_ordinal, []).append(lane)
+    if sorted(grouped) != list(range(1, len(grouped) + 1)):
+        raise RunStageError(
+            "runtime_resume",
+            "runtime_workflow_round_resume_invalid",
+        )
+    states: list[LogicalQueryState] = []
+    for ordinal in sorted(grouped):
+        lanes = grouped[ordinal]
+        first = lanes[0]
+        logical_identity = (
+            first.query_instance_id,
+            first.query_fingerprint,
+            first.query_role,
+            first.lane_type,
+            first.term_group_key,
+            first.primary_anchor_family_id,
+            first.non_anchor_term_family_ids,
+            first.logical_query_terms,
+            first.keyword_query,
+            first.logical_requested_count,
+            first.source_plan_version,
+        )
+        if (
+            first.lane_type
+            not in {"exploit", "prf_probe", "generic_explore"}
+            or any(
+                (
+                    lane.query_instance_id,
+                    lane.query_fingerprint,
+                    lane.query_role,
+                    lane.lane_type,
+                    lane.term_group_key,
+                    lane.primary_anchor_family_id,
+                    lane.non_anchor_term_family_ids,
+                    lane.logical_query_terms,
+                    lane.keyword_query,
+                    lane.logical_requested_count,
+                    lane.source_plan_version,
+                )
+                != logical_identity
+                for lane in lanes
+            )
+        ):
+            raise RunStageError(
+                "runtime_resume",
+                "runtime_workflow_round_resume_invalid",
+            )
+        states.append(
+            LogicalQueryState(
+                query_role=first.query_role,
+                lane_type=cast(LaneType, first.lane_type),
+                query_terms=list(first.logical_query_terms),
+                keyword_query=first.keyword_query,
+                query_instance_id=first.query_instance_id,
+                query_fingerprint=first.query_fingerprint,
+                identity=ResolvedQueryIdentity(
+                    term_group_key=first.term_group_key,
+                    primary_anchor_family_id=(
+                        first.primary_anchor_family_id
+                    ),
+                    non_anchor_term_family_ids=(
+                        first.non_anchor_term_family_ids
+                    ),
+                ),
+            )
+        )
+    return states
 
 
 def _source_round_status_from_lane_status(status: str) -> SourceRoundDispatchStatus:
@@ -893,6 +1045,14 @@ class WorkflowRuntime:
         approved_requirement_sheet: RequirementSheet | None = None,
         resume_checkpoint: Mapping[str, object] | None = None,
         resume_run_state: Mapping[str, object] | None = None,
+        runtime_run_id: str | None = None,
+        resume_workflow_transitions: Sequence[Mapping[str, object]] | None = None,
+        runtime_source_workflow_prepare_callback: (
+            RuntimeSourceWorkflowPrepareCallback | None
+        ) = None,
+        runtime_source_workflow_resume_callback: (
+            RuntimeSourceWorkflowResumeCallback | None
+        ) = None,
     ) -> RunArtifacts:
         tracer = RunTracer(self.settings.artifacts_path, output_mode=self.settings.runtime_artifact_output_mode)
         corpus_session = tracer.store.create_root(
@@ -909,11 +1069,12 @@ class WorkflowRuntime:
             if runtime_start_callback is not None:
                 runtime_start_callback(tracer.run_id)
             self._write_run_preamble(tracer=tracer, job_title=job_title, jd=jd, notes=notes)
+            durable_runtime_run_id = runtime_run_id or tracer.run_id
             selected_source_kinds = self._selected_source_kinds(source_kinds)
             source_plan = build_runtime_source_plan(
                 source_kinds=selected_source_kinds,
                 settings=self.settings,
-                runtime_run_id=tracer.run_id,
+                runtime_run_id=durable_runtime_run_id,
                 source_context=source_context,
             )
             self._write_source_plan_artifact(tracer=tracer, source_plan=source_plan)
@@ -960,6 +1121,50 @@ class WorkflowRuntime:
                     else None
                 ),
             )
+            recovered_source_round = None
+            if resume_workflow_transitions:
+                if (
+                    runtime_source_workflow_prepare_callback is None
+                    or runtime_source_workflow_resume_callback is None
+                    or continuation is None
+                    or continuation.next_phase != "rounds"
+                    or resume_checkpoint is None
+                ):
+                    raise RunStageError(
+                        "runtime_resume",
+                        "runtime_source_workflow_resumer_missing",
+                    )
+                prepared_source_round = (
+                    runtime_source_workflow_prepare_callback(
+                        list(resume_workflow_transitions)
+                    )
+                )
+                validated_source_round = (
+                    self._validated_recovered_round_plan(
+                        prepared_source_round=prepared_source_round,
+                        run_state=run_state,
+                        source_plan=source_plan,
+                        source_context=source_context,
+                        runtime_run_id=durable_runtime_run_id,
+                        expected_round_no=(
+                            continuation.completed_rounds + 1
+                        ),
+                        resume_checkpoint=resume_checkpoint,
+                    )
+                )
+                resumed_source_round = (
+                    await runtime_source_workflow_resume_callback(
+                        prepared_source_round,
+                        detail_open_claim_ledger,
+                    )
+                )
+                recovered_source_round = (
+                    self._attach_recovered_round_result(
+                        validated_plan=validated_source_round,
+                        recovered_source_round=resumed_source_round,
+                        runtime_run_id=durable_runtime_run_id,
+                    )
+                )
             if continuation is not None and continuation.next_phase == "complete":
                 raise RunStageError(
                     "runtime_resume",
@@ -994,6 +1199,8 @@ class WorkflowRuntime:
                         if continuation is not None
                         else 0
                     ),
+                    runtime_run_id=durable_runtime_run_id,
+                    recovered_source_round=recovered_source_round,
                 )
             self._refresh_runtime_candidate_checkpoint(
                 runtime_checkpoint_callback=runtime_checkpoint_callback,
@@ -1843,7 +2050,11 @@ class WorkflowRuntime:
         tracer: RunTracer,
         progress_callback: ProgressCallback | None = None,
         runtime_checkpoint_callback: RuntimeCheckpointCallback | None = None,
+        round_resume_context: Mapping[str, object] | None = None,
+        runtime_run_id: str | None = None,
+        recovered_lane_result: RuntimeSourceLaneResult | None = None,
     ) -> RetrievalExecutionResult:
+        durable_runtime_run_id = runtime_run_id or tracer.run_id
         assert_novel_query_identities(
             identities=[query_state.identity for query_state in query_states],
             used_term_group_keys=used_term_group_keys(run_state.retrieval_state.query_execution_ledger),
@@ -1888,7 +2099,7 @@ class WorkflowRuntime:
             tracer=tracer,
             progress_callback=progress_callback,
             event=make_runtime_public_event(
-                runtime_run_id=tracer.run_id,
+                runtime_run_id=durable_runtime_run_id,
                 stage="round_query",
                 event_seq=round_no * 100 + 1,
                 round_no=round_no,
@@ -1947,6 +2158,7 @@ class WorkflowRuntime:
 
         source_plan_by_source = {lane.source: lane for lane in source_plan}
         round_context = RuntimeSourceRoundContext(
+            runtime_run_id=durable_runtime_run_id,
             round_no=round_no,
             retrieval_plan=retrieval_plan,
             proposed_filter_plan=proposed_filter_plan,
@@ -1959,18 +2171,75 @@ class WorkflowRuntime:
             source_context=source_context,
             tracer=tracer,
             detail_open_claim_ledger=detail_open_claim_ledger,
+            round_resume_context=dict(round_resume_context or {}),
         )
-        if self.source_registry is None:
-            raise RunStageError("source_lanes", "source_registry_required")
-        source_adapters = self.source_registry.build_round_adapters(
-            source_ids=tuple(lane.source for lane in source_plan),
-            runtime=self,
-            context=round_context,
-        )
+        if recovered_lane_result is not None:
+            if (
+                tuple(lane.source for lane in source_plan) != ("liepin",)
+                or recovered_lane_result.runtime_run_id
+                != durable_runtime_run_id
+                or recovered_lane_result.source != "liepin"
+            ):
+                raise RunStageError(
+                    "runtime_resume",
+                    "runtime_workflow_round_resume_invalid",
+                )
+
+            async def recovered_liepin_adapter(
+                _request: SourceRoundDispatchRequest,
+            ) -> SourceRoundAdapterResult:
+                status = _source_round_status_from_lane_status(
+                    recovered_lane_result.status
+                )
+                return SourceRoundAdapterResult(
+                    source="liepin",
+                    status=status,
+                    candidates=tuple(
+                        recovered_lane_result
+                        .candidate_store_updates.values()
+                    ),
+                    raw_candidate_count=int(
+                        recovered_lane_result.raw_candidate_count or 0
+                    ),
+                    safe_reason_code=(
+                        recovered_lane_result.stop_reason_code
+                        or recovered_lane_result.blocked_reason_code
+                    ),
+                    lane_result=recovered_lane_result,
+                    executed_query_packages=(
+                        recovered_lane_result.executed_query_packages
+                    ),
+                    query_execution_outcomes=(
+                        recovered_lane_result.query_execution_outcomes
+                    ),
+                    candidate_query_attributions=(
+                        recovered_lane_result
+                        .candidate_query_attributions
+                    ),
+                    private_first_page_continuations=(
+                        recovered_lane_result
+                        .private_first_page_continuations
+                    ),
+                )
+
+            source_adapters = {
+                "liepin": recovered_liepin_adapter,
+            }
+        else:
+            if self.source_registry is None:
+                raise RunStageError(
+                    "source_lanes",
+                    "source_registry_required",
+                )
+            source_adapters = self.source_registry.build_round_adapters(
+                source_ids=tuple(lane.source for lane in source_plan),
+                runtime=self,
+                context=round_context,
+            )
         pre_round_seen_resume_ids = frozenset(run_state.seen_resume_ids)
         dispatch_result = await dispatch_source_rounds(
             request=SourceRoundDispatchRequest(
-                runtime_run_id=tracer.run_id,
+                runtime_run_id=durable_runtime_run_id,
                 round_no=round_no,
                 logical_queries=logical_queries,
                 selected_sources=tuple(lane.source for lane in source_plan),
@@ -2295,12 +2564,15 @@ class WorkflowRuntime:
         runtime_round_boundary_callback: RuntimeRoundBoundaryCallback | None = None,
         runtime_round_boundary_commit_callback: RuntimeRoundBoundaryCommitCallback | None = None,
         completed_rounds: int = 0,
+        runtime_run_id: str | None = None,
+        recovered_source_round: object | None = None,
     ) -> tuple[list[ScoredCandidate], str, int, TerminalControllerRound | None]:
+        durable_runtime_run_id = runtime_run_id or tracer.run_id
         if source_plan is None:
             source_plan = build_runtime_source_plan(
                 source_kinds=self._selected_source_kinds(None),
                 settings=self.settings,
-                runtime_run_id=tracer.run_id,
+                runtime_run_id=durable_runtime_run_id,
                 source_context=source_context,
             )
         seen_dedup_keys = {
@@ -2310,12 +2582,32 @@ class WorkflowRuntime:
         stop_reason = "max_rounds_reached"
         rounds_executed = completed_rounds
         terminal_controller_round: TerminalControllerRound | None = None
+        pending_recovered_source_round = recovered_source_round
 
         for round_no in range(
             completed_rounds + 1,
             self.settings.max_rounds + 1,
         ):
-            if runtime_round_boundary_callback is not None:
+            recovered_inputs = None
+            if pending_recovered_source_round is not None:
+                if (
+                    not isinstance(
+                        pending_recovered_source_round,
+                        _RecoveredRoundInputs,
+                    )
+                    or pending_recovered_source_round.round_no
+                    != round_no
+                ):
+                    raise RunStageError(
+                        "runtime_resume",
+                        "runtime_workflow_round_resume_invalid",
+                    )
+                recovered_inputs = pending_recovered_source_round
+                pending_recovered_source_round = None
+            if (
+                recovered_inputs is None
+                and runtime_round_boundary_callback is not None
+            ):
                 updated_requirement_sheet = runtime_round_boundary_callback(round_no)
                 if updated_requirement_sheet is not None:
                     projected_state = run_state.model_copy(
@@ -2353,49 +2645,58 @@ class WorkflowRuntime:
                         projected_state.scorecards_by_resume_id
                     )
                     run_state.top_pool_ids = list(projected_state.top_pool_ids)
-                    self._refresh_runtime_candidate_checkpoint(
-                        runtime_checkpoint_callback=runtime_checkpoint_callback,
-                        tracer=tracer,
-                        run_state=run_state,
-                        safe_boundary="before_round_controller",
-                        round_no=round_no,
-                        continuation_cursor={
-                            "nextPhase": "rounds",
-                            "completedRounds": len(run_state.round_history),
-                            "stopReason": stop_reason,
-                        },
-                    )
-            target_new = TOP_K
-            controller_context = build_controller_context(
-                run_state=run_state,
-                round_no=round_no,
-                min_rounds=self.settings.min_rounds,
-                max_rounds=self.settings.max_rounds,
-                target_new=target_new,
-            )
-            tracer.write_json(
-                _round_artifact(
-                    tracer,
+            if recovered_inputs is None:
+                self._refresh_runtime_candidate_checkpoint(
+                    runtime_checkpoint_callback=runtime_checkpoint_callback,
+                    tracer=tracer,
+                    run_state=run_state,
+                    safe_boundary="before_round_controller",
                     round_no=round_no,
-                    subsystem="controller",
-                    name="controller_context",
-                ),
-                self._slim_controller_context(controller_context),
-            )
-            preflight = await round_decision_runtime.resolve_pre_controller_exhaustion(
-                run_state=run_state,
-                round_no=round_no,
-                controller_context=controller_context,
-                tracer=tracer,
-                progress_callback=progress_callback,
-                candidate_feedback_enabled=self.settings.candidate_feedback_enabled,
-                force_broaden_decision=self._force_broaden_decision,
-                force_candidate_feedback_decision=self._force_candidate_feedback_decision,
-                continue_after_empty_feedback=self._continue_after_empty_feedback,
-                force_anchor_only_decision=self._force_anchor_only_decision,
-                write_rescue_decision=self._write_rescue_decision,
-            )
+                    continuation_cursor={
+                        "nextPhase": "rounds",
+                        "completedRounds": len(run_state.round_history),
+                        "stopReason": stop_reason,
+                    },
+                )
+            target_new = TOP_K
+            if recovered_inputs is not None:
+                controller_context = None
+                preflight = (
+                    recovered_inputs.controller_decision,
+                    None,
+                )
+            else:
+                controller_context = build_controller_context(
+                    run_state=run_state,
+                    round_no=round_no,
+                    min_rounds=self.settings.min_rounds,
+                    max_rounds=self.settings.max_rounds,
+                    target_new=target_new,
+                )
+                tracer.write_json(
+                    _round_artifact(
+                        tracer,
+                        round_no=round_no,
+                        subsystem="controller",
+                        name="controller_context",
+                    ),
+                    self._slim_controller_context(controller_context),
+                )
+                preflight = await round_decision_runtime.resolve_pre_controller_exhaustion(
+                    run_state=run_state,
+                    round_no=round_no,
+                    controller_context=controller_context,
+                    tracer=tracer,
+                    progress_callback=progress_callback,
+                    candidate_feedback_enabled=self.settings.candidate_feedback_enabled,
+                    force_broaden_decision=self._force_broaden_decision,
+                    force_candidate_feedback_decision=self._force_candidate_feedback_decision,
+                    continue_after_empty_feedback=self._continue_after_empty_feedback,
+                    force_anchor_only_decision=self._force_anchor_only_decision,
+                    write_rescue_decision=self._write_rescue_decision,
+                )
             if preflight is None:
+                assert controller_context is not None
                 controller_decision, controller_stage_state = await controller_runtime.run_controller_stage(
                     settings=self.settings,
                     controller=self.controller,
@@ -2469,6 +2770,7 @@ class WorkflowRuntime:
             else:
                 controller_decision, rescue_decision = preflight
             if isinstance(controller_decision, StopControllerDecision):
+                assert controller_context is not None
                 stop_reason = self._normalize_stop_reason(
                     proposed=controller_decision.stop_reason,
                 )
@@ -2480,32 +2782,37 @@ class WorkflowRuntime:
                 break
 
             assert isinstance(controller_decision, SearchControllerDecision)
-            projection_result = ConstraintProjectionResult()
-            location_execution_plan = build_location_execution_plan(
-                allowed_locations=run_state.requirement_sheet.hard_constraints.locations,
-                preferred_locations=run_state.requirement_sheet.preferences.preferred_locations,
-                round_no=round_no,
-                target_new=target_new,
-            )
-            retrieval_plan = build_round_retrieval_plan(
-                plan_version=run_state.retrieval_state.current_plan_version + 1,
-                round_no=round_no,
-                query_terms=controller_decision.proposed_query_terms or [],
-                title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
-                query_term_pool=run_state.retrieval_state.query_term_pool,
-                projected_provider_filters=projection_result.provider_filters,
-                runtime_only_constraints=projection_result.runtime_only_constraints,
-                location_execution_plan=location_execution_plan,
-                target_new=target_new,
-                rationale=controller_decision.decision_rationale,
-                allowed_inactive_non_anchor_terms=self._reflection_backed_inactive_terms(
-                    run_state.round_history[-1].reflection_advice if run_state.round_history else None
-                ),
-                allow_anchor_only_query=(
-                    controller_context.stop_guidance.quality_gate_status == "broaden_required"
-                    or run_state.retrieval_state.anchor_only_broaden_attempted
-                ),
-            )
+            if recovered_inputs is not None:
+                projection_result = recovered_inputs.projection_result
+                retrieval_plan = recovered_inputs.retrieval_plan
+            else:
+                assert controller_context is not None
+                projection_result = ConstraintProjectionResult()
+                location_execution_plan = build_location_execution_plan(
+                    allowed_locations=run_state.requirement_sheet.hard_constraints.locations,
+                    preferred_locations=run_state.requirement_sheet.preferences.preferred_locations,
+                    round_no=round_no,
+                    target_new=target_new,
+                )
+                retrieval_plan = build_round_retrieval_plan(
+                    plan_version=run_state.retrieval_state.current_plan_version + 1,
+                    round_no=round_no,
+                    query_terms=controller_decision.proposed_query_terms or [],
+                    title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
+                    query_term_pool=run_state.retrieval_state.query_term_pool,
+                    projected_provider_filters=projection_result.provider_filters,
+                    runtime_only_constraints=projection_result.runtime_only_constraints,
+                    location_execution_plan=location_execution_plan,
+                    target_new=target_new,
+                    rationale=controller_decision.decision_rationale,
+                    allowed_inactive_non_anchor_terms=self._reflection_backed_inactive_terms(
+                        run_state.round_history[-1].reflection_advice if run_state.round_history else None
+                    ),
+                    allow_anchor_only_query=(
+                        controller_context.stop_guidance.quality_gate_status == "broaden_required"
+                        or run_state.retrieval_state.anchor_only_broaden_attempted
+                    ),
+                )
             run_state.retrieval_state.current_plan_version = retrieval_plan.plan_version
             run_state.retrieval_state.last_projection_result = projection_result
             tracer.write_json(
@@ -2521,40 +2828,57 @@ class WorkflowRuntime:
                 ),
                 projection_result.model_dump(mode="json"),
             )
-            job_intent_fingerprint = self._build_job_intent_fingerprint(run_state=run_state)
-            if rescue_decision is not None and rescue_decision.selected_lane == "candidate_feedback":
-                prf_selection = _PRFBackendSelection(prf_decision=None)
-            else:
-                prf_selection = await self._select_prf_backend_decision(
-                    run_state=run_state,
-                    retrieval_plan=retrieval_plan,
-                    tracer=tracer,
+            if recovered_inputs is not None:
+                job_intent_fingerprint = (
+                    recovered_inputs.job_intent_fingerprint
                 )
-            query_states, second_lane_decision = self._build_round_query_bundle(
-                round_no=round_no,
-                retrieval_plan=retrieval_plan,
-                title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
-                query_term_pool=run_state.retrieval_state.query_term_pool,
-                used_term_group_keys=used_term_group_keys(run_state.retrieval_state.query_execution_ledger),
-                prf_decision=prf_selection.prf_decision,
-                run_id=tracer.run_id,
-                job_intent_fingerprint=job_intent_fingerprint,
-                source_plan_version=str(retrieval_plan.plan_version),
-                prf_probe_proposal_backend=prf_selection.prf_probe_proposal_backend,
-                llm_prf_failure_kind=prf_selection.llm_prf_failure_kind,
-                llm_prf_input_artifact_ref=prf_selection.llm_prf_input_artifact_ref,
-                llm_prf_call_artifact_ref=prf_selection.llm_prf_call_artifact_ref,
-                llm_prf_candidates_artifact_ref=prf_selection.llm_prf_candidates_artifact_ref,
-                llm_prf_grounding_artifact_ref=prf_selection.llm_prf_grounding_artifact_ref,
-                consumed_non_anchor_family_ids=consumed_non_anchor_term_family_ids(
-                    run_state.retrieval_state.query_execution_ledger
-                ),
-            )
-            source_raw_targets = self._source_raw_targets(
-                source_plan=source_plan,
-                query_states=tuple(query_states),
-                target_new=target_new,
-            )
+                prf_selection = recovered_inputs.prf_selection
+                query_states = recovered_inputs.query_states
+                second_lane_decision = (
+                    recovered_inputs.second_lane_decision
+                )
+                source_raw_targets = (
+                    recovered_inputs.source_raw_targets
+                )
+            else:
+                job_intent_fingerprint = self._build_job_intent_fingerprint(
+                    run_state=run_state
+                )
+                if rescue_decision is not None and rescue_decision.selected_lane == "candidate_feedback":
+                    prf_selection = _PRFBackendSelection(
+                        prf_decision=None
+                    )
+                else:
+                    prf_selection = await self._select_prf_backend_decision(
+                        run_state=run_state,
+                        retrieval_plan=retrieval_plan,
+                        tracer=tracer,
+                    )
+                query_states, second_lane_decision = self._build_round_query_bundle(
+                    round_no=round_no,
+                    retrieval_plan=retrieval_plan,
+                    title_anchor_terms=run_state.requirement_sheet.title_anchor_terms,
+                    query_term_pool=run_state.retrieval_state.query_term_pool,
+                    used_term_group_keys=used_term_group_keys(run_state.retrieval_state.query_execution_ledger),
+                    prf_decision=prf_selection.prf_decision,
+                    run_id=tracer.run_id,
+                    job_intent_fingerprint=job_intent_fingerprint,
+                    source_plan_version=str(retrieval_plan.plan_version),
+                    prf_probe_proposal_backend=prf_selection.prf_probe_proposal_backend,
+                    llm_prf_failure_kind=prf_selection.llm_prf_failure_kind,
+                    llm_prf_input_artifact_ref=prf_selection.llm_prf_input_artifact_ref,
+                    llm_prf_call_artifact_ref=prf_selection.llm_prf_call_artifact_ref,
+                    llm_prf_candidates_artifact_ref=prf_selection.llm_prf_candidates_artifact_ref,
+                    llm_prf_grounding_artifact_ref=prf_selection.llm_prf_grounding_artifact_ref,
+                    consumed_non_anchor_family_ids=consumed_non_anchor_term_family_ids(
+                        run_state.retrieval_state.query_execution_ledger
+                    ),
+                )
+                source_raw_targets = self._source_raw_targets(
+                    source_plan=source_plan,
+                    query_states=tuple(query_states),
+                    target_new=target_new,
+                )
             tracer.write_json(
                 f"round.{round_no:02d}.retrieval.second_lane_decision",
                 second_lane_decision.model_dump(mode="json"),
@@ -2599,6 +2923,25 @@ class WorkflowRuntime:
                     tracer=tracer,
                     progress_callback=progress_callback,
                     runtime_checkpoint_callback=runtime_checkpoint_callback,
+                    runtime_run_id=durable_runtime_run_id,
+                    recovered_lane_result=(
+                        recovered_inputs.lane_result
+                        if recovered_inputs is not None
+                        else None
+                    ),
+                    round_resume_context=(
+                        self._round_resume_context_payload(
+                            controller_decision=controller_decision,
+                            retrieval_plan=retrieval_plan,
+                            projection_result=projection_result,
+                            second_lane_decision=second_lane_decision,
+                            prf_selection=prf_selection,
+                            job_intent_fingerprint=(
+                                job_intent_fingerprint
+                            ),
+                            source_raw_targets=source_raw_targets,
+                        )
+                    ),
                 )
             except RunStageError as exc:
                 self._emit_progress(
@@ -3236,6 +3579,326 @@ class WorkflowRuntime:
                 )
             targets[lane.source] = total
         return targets
+
+    @staticmethod
+    def _round_resume_context_payload(
+        *,
+        controller_decision: SearchControllerDecision,
+        retrieval_plan: RoundRetrievalPlan,
+        projection_result: ConstraintProjectionResult,
+        second_lane_decision: SecondLaneDecision,
+        prf_selection: _PRFBackendSelection,
+        job_intent_fingerprint: str,
+        source_raw_targets: Mapping[str, int],
+    ) -> dict[str, object]:
+        return {
+            "controllerDecision": controller_decision.model_dump(mode="json"),
+            "retrievalPlan": retrieval_plan.model_dump(mode="json"),
+            "constraintProjectionResult": projection_result.model_dump(
+                mode="json"
+            ),
+            "secondLaneDecision": second_lane_decision.model_dump(mode="json"),
+            "prfSelection": {
+                "prfDecision": (
+                    prf_selection.prf_decision.model_dump(mode="json")
+                    if prf_selection.prf_decision is not None
+                    else None
+                ),
+                "prfProbeProposalBackend": (
+                    prf_selection.prf_probe_proposal_backend
+                ),
+                "llmPrfFailureKind": prf_selection.llm_prf_failure_kind,
+                "llmPrfInputArtifactRef": (
+                    prf_selection.llm_prf_input_artifact_ref
+                ),
+                "llmPrfCallArtifactRef": (
+                    prf_selection.llm_prf_call_artifact_ref
+                ),
+                "llmPrfCandidatesArtifactRef": (
+                    prf_selection.llm_prf_candidates_artifact_ref
+                ),
+                "llmPrfGroundingArtifactRef": (
+                    prf_selection.llm_prf_grounding_artifact_ref
+                ),
+                "llmPrfPolicyDecisionArtifactRef": (
+                    prf_selection.llm_prf_policy_decision_artifact_ref
+                ),
+                "llmPrfSnapshotMetadata": (
+                    prf_selection.llm_prf_snapshot_metadata
+                ),
+            },
+            "jobIntentFingerprint": job_intent_fingerprint,
+            "sourceRawTargets": dict(source_raw_targets),
+        }
+
+    def _validated_recovered_round_plan(
+        self,
+        *,
+        prepared_source_round: LiepinPreparedRoundResume,
+        run_state: RunState,
+        source_plan: tuple[RuntimeSourceLanePlan, ...],
+        source_context: Mapping[str, str | int | bool | None] | None,
+        runtime_run_id: str,
+        expected_round_no: int,
+        resume_checkpoint: Mapping[str, object],
+    ) -> _ValidatedRecoveredRoundPlan:
+        from seektalent.sources.liepin.context import (
+            normalize_runtime_liepin_context,
+        )
+
+        plan = prepared_source_round.plan
+        lane_keys = prepared_source_round.lane_keys
+        checkpoint_id = resume_checkpoint.get("checkpoint_id")
+        accepted_revision_id = resume_checkpoint.get(
+            "accepted_requirement_revision_id"
+        )
+        if (
+            plan.runtime_run_id != runtime_run_id
+            or plan.round_no != expected_round_no
+            or not isinstance(checkpoint_id, str)
+            or plan.base_checkpoint_id != checkpoint_id
+            or not isinstance(accepted_revision_id, str)
+            or plan.accepted_requirement_revision_id
+            != accepted_revision_id
+            or lane_keys
+            != tuple(
+                (
+                    lane.source_lane_run_id,
+                    lane.query_instance_id,
+                )
+                for lane in plan.lanes
+            )
+        ):
+            raise RunStageError(
+                "runtime_resume",
+                "runtime_workflow_round_resume_invalid",
+            )
+        planned_source = next(
+            (item for item in source_plan if item.source == "liepin"),
+            None,
+        )
+        requirement_payload = run_state.requirement_sheet.model_dump(
+            mode="json"
+        )
+        requirement_hash = hashlib.sha256(
+            canonical_json_bytes(requirement_payload)
+        ).hexdigest()
+        expected_source_context = normalize_runtime_liepin_context(
+            source_context
+        ).to_runtime_payload()
+        input_truth = run_state.input_truth
+        if (
+            len(source_plan) != 1
+            or planned_source is None
+            or planned_source.source_plan_id != plan.source_plan_id
+            or plan.source_budget_policy
+            != planned_source.source_budget_policy.to_public_payload()
+            or plan.requirement_sheet != requirement_payload
+            or plan.requirement_sheet_hash != requirement_hash
+            or plan.source_context != expected_source_context
+            or plan.job_title != input_truth.job_title
+            or plan.jd != input_truth.jd
+            or plan.notes != (input_truth.notes or "")
+        ):
+            raise RunStageError(
+                "runtime_resume",
+                "runtime_workflow_round_resume_invalid",
+            )
+        context = plan.resume_context
+        try:
+            controller_decision = SearchControllerDecision.model_validate(
+                _required_mapping(context, "controllerDecision")
+            )
+            retrieval_plan = RoundRetrievalPlan.model_validate(
+                _required_mapping(context, "retrievalPlan")
+            )
+            projection_result = ConstraintProjectionResult.model_validate(
+                _required_mapping(
+                    context,
+                    "constraintProjectionResult",
+                )
+            )
+            second_lane_decision = SecondLaneDecision.model_validate(
+                _required_mapping(context, "secondLaneDecision")
+            )
+        except (TypeError, ValueError):
+            raise RunStageError(
+                "runtime_resume",
+                "runtime_workflow_round_resume_invalid",
+            ) from None
+        if (
+            retrieval_plan.round_no != expected_round_no
+            or retrieval_plan.plan_version
+            != run_state.retrieval_state.current_plan_version + 1
+            or second_lane_decision.round_no != expected_round_no
+            or retrieval_plan.projected_provider_filters
+            != projection_result.provider_filters
+            or retrieval_plan.runtime_only_constraints
+            != projection_result.runtime_only_constraints
+            or any(
+                lane.source_plan_version
+                != str(retrieval_plan.plan_version)
+                for lane in plan.lanes
+            )
+        ):
+            raise RunStageError(
+                "runtime_resume",
+                "runtime_workflow_round_resume_invalid",
+            )
+        job_intent_fingerprint = context.get("jobIntentFingerprint")
+        if (
+            not isinstance(job_intent_fingerprint, str)
+            or job_intent_fingerprint
+            != self._build_job_intent_fingerprint(run_state=run_state)
+        ):
+            raise RunStageError(
+                "runtime_resume",
+                "runtime_workflow_round_resume_invalid",
+            )
+        raw_targets = _required_mapping(context, "sourceRawTargets")
+        source_raw_targets = {
+            key: value
+            for key, value in raw_targets.items()
+            if isinstance(key, str)
+            and isinstance(value, int)
+            and not isinstance(value, bool)
+            and value >= 0
+        }
+        if source_raw_targets != raw_targets or set(source_raw_targets) != {
+            "liepin"
+        }:
+            raise RunStageError(
+                "runtime_resume",
+                "runtime_workflow_round_resume_invalid",
+            )
+        prf_payload = _required_mapping(context, "prfSelection")
+        raw_prf_decision = prf_payload.get("prfDecision")
+        try:
+            prf_decision = (
+                PRFPolicyDecision.model_validate(raw_prf_decision)
+                if isinstance(raw_prf_decision, Mapping)
+                else None
+            )
+        except ValueError:
+            raise RunStageError(
+                "runtime_resume",
+                "runtime_workflow_round_resume_invalid",
+            ) from None
+        if raw_prf_decision is not None and prf_decision is None:
+            raise RunStageError(
+                "runtime_resume",
+                "runtime_workflow_round_resume_invalid",
+            )
+        snapshot_metadata = prf_payload.get("llmPrfSnapshotMetadata")
+        snapshot_metadata_payload: dict[str, object] | None = None
+        if snapshot_metadata is not None:
+            if not isinstance(snapshot_metadata, Mapping):
+                raise RunStageError(
+                    "runtime_resume",
+                    "runtime_workflow_round_resume_invalid",
+                )
+            snapshot_metadata_mapping = cast(
+                Mapping[object, object], snapshot_metadata
+            )
+            if not all(
+                isinstance(key, str)
+                for key in snapshot_metadata_mapping
+            ):
+                raise RunStageError(
+                    "runtime_resume",
+                    "runtime_workflow_round_resume_invalid",
+                )
+            snapshot_metadata_payload = {
+                cast(str, key): value
+                for key, value in snapshot_metadata_mapping.items()
+            }
+        prf_selection = _PRFBackendSelection(
+            prf_decision=prf_decision,
+            prf_probe_proposal_backend=_optional_string(
+                prf_payload,
+                "prfProbeProposalBackend",
+            ),
+            llm_prf_failure_kind=_optional_string(
+                prf_payload,
+                "llmPrfFailureKind",
+            ),
+            llm_prf_input_artifact_ref=_optional_string(
+                prf_payload,
+                "llmPrfInputArtifactRef",
+            ),
+            llm_prf_call_artifact_ref=_optional_string(
+                prf_payload,
+                "llmPrfCallArtifactRef",
+            ),
+            llm_prf_candidates_artifact_ref=_optional_string(
+                prf_payload,
+                "llmPrfCandidatesArtifactRef",
+            ),
+            llm_prf_grounding_artifact_ref=_optional_string(
+                prf_payload,
+                "llmPrfGroundingArtifactRef",
+            ),
+            llm_prf_policy_decision_artifact_ref=_optional_string(
+                prf_payload,
+                "llmPrfPolicyDecisionArtifactRef",
+            ),
+            llm_prf_snapshot_metadata=snapshot_metadata_payload,
+        )
+        query_states = _logical_query_states_from_round_plan(plan)
+        expected_raw_targets = self._source_raw_targets(
+            source_plan=source_plan,
+            query_states=tuple(query_states),
+            target_new=retrieval_plan.target_new,
+        )
+        if source_raw_targets != expected_raw_targets:
+            raise RunStageError(
+                "runtime_resume",
+                "runtime_workflow_round_resume_invalid",
+            )
+        return _ValidatedRecoveredRoundPlan(
+            plan=plan,
+            round_no=expected_round_no,
+            controller_decision=controller_decision,
+            retrieval_plan=retrieval_plan,
+            projection_result=projection_result,
+            query_states=query_states,
+            second_lane_decision=second_lane_decision,
+            prf_selection=prf_selection,
+            job_intent_fingerprint=job_intent_fingerprint,
+            source_raw_targets=source_raw_targets,
+        )
+
+    @staticmethod
+    def _attach_recovered_round_result(
+        *,
+        validated_plan: _ValidatedRecoveredRoundPlan,
+        recovered_source_round: LiepinRoundResumeResult,
+        runtime_run_id: str,
+    ) -> _RecoveredRoundInputs:
+        plan = recovered_source_round.plan
+        lane_result = recovered_source_round.lane_result
+        if (
+            plan != validated_plan.plan
+            or lane_result.runtime_run_id != runtime_run_id
+        ):
+            raise RunStageError(
+                "runtime_resume",
+                "runtime_workflow_round_resume_invalid",
+            )
+        return _RecoveredRoundInputs(
+            round_no=validated_plan.round_no,
+            controller_decision=validated_plan.controller_decision,
+            retrieval_plan=validated_plan.retrieval_plan,
+            projection_result=validated_plan.projection_result,
+            query_states=validated_plan.query_states,
+            second_lane_decision=validated_plan.second_lane_decision,
+            prf_selection=validated_plan.prf_selection,
+            job_intent_fingerprint=(
+                validated_plan.job_intent_fingerprint
+            ),
+            source_raw_targets=validated_plan.source_raw_targets,
+            lane_result=lane_result,
+        )
 
     def _source_query_policies(
         self,

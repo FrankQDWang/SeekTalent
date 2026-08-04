@@ -30,6 +30,9 @@ from seektalent_runtime_control.recovery_state import RecoveryStateAssembler
 from seektalent_runtime_control.store import RuntimeCheckpointLoadFailure, RuntimeControlStore
 from seektalent.wtscli_lifecycle_supervisor import WtsCliLifecycleSupervisor
 from seektalent.source_contracts import SourceRegistry
+from seektalent.source_contracts.detail_open_claims import (
+    DetailOpenClaimLedger,
+)
 
 SourceContext = dict[str, str | int | bool | None]
 SourceContextProvider = Callable[[Sequence[str], AppSettings | None], SourceContext | None]
@@ -271,6 +274,14 @@ class WorkflowRuntimeExecutor:
             attempt_no=attempt_no,
             claim_reason=claim_reason,
         )
+        resume_workflow_lanes = (
+            self.store.get_workflow_round_resume_lanes(
+                runtime_run_id=run.runtime_run_id,
+                base_checkpoint_id=resume_checkpoint.checkpoint_id,
+            )
+            if resume_checkpoint is not None
+            else ()
+        )
         projected_requirement_revision_id = (
             resume_checkpoint.accepted_requirement_revision_id
             if resume_checkpoint is not None
@@ -314,11 +325,22 @@ class WorkflowRuntimeExecutor:
         def runtime_start_callback(workflow_runtime_run_id: str) -> None:
             nonlocal runtime_started
             runtime_started = True
+            start_stage = (
+                resume_checkpoint.stage
+                if resume_checkpoint is not None
+                else "startup"
+            )
+            start_round = (
+                resume_checkpoint.round_no
+                if resume_checkpoint is not None
+                else None
+            )
             self.store.append_executor_event(
                 _event(
                     runtime_run_id=run.runtime_run_id,
                     event_type="runtime_executor_started",
-                    stage="startup",
+                    stage=start_stage,
+                    round_no=start_round,
                     status="completed",
                     summary="executor started",
                     payload={"executorId": executor_id, "workflowRuntimeRunId": workflow_runtime_run_id},
@@ -458,6 +480,41 @@ class WorkflowRuntimeExecutor:
             approved = target
             projected_requirement_revision_id = target.approved_requirement_revision_id
 
+        def runtime_source_workflow_prepare_callback(
+            resume_lanes: object,
+        ) -> object:
+            if liepin_operation_executor is None:
+                raise RuntimeControlError(
+                    "runtime_source_workflow_resumer_missing"
+                )
+            from seektalent.sources.liepin.runtime_lane import (
+                prepare_liepin_round_work_plan_resume,
+            )
+
+            return prepare_liepin_round_work_plan_resume(
+                resume_lanes=resume_lanes,
+                cards_operation_executor=liepin_operation_executor,
+            )
+
+        async def runtime_source_workflow_resume_callback(
+            prepared_resume: object,
+            detail_open_claim_ledger: DetailOpenClaimLedger,
+        ) -> object:
+            if liepin_operation_executor is None or self.settings is None:
+                raise RuntimeControlError(
+                    "runtime_source_workflow_resumer_missing"
+                )
+            from seektalent.sources.liepin.runtime_lane import (
+                resume_liepin_round_work_plan,
+            )
+
+            return await resume_liepin_round_work_plan(
+                settings=self.settings,
+                prepared_resume=prepared_resume,
+                detail_open_claim_ledger=detail_open_claim_ledger,
+                cards_operation_executor=liepin_operation_executor,
+            )
+
         try:
             runtime_kwargs: dict[str, object] = {
                 "job_title": resolved_job_title,
@@ -469,15 +526,26 @@ class WorkflowRuntimeExecutor:
                 "runtime_checkpoint_callback": runtime_checkpoint_callback,
                 "approved_requirement_sheet": approved.requirement_sheet,
             }
+            if _runtime_accepts_keyword(runtime, "runtime_run_id"):
+                runtime_kwargs["runtime_run_id"] = run.runtime_run_id
             if resolved_source_context is not None:
                 runtime_kwargs["source_context"] = resolved_source_context
-            if _runtime_accepts_round_boundary_callback(runtime):
+            if _runtime_accepts_keyword(
+                runtime,
+                "runtime_round_boundary_callback",
+            ):
                 runtime_kwargs["runtime_round_boundary_callback"] = runtime_round_boundary_callback
-            if _runtime_accepts_round_boundary_commit_callback(runtime):
+            if _runtime_accepts_keyword(
+                runtime,
+                "runtime_round_boundary_commit_callback",
+            ):
                 runtime_kwargs[
                     "runtime_round_boundary_commit_callback"
                 ] = runtime_round_boundary_commit_callback
-            if _runtime_accepts_detail_claim_callback(runtime):
+            if _runtime_accepts_keyword(
+                runtime,
+                "runtime_detail_claim_callback",
+            ):
                 runtime_kwargs[
                     "runtime_detail_claim_callback"
                 ] = runtime_detail_claim_callback
@@ -521,6 +589,40 @@ class WorkflowRuntimeExecutor:
                     .assemble(resume_checkpoint)
                     .model_dump(mode="json")
                 )
+                if resume_workflow_lanes:
+                    if not _runtime_accepts_keyword(
+                        runtime,
+                        "resume_workflow_transitions",
+                    ):
+                        raise RuntimeControlError(
+                            "runtime_source_workflow_resumer_missing"
+                        )
+                    if not _runtime_accepts_keyword(
+                        runtime,
+                        "runtime_source_workflow_resume_callback",
+                    ):
+                        raise RuntimeControlError(
+                            "runtime_source_workflow_resumer_missing"
+                        )
+                    if not _runtime_accepts_keyword(
+                        runtime,
+                        "runtime_source_workflow_prepare_callback",
+                    ):
+                        raise RuntimeControlError(
+                            "runtime_source_workflow_preparer_missing"
+                        )
+                    runtime_kwargs[
+                        "resume_workflow_transitions"
+                    ] = [
+                        lane.resume_payload()
+                        for lane in resume_workflow_lanes
+                    ]
+                    runtime_kwargs[
+                        "runtime_source_workflow_prepare_callback"
+                    ] = runtime_source_workflow_prepare_callback
+                    runtime_kwargs[
+                        "runtime_source_workflow_resume_callback"
+                    ] = runtime_source_workflow_resume_callback
             await run_async(**runtime_kwargs)
         except BrowserLaneBusyError as exc:
             if liepin_operation_executor is not None:
@@ -564,6 +666,38 @@ class WorkflowRuntimeExecutor:
                     liepin_operation_executor,
                     runtime_run_id=run.runtime_run_id,
                     primary_error=exc,
+                )
+            if self.store.has_source_operations_requiring_reconciliation(
+                run.runtime_run_id
+            ):
+                yielded_at = self.now()
+                return self.store.yield_executor_for_automatic_source_reconciliation(
+                    event=_event(
+                        runtime_run_id=run.runtime_run_id,
+                        event_type=(
+                            "runtime_source_reconciliation_required"
+                        ),
+                        stage="source_reconciliation",
+                        status="resume_requested",
+                        summary=(
+                            "source operation requires durable reconciliation"
+                        ),
+                        payload={
+                            "reasonCode": (
+                                "runtime_source_operation_unresolved"
+                            ),
+                        },
+                        created_at=yielded_at,
+                        round_no=self.store.get_run(
+                            run.runtime_run_id
+                        ).current_round,
+                        idempotency_key=(
+                            "runtime-source-reconciliation-required:"
+                            f"{run.runtime_run_id}:{attempt_no}"
+                        ),
+                    ),
+                    executor_id=executor_id,
+                    attempt_no=attempt_no,
                 )
             reason_code = "runtime_run_failed" if runtime_started else "runtime_executor_start_failed"
             self._record_execution_failure_safely(
@@ -958,32 +1092,12 @@ def _runtime_accepts_resume_context(runtime: object) -> bool:
     return any(parameter.kind == Parameter.VAR_KEYWORD for parameter in parameters.values())
 
 
-def _runtime_accepts_round_boundary_callback(runtime: object) -> bool:
+def _runtime_accepts_keyword(runtime: object, keyword: str) -> bool:
     run_async = getattr(runtime, "run_async", None)
     if not callable(run_async):
         return False
     parameters = signature(run_async).parameters
-    if "runtime_round_boundary_callback" in parameters:
-        return True
-    return any(parameter.kind == Parameter.VAR_KEYWORD for parameter in parameters.values())
-
-
-def _runtime_accepts_round_boundary_commit_callback(runtime: object) -> bool:
-    run_async = getattr(runtime, "run_async", None)
-    if not callable(run_async):
-        return False
-    parameters = signature(run_async).parameters
-    if "runtime_round_boundary_commit_callback" in parameters:
-        return True
-    return any(parameter.kind == Parameter.VAR_KEYWORD for parameter in parameters.values())
-
-
-def _runtime_accepts_detail_claim_callback(runtime: object) -> bool:
-    run_async = getattr(runtime, "run_async", None)
-    if not callable(run_async):
-        return False
-    parameters = signature(run_async).parameters
-    if "runtime_detail_claim_callback" in parameters:
+    if keyword in parameters:
         return True
     return any(
         parameter.kind == Parameter.VAR_KEYWORD

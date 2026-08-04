@@ -84,7 +84,8 @@ def test_source_neutral_expander_provider_forwards_action_and_maps_result(monkey
     assert result is expected
     assert calls == [{"settings": settings, "request": request,
         "detail_open_claim_ledger": ledger,
-        "cards_operation_executor": source_operation_executor}]
+        "cards_operation_executor": source_operation_executor,
+        "worker_client": None}]
 
 
 def _requirement_sheet() -> RequirementSheet:

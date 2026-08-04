@@ -125,6 +125,7 @@ def _registered_liepin_source(
                 request=request,
                 source_id="liepin",
                 cards_operation_executor=operation_executor,
+                worker_client=worker_client,
             )
 
         return run
@@ -138,6 +139,7 @@ def _registered_liepin_source(
                 request=request,
                 detail_open_claim_ledger=detail_open_claim_ledger,
                 cards_operation_executor=operation_executor,
+                worker_client=worker_client,
             )
 
         return expand

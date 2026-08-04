@@ -28,8 +28,22 @@ from seektalent.source_port.liepin_cards_artifacts import (
 )
 from seektalent.source_port.liepin_details_contract import (
     LiepinDetailsOperationRequestV1,
+    canonical_liepin_details_request_hash,
     stable_liepin_details_operation_id,
 )
+from seektalent.source_port.liepin_details_request_artifacts import (
+    write_liepin_details_request_artifact,
+)
+from seektalent.source_port.liepin_detail_work_plan_artifacts import (
+    LiepinDetailWorkItemV1,
+    LiepinDetailWorkPlanV1,
+    write_liepin_detail_work_plan_artifact,
+)
+from seektalent.source_port.liepin_round_work_plan_artifacts import (
+    LiepinRoundLaneWorkItemV1,
+    LiepinRoundWorkPlanV1,
+)
+from seektalent.source_port.wire_primitives import canonical_json_bytes
 from seektalent.liepin_cards_source_operation import (
     LiepinCardsSourceOperationExecutor,
     _HistoryUnknown,
@@ -136,6 +150,269 @@ def _details_request(**updates: object) -> LiepinDetailsOperationRequestV1:
     return LiepinDetailsOperationRequestV1.model_validate(payload, strict=True)
 
 
+def test_cards_effect_requires_durable_source_transition(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = AppSettings(
+        _env_file=None,
+        workspace_root=str(tmp_path),
+        runtime_control_path=str(
+            tmp_path / "runtime_control.sqlite3"
+        ),
+    )
+    store = RuntimeControlStore(settings.runtime_control_path)
+    store.initialize()
+    executor = LiepinCardsSourceOperationExecutor(
+        settings=settings,
+        store=store,
+        runtime_run_id="run-without-transition",
+        executor_id="executor-without-transition",
+        attempt_no=1,
+        accepted_requirement_revision_id="approved-1",
+        runtime_attempt_authority_ref="authority-without-transition",
+    )
+    external_calls: list[str] = []
+    monkeypatch.setattr(
+        executor,
+        "_execute_with_lane",
+        lambda _request: external_calls.append("called"),
+    )
+
+    with pytest.raises(
+        RuntimeControlError,
+        match="runtime_source_dispatch_checkpoint_missing",
+    ):
+        executor._execute(
+            _request(runtime_run_id="run-without-transition")
+        )
+
+    assert external_calls == []
+    assert store.get_browser_lane() is None
+
+
+def _bind_single_lane_round(
+    executor: LiepinCardsSourceOperationExecutor,
+    store: RuntimeControlStore,
+    request: LiepinCardsOperationRequestV1,
+) -> None:
+    store.write_checkpoint_v2(
+        checkpoint_id="checkpoint-before-controller",
+        runtime_run_id=request.runtime_run_id,
+        executor_id="executor-1",
+        attempt_no=1,
+        stage="round",
+        round_no=1,
+        safe_boundary="before_round_controller",
+        accepted_requirement_revision_id="approved-1",
+        source_ids=["liepin"],
+        projection=checkpoint_projection(_run_state()),
+        detail_claim_revision=0,
+        detail_claim_hash=None,
+        continuation_cursor={
+            "nextPhase": "rounds",
+            "completedRounds": 0,
+            "stopReason": "max_rounds_reached",
+        },
+        created_at="2026-07-28T00:00:01.000000Z",
+    )
+    with store._connect() as connection:
+        connection.execute(
+            """
+            UPDATE runtime_control_executor_leases
+            SET lease_expires_at = '2099-01-01T00:00:00.000000Z'
+            WHERE runtime_run_id = ? AND executor_id = 'executor-1'
+            """,
+            (request.runtime_run_id,),
+        )
+    request_hash = canonical_liepin_cards_request_hash(request)
+    executor.bind_round_work_plan(
+        LiepinRoundWorkPlanV1(
+            contract_version=(
+                "seektalent.source.liepin-round-work-plan/v1"
+            ),
+            runtime_run_id=request.runtime_run_id,
+            base_checkpoint_id="checkpoint-before-controller",
+            accepted_requirement_revision_id="approved-1",
+            requirement_sheet_hash=sha256(
+                canonical_json_bytes({})
+            ).hexdigest(),
+            source_plan_id=f"{request.runtime_run_id}:source:1:liepin",
+            round_no=1,
+            job_title="AI Agent Engineer",
+            jd="Build reliable agent systems.",
+            notes="",
+            requirement_sheet={},
+            source_context={},
+            source_budget_policy={},
+            resume_context={
+                "controllerDecision": {},
+                "retrievalPlan": {},
+                "constraintProjectionResult": {},
+                "secondLaneDecision": {},
+                "prfSelection": {},
+                "jobIntentFingerprint": "test",
+                "sourceRawTargets": {"liepin": request.max_cards},
+            },
+            detail_claim_aware=True,
+            lanes=(
+                LiepinRoundLaneWorkItemV1(
+                    lane_ordinal=1,
+                    logical_query_ordinal=1,
+                    target_ordinal=1,
+                    source_lane_run_id=request.source_lane_run_id,
+                    query_instance_id=request.query_instance_id,
+                    query_fingerprint=request_hash,
+                    query_role="exploit",
+                    lane_type="logical_query",
+                    term_group_key="primary",
+                    primary_anchor_family_id="role.agent-engineer",
+                    non_anchor_term_family_ids=(),
+                    source_plan_version="source-plan/v1",
+                    logical_query_terms=(request.keyword_query,),
+                    query_terms=(request.keyword_query,),
+                    keyword_query=request.keyword_query,
+                    logical_target_total=request.max_cards,
+                    logical_requested_count=request.max_cards,
+                    provider_scan_limit=request.max_cards,
+                ),
+            ),
+        )
+    )
+
+
+def _queue_single_detail_for_test(
+    executor: LiepinCardsSourceOperationExecutor,
+    store: RuntimeControlStore,
+    request: LiepinDetailsOperationRequestV1,
+) -> None:
+    cards_request = _request(
+        runtime_run_id=request.runtime_run_id,
+        source_lane_run_id=request.source_lane_run_id,
+        query_instance_id=request.query_instance_id,
+    )
+    _bind_single_lane_round(executor, store, cards_request)
+    executor._ensure_source_dispatch_transition(cards_request)
+    cards_hash = "c" * 64
+    cards_ref = f"liepin-cards://sha256/{cards_hash}"
+    plan = LiepinDetailWorkPlanV1(
+        contract_version="seektalent.source.liepin-detail-work-plan/v1",
+        runtime_run_id=request.runtime_run_id,
+        source_plan_id=f"{request.runtime_run_id}:source:1:liepin",
+        source_lane_run_id=request.source_lane_run_id,
+        round_no=1,
+        query_instance_id=request.query_instance_id,
+        query_fingerprint=canonical_liepin_cards_request_hash(cards_request),
+        query_role="exploit",
+        query_terms=(cards_request.keyword_query,),
+        keyword_query=cards_request.keyword_query,
+        requested_count=1,
+        max_pages=1,
+        max_cards=1,
+        phase="captures",
+        claim_aware=True,
+        cards_artifact_ref=cards_ref,
+        cards_artifact_hash=cards_hash,
+        items=(
+            LiepinDetailWorkItemV1(
+                rank=request.rank,
+                card_ref=request.card_ref,
+                provider_candidate_key_hash=(
+                    request.provider_candidate_key_hash
+                ),
+            ),
+        ),
+    )
+    plan_write = write_liepin_detail_work_plan_artifact(
+        executor._detail_work_plan_artifact_root,
+        plan,
+    )
+    request_write = write_liepin_details_request_artifact(
+        executor._details_request_artifact_root,
+        request,
+    )
+    store.write_workflow_transition(
+        runtime_run_id=request.runtime_run_id,
+        source_lane_run_id=request.source_lane_run_id,
+        query_instance_id=request.query_instance_id,
+        executor_id="executor-1",
+        attempt_no=1,
+        round_no=1,
+        step_kind="detail_queued",
+        continuation={
+            "schemaVersion": "runtime-detail-queued-continuation/v1",
+            "operationId": stable_liepin_details_operation_id(request),
+            "requestHash": canonical_liepin_details_request_hash(request),
+            "requestArtifactRef": request_write.artifact_ref,
+            "workPlanArtifactRef": plan_write.artifact_ref,
+            "workPlanHash": plan_write.artifact_hash,
+            "workPlanPhase": "captures",
+            "detailCursor": 0,
+            "detailCompletedHighWatermark": -1,
+            "cardsArtifactRef": cards_ref,
+        },
+        artifact_refs=(
+            cards_ref,
+            request_write.artifact_ref,
+            plan_write.artifact_ref,
+        ),
+        source_operation_ids=(),
+        created_at="2026-07-28T00:00:03.000000Z",
+    )
+
+
+def test_details_effect_rejects_source_lane_without_durable_work_plan(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    store = _seed_running_store(tmp_path)
+    executor = LiepinCardsSourceOperationExecutor(
+        settings=AppSettings(
+            _env_file=None,
+            workspace_root=str(tmp_path),
+            runtime_control_path=str(store.path),
+        ),
+        store=store,
+        runtime_run_id="runtime_run_1",
+        executor_id="executor-1",
+        attempt_no=1,
+        accepted_requirement_revision_id="approved-1",
+        runtime_attempt_authority_ref="runtime_attempt_authority_ref_1",
+    )
+    request = _details_request()
+    cards_request = _request(
+        runtime_run_id=request.runtime_run_id,
+        source_lane_run_id=request.source_lane_run_id,
+        query_instance_id=request.query_instance_id,
+    )
+    _bind_single_lane_round(executor, store, cards_request)
+    executor._ensure_source_dispatch_transition(cards_request)
+    external_calls: list[str] = []
+    monkeypatch.setattr(
+        executor,
+        "_ready_source_process",
+        lambda: external_calls.append("readiness"),
+    )
+    monkeypatch.setattr(
+        executor,
+        "_exchange_details",
+        lambda _submit: external_calls.append("exchange"),
+    )
+
+    with pytest.raises(
+        RuntimeControlError,
+        match="runtime_detail_work_plan_context_missing",
+    ):
+        executor._execute_details(request)
+
+    assert external_calls == []
+    with pytest.raises(RuntimeControlLookupError):
+        store.get_source_operation(
+            request.runtime_run_id,
+            stable_liepin_details_operation_id(request),
+        )
+
+
 def test_cards_operation_identity_and_hash_are_stable_across_delivery_attempts() -> None:
     request = _request()
 
@@ -207,6 +484,7 @@ def test_new_cards_operation_requires_ready_effect_sidecar_before_acceptance(
             "runtime_run_1:source:1:liepin:round:1:lane:1"
         ),
     )
+    _bind_single_lane_round(executor, store, request)
     history_queries: list[str] = []
 
     def fail_readiness():
@@ -252,6 +530,7 @@ def test_new_details_operation_requires_ready_effect_sidecar_before_acceptance(
         runtime_attempt_authority_ref="runtime_attempt_authority_ref_1",
     )
     request = _details_request()
+    _queue_single_detail_for_test(executor, store, request)
     history_queries: list[str] = []
 
     def fail_readiness():
@@ -577,6 +856,21 @@ def test_cards_artifact_is_content_addressed_private_and_durable(
         tmp_path / "artifacts",
         artifact_ref,
         expected_hash=artifact_hash,
+    ) == artifact
+
+    path.write_bytes(b"truncated-final")
+    repaired_ref, repaired_hash = write_liepin_cards_artifact(
+        tmp_path / "artifacts",
+        artifact,
+    )
+    assert (repaired_ref, repaired_hash) == (
+        artifact_ref,
+        artifact_hash,
+    )
+    assert read_liepin_cards_artifact(
+        tmp_path / "artifacts",
+        repaired_ref,
+        expected_hash=repaired_hash,
     ) == artifact
 
 
@@ -1497,6 +1791,7 @@ def test_terminal_with_unavailable_artifact_is_source_scoped_and_never_reexecute
         runtime_run_id="runtime_run_1",
         source_lane_run_id="runtime_run_1:source:1:liepin:round:1:lane:1",
     )
+    _bind_single_lane_round(executor, store, request)
     identity = executor._identity(
         request,
         operation_id=stable_liepin_cards_operation_id(request),
@@ -1596,6 +1891,7 @@ def test_history_transport_failure_is_source_scoped_and_durably_reconcile_first(
         runtime_run_id="runtime_run_1",
         source_lane_run_id="runtime_run_1:source:1:liepin:round:1:lane:1",
     )
+    _bind_single_lane_round(executor, store, request)
     effects: list[str] = []
 
     def fail_exchange(_submit):
@@ -1670,6 +1966,7 @@ def test_lost_sidecar_journal_cannot_readmit_reconciled_operation_effect(
         runtime_run_id="runtime_run_1",
         source_lane_run_id="runtime_run_1:source:1:liepin:round:1:lane:1",
     )
+    _bind_single_lane_round(executor, store, request)
     counter_path = tmp_path / "effect-count"
     transport_attempts: list[str] = []
     monkeypatch.setattr(

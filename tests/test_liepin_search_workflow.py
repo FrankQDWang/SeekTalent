@@ -333,6 +333,17 @@ class FakeLiepinSearchWorkflowSite:
     )
     search_cards_seen: int | None = None
 
+    def bind_liepin_detail_work_plan(
+        self,
+        *,
+        source_run_id: str,
+        phase: str,
+        items: Sequence[tuple[int, str, str | None]],
+        target_resumes: int,
+        claim_aware: bool,
+    ) -> None:
+        del source_run_id, phase, items, target_resumes, claim_aware
+
     def save_liepin_first_page_continuation(self, *, source_run_id: str, logical_round_no: int,
         query_instance_id: str, keyword_query: str, visible_candidate_count: int,
         candidates: Sequence[LiepinFirstPageCandidate]) -> ProviderSearchContinuation:
@@ -1744,6 +1755,80 @@ def test_workflow_reconciliation_unknown_does_not_auto_repeat_open() -> None:
     assert site.open_authorizations == 1
     assert ledger.snapshot()[key].status == "terminal_failed"
     assert ledger.snapshot()[key].browser_open_attempt_count == 1
+
+
+def test_workflow_locator_unknown_stops_before_next_candidate_or_capture() -> None:
+    class UnknownFirstLocatorSite(FakeLiepinSearchWorkflowSite):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__(**kwargs)
+            self.locator_ranks: list[int] = []
+
+        def run_liepin_details_operation(
+            self,
+            *,
+            source_run_id: str,
+            card_ref: str,
+            rank: int,
+            open_mode: str,
+            provider_candidate_key_hash: str | None = None,
+            expected_provider_candidate_key_hash: str | None = None,
+        ) -> tuple[dict[str, object], OpenCliBrowserResult]:
+            if open_mode == "resolve_locator":
+                self.calls.append(
+                    "run_liepin_details_operation:resolve_locator"
+                )
+                self.locator_ranks.append(rank)
+                return (
+                    {
+                        "status": "failed",
+                        "detail_url": None,
+                        "provider_candidate_key_hash": None,
+                        "action_attempted": 1,
+                        "effect_posture": "unknown",
+                        "safe_reason_code": (
+                            "liepin_details_reconciliation_unknown"
+                        ),
+                    },
+                    OpenCliBrowserResult(
+                        ok=False,
+                        action="resolve_locator",
+                        safe_reason_code=(
+                            "liepin_details_reconciliation_unknown"
+                        ),
+                        counts={"rank": rank, "action_attempted": 1},
+                    ),
+                )
+            return super().run_liepin_details_operation(
+                source_run_id=source_run_id,
+                card_ref=card_ref,
+                rank=rank,
+                open_mode=open_mode,
+                provider_candidate_key_hash=provider_candidate_key_hash,
+                expected_provider_candidate_key_hash=(
+                    expected_provider_candidate_key_hash
+                ),
+            )
+
+    site = UnknownFirstLocatorSite(
+        structured_cards=[
+            [
+                {"ref": "70", "provider_rank": 1},
+                {"ref": "71", "provider_rank": 2},
+            ]
+        ],
+    )
+
+    envelope = LiepinSearchWorkflow(
+        site=site
+    ).search_detail_backed_resumes(_request(target_resumes=2))
+
+    assert envelope["status"] == "blocked"
+    assert (
+        envelope["safe_reason_code"]
+        == "liepin_details_reconciliation_unknown"
+    )
+    assert site.locator_ranks == [1]
+    assert _details_op_calls(site, "cached_locator") == 0
 
 
 def test_workflow_retries_same_detail_open_after_refreshing_search_state() -> None:
