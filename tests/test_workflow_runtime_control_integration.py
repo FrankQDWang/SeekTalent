@@ -2,11 +2,79 @@ from __future__ import annotations
 
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 
 from seektalent.models import QueryTermCandidate, RequirementSheet
 from seektalent.progress import ProgressEvent
 from seektalent.runtime.public_events import make_runtime_public_event
 from tests.settings_factory import make_settings
+
+
+def test_unknown_source_effect_yields_same_run_for_automatic_reconciliation(
+    tmp_path: Path,
+) -> None:
+    from seektalent_runtime_control.executor import WorkflowRuntimeExecutor
+    from seektalent_runtime_control.store import RuntimeControlStore
+    from tests.test_runtime_multi_source_round_dispatch import _run_state
+
+    store = RuntimeControlStore(tmp_path / "runtime_control.sqlite3")
+    store.initialize()
+    runtime = UnknownSourceEffectRuntime(store, _run_state())
+    executor = WorkflowRuntimeExecutor(
+        store=store,
+        runtime_factory=lambda *, source_registry=None: runtime,
+        runtime_run_id_factory=lambda: "runtime_run_detail_resume",
+        executor_id_factory=lambda: "executor_detail_1",
+        checkpoint_id_factory=lambda: "checkpoint_before_round_controller",
+        now=lambda: "2026-08-04T00:00:00.000000Z",
+    )
+
+    run = asyncio.run(
+        executor.start_workflow(
+            conversation_id="agent_conv_detail_resume",
+            workbench_session_id="workbench_detail_resume",
+            approved_requirement=_approved_requirement(),
+            job_title="Senior Python Engineer",
+            jd_text="Build search systems.",
+            notes=None,
+            source_ids=["liepin"],
+        )
+    )
+
+    assert run.runtime_run_id == "runtime_run_detail_resume"
+    assert run.status == "resume_requested"
+    assert run.completed_at is None
+    assert run.latest_checkpoint_id == "checkpoint_before_round_controller"
+    assert run.current_action_id is None
+    assert store.list_user_actions(runtime_run_id=run.runtime_run_id) == []
+    operation = store.get_source_operation(
+        run.runtime_run_id,
+        "source_operation_detail_1",
+    )
+    assert operation.operation_phase == "reconciled"
+    assert operation.retry_posture == "reconcile_first"
+    with store._connect() as conn:
+        lease = conn.execute(
+            """
+            SELECT status, reason_code
+            FROM runtime_control_executor_leases
+            WHERE runtime_run_id = ?
+            """,
+            (run.runtime_run_id,),
+        ).fetchone()
+    assert tuple(lease) == (
+        "revoked",
+        "runtime_source_operation_unresolved",
+    )
+    events = store.list_events(
+        runtime_run_id=run.runtime_run_id,
+        after_seq=0,
+        limit=20,
+    ).events
+    assert "runtime_run_failed" not in {
+        event.event_type for event in events
+    }
+    assert events[-1].event_type == "runtime_source_reconciliation_required"
 
 
 def test_enqueue_uses_atomic_acceptance_and_replays_without_duplicate_event(tmp_path: Path, monkeypatch) -> None:
@@ -314,6 +382,78 @@ class PublicProgressRuntime:
                 counts={"selectedIdentityCount": 2},
             ),
         ]
+
+
+class UnknownSourceEffectRuntime:
+    def __init__(self, store, run_state) -> None:  # type: ignore[no-untyped-def]
+        self.store = store
+        self.run_state = run_state
+
+    async def run_async(self, **kwargs: object) -> object:
+        from seektalent_runtime_control.errors import RuntimeControlError
+
+        runtime_start_callback = kwargs["runtime_start_callback"]
+        runtime_checkpoint_callback = kwargs[
+            "runtime_checkpoint_callback"
+        ]
+        assert callable(runtime_start_callback)
+        assert callable(runtime_checkpoint_callback)
+        runtime_start_callback("workflow_detail_resume")
+        runtime_checkpoint_callback(
+            SimpleNamespace(
+                stage="round",
+                round_no=1,
+                safe_boundary="before_round_controller",
+                run_state=self.run_state,
+                continuation_cursor={
+                    "nextPhase": "rounds",
+                    "completedRounds": 0,
+                    "stopReason": "max_rounds_reached",
+                },
+            )
+        )
+        self.store.accept_source_operation(
+            runtime_run_id="runtime_run_detail_resume",
+            operation_id="source_operation_detail_1",
+            source_id="liepin",
+            operation_kind="details",
+            canonical_request_hash="a" * 64,
+            idempotency_key="detail-source-key-1",
+            accepted_requirement_revision_id="reqapproved_1",
+            runtime_attempt_no=1,
+            runtime_attempt_authority_ref=(
+                "executor-lease://runtime_run_detail_resume/1"
+            ),
+            runtime_attempt_fence_ref="b" * 64,
+            profile_binding_generation=1,
+            browser_control_scope_id="browser-scope-detail-1",
+            controller_fence_ref="c" * 64,
+            outbox_id="source_outbox_detail_1",
+            dispatch_intent_id="dispatch_intent_detail_1",
+            dispatch_intent_revision=1,
+            dispatch_intent_digest="d" * 64,
+            dispatch_authorization_ordinal=1,
+            source_operation_acceptance_ref=(
+                "source-acceptance://runtime_run_detail_resume/detail-1"
+            ),
+            expected_ledger_revision=1,
+            expected_reconciliation_revision=0,
+        )
+        self.store.record_owned_source_reconciliation_unknown(
+            runtime_run_id="runtime_run_detail_resume",
+            operation_id="source_operation_detail_1",
+            executor_id="executor_detail_1",
+            attempt_no=1,
+            expected_ledger_revision=1,
+            expected_reconciliation_revision=0,
+            history_result_ref="sha256:" + "e" * 64,
+            history_result_digest="e" * 64,
+            history_outcome="history_unavailable",
+            history_conclusion=None,
+            dispatch_intent_ref=None,
+            committed_at="2026-08-04T00:00:00.000000Z",
+        )
+        raise RuntimeControlError("liepin_details_reconciliation_unknown")
 
 
 class BoundaryCallbackRuntime:

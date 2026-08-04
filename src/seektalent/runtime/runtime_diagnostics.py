@@ -624,7 +624,15 @@ def collect_llm_schema_pressure(run_dir: Path) -> list[dict[str, object]]:
     except ValueError:
         return []
     pressure: list[dict[str, object]] = []
-    pressure.append(_llm_schema_pressure_item(json.loads(resolver.resolve("runtime.requirements_call").read_text(encoding="utf-8"))))
+    requirements_call = resolver.resolve_optional(
+        "runtime.requirements_call"
+    )
+    if requirements_call is not None and requirements_call.exists():
+        pressure.append(
+            _llm_schema_pressure_item(
+                json.loads(requirements_call.read_text(encoding="utf-8"))
+            )
+        )
     repair_requirements_call = resolver.resolve_optional("runtime.repair_requirements_call")
     if repair_requirements_call is not None and repair_requirements_call.exists():
         pressure.append(_llm_schema_pressure_item(json.loads(repair_requirements_call.read_text(encoding="utf-8"))))

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
+import hashlib
 from typing import cast
 import re
 
@@ -12,6 +13,9 @@ from seektalent.providers.liepin.detail_payload_text import (
     structured_liepin_detail_text,
 )
 from seektalent.providers.liepin.models import LiepinScoreEvidenceSource
+from seektalent.providers.liepin.liepin_site_parsing import (
+    canonical_liepin_detail_source_url,
+)
 from seektalent.providers.liepin.worker_contracts import (
     LiepinSafeCardSummary,
     LiepinWorkerCandidateCard,
@@ -19,6 +23,7 @@ from seektalent.providers.liepin.worker_contracts import (
     find_liepin_card_payload_text_tail_alias_paths,
 )
 from seektalent.storage.json import sha256_json
+from seektalent.source_references import SourceReference
 
 
 @dataclass(frozen=True)
@@ -29,6 +34,23 @@ class LiepinMappedCandidate:
 
 LiepinWorkerCandidate = LiepinWorkerCandidateCard | LiepinWorkerCandidateDetail
 STRUCTURED_CARD_SEARCH_TEXT_MAX_CHARS = 4000
+_PRIVATE_DETAIL_TRANSPORT_KEYS = frozenset(
+    {
+        "actiontraceref",
+        "detailurl",
+        "normalizedsnapshotref",
+        "protectedsnapshotref",
+        "providercandidatekeyhash",
+        "provider_candidate_key_hash",
+        "provider_candidate_key_material_ref",
+        "providerrank",
+        "provider_rank",
+        "res_id_encode",
+        "source_url",
+        "sourceurl",
+        "url",
+    }
+)
 
 
 def _safe_raw(
@@ -149,6 +171,192 @@ def map_liepin_worker_detail(
         score_evidence_source="detail_enriched",
         raw_payload_artifact_ref=raw_payload_artifact_ref,
     )
+
+
+def liepin_worker_detail_from_resume_payload(
+    resume: Mapping[str, object],
+    *,
+    action_trace_ref: object,
+) -> LiepinWorkerCandidateDetail:
+    """Build the provider detail model from one validated resume artifact."""
+    claim_aware = resume.get("claim_aware") is True
+    if claim_aware:
+        payload = _public_detail_payload(resume.get("detail_payload"))
+        provider_candidate_hash = _provider_candidate_hash(
+            resume,
+            claim_aware=True,
+        )
+        synthetic_fingerprint, presentation_resume_id = (
+            _claim_aware_identity_tokens(provider_candidate_hash)
+        )
+        detail = LiepinWorkerCandidateDetail(
+            payload=payload,
+            normalized_text=structured_liepin_detail_text(payload),
+            provider_subject_id=None,
+            provider_listing_id=None,
+            synthetic_candidate_fingerprint=synthetic_fingerprint,
+            identity_confidence="synthetic_fingerprint",
+            extraction_source="dom_fallback",
+            extractor_version="liepin-opencli-deterministic-v1",
+            pii_classification="no_direct_contact",
+            retention_policy="provider_snapshot_7d",
+            access_scope="local_run_only",
+            redaction_state="raw_provider_payload",
+        )
+        detail._opencli_private_candidate_identity = True
+        detail._opencli_claim_aware_candidate_identity = True
+        detail._opencli_presentation_resume_id = presentation_resume_id
+        source_url = _private_claim_aware_source_url(
+            resume.get("detail_payload")
+        )
+        if source_url is not None:
+            detail._source_references = (
+                SourceReference(
+                    source_kind="liepin",
+                    display_label="猎聘",
+                    url=source_url,
+                ),
+            )
+        return detail
+
+    provider_rank = _positive_int(
+        resume.get("provider_rank"),
+        default=0,
+    )
+    payload = dict(
+        cast(Mapping[str, object], resume.get("detail_payload") or {})
+    )
+    provider_candidate_hash = _provider_candidate_hash(
+        resume,
+        claim_aware=False,
+    )
+    payload["providerCandidateKeyHash"] = provider_candidate_hash
+    payload["providerRank"] = provider_rank
+    payload["protectedSnapshotRef"] = resume.get("protected_snapshot_ref")
+    payload["normalizedSnapshotRef"] = resume.get("normalized_snapshot_ref")
+    payload["actionTraceRef"] = (
+        resume.get("action_trace_ref") or action_trace_ref
+    )
+    normalized_text = structured_liepin_detail_text(payload)
+    fingerprint = hashlib.sha256(
+        f"liepin-opencli:{provider_candidate_hash}".encode()
+    ).hexdigest()
+    return LiepinWorkerCandidateDetail(
+        payload=payload,
+        normalized_text=normalized_text,
+        provider_subject_id=provider_candidate_hash,
+        provider_listing_id=None,
+        synthetic_candidate_fingerprint=fingerprint,
+        identity_confidence="provider_subject_id",
+        extraction_source="dom_fallback",
+        extractor_version="liepin-opencli-deterministic-v1",
+        pii_classification="no_direct_contact",
+        retention_policy="provider_snapshot_7d",
+        access_scope="local_run_only",
+        redaction_state="raw_provider_payload",
+    )
+
+
+def _positive_int(value: object, *, default: int) -> int:
+    if isinstance(value, int):
+        return value if value > 0 else default
+    if isinstance(value, str):
+        try:
+            parsed = int(value)
+        except ValueError:
+            return default
+        return parsed if parsed > 0 else default
+    return default
+
+
+def _provider_candidate_hash(
+    resume: Mapping[str, object],
+    *,
+    claim_aware: bool,
+) -> str:
+    if claim_aware:
+        carried_key_hash = resume.get("provider_candidate_key_hash")
+        if _is_provider_candidate_key_hash(carried_key_hash):
+            return cast(str, carried_key_hash)
+        raise RuntimeError("liepin_opencli_candidate_identity_mismatch")
+    material = str(
+        resume.get("provider_candidate_key_material_ref")
+        or resume.get("candidate_resume_id")
+        or resume.get("protected_snapshot_ref")
+        or ""
+    )
+    return hashlib.sha256(material.encode()).hexdigest()
+
+
+def _claim_aware_identity_tokens(carried_key_hash: str) -> tuple[str, str]:
+    internal_dedup_token = hashlib.sha256(
+        f"liepin:detail:dedup:v1:{carried_key_hash}".encode()
+    ).hexdigest()
+    presentation_resume_id = hashlib.sha256(
+        f"liepin:detail:presentation:v1:{carried_key_hash}".encode()
+    ).hexdigest()
+    return internal_dedup_token, presentation_resume_id
+
+
+def _is_provider_candidate_key_hash(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and re.fullmatch(r"[0-9a-f]{64}", value) is not None
+    )
+
+
+def _public_detail_payload(value: object) -> dict[str, object]:
+    if not isinstance(value, Mapping):
+        return {}
+    return _strip_private_detail_transport(
+        cast(Mapping[str, object], value)
+    )
+
+
+def _private_claim_aware_source_url(value: object) -> str | None:
+    if not isinstance(value, Mapping):
+        return None
+    source_url = dict(value).get("sourceUrl")
+    if not isinstance(source_url, str):
+        return None
+    canonical = canonical_liepin_detail_source_url(source_url)
+    return canonical if canonical == source_url else None
+
+
+def _strip_private_detail_transport(
+    value: Mapping[str, object],
+) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for raw_key, raw_value in value.items():
+        key = str(raw_key)
+        if key.casefold() in _PRIVATE_DETAIL_TRANSPORT_KEYS:
+            continue
+        sanitized = _strip_private_detail_value(raw_value)
+        if sanitized is not None:
+            payload[key] = sanitized
+    return payload
+
+
+def _strip_private_detail_value(value: object) -> object | None:
+    if isinstance(value, Mapping):
+        return _strip_private_detail_transport(
+            cast(Mapping[str, object], value)
+        )
+    if isinstance(value, list | tuple):
+        return [
+            item
+            for raw_item in value
+            if (item := _strip_private_detail_value(raw_item)) is not None
+        ]
+    if isinstance(value, str):
+        lower = value.casefold()
+        if (
+            value.startswith("artifact://")
+            or "res_id_encode=" in lower
+            or lower.startswith(("http://", "https://"))
+        ):
+            return None
+    return value
 
 
 def _sanitize_liepin_provider_payload(payload: dict[str, object]) -> dict[str, object]:

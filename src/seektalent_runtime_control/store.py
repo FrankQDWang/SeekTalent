@@ -7,6 +7,7 @@ from hashlib import sha256
 import json
 import sqlite3
 from pathlib import Path
+from time import perf_counter
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -158,9 +159,20 @@ from seektalent_runtime_control.source_reconciliation import (
     validate_source_operation_reconciliation_decision,
 )
 from seektalent_runtime_control.stage_outputs import sanitize_stage_output_payload
+from seektalent_runtime_control.workflow_transition import (
+    RuntimeWorkflowLaneResume,
+    RuntimeWorkflowTransition,
+    WorkflowRoundBarrierWriteResult,
+    WorkflowTransitionWriteResult,
+    create_workflow_transition_schema,
+    validate_transition_identity,
+    workflow_round_barrier_logical_payload,
+    workflow_transition_from_row,
+    workflow_transition_payload,
+)
 
 
-RUNTIME_CONTROL_SCHEMA_VERSION = 20
+RUNTIME_CONTROL_SCHEMA_VERSION = 21
 RUNTIME_CHECKPOINT_SCHEMA_VERSION = RUNTIME_CHECKPOINT_SCHEMA_V2
 RUNTIME_CONTROL_EVENT_SCHEMA_VERSION = "runtime-control-event/v1"
 MAX_RUNTIME_CONTROL_JSON_BYTES = 16 * 1024
@@ -216,6 +228,7 @@ class RuntimeControlStore(
                 create_browser_lane_schema(conn)
                 create_execution_failure_schema(conn)
                 create_recovery_attention_schema(conn)
+                create_workflow_transition_schema(conn)
                 self.compact_pending_terminal_checkpoints()
                 return
             if version > 0:
@@ -244,7 +257,7 @@ class RuntimeControlStore(
                 conn.commit()
                 version = 7
             if version in {
-                7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19
+                7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20
             }:
                 conn.execute("BEGIN IMMEDIATE")
                 try:
@@ -301,6 +314,10 @@ class RuntimeControlStore(
                     if version == 19:
                         create_recovery_attention_schema(conn)
                         conn.execute("PRAGMA user_version = 20")
+                        version = 20
+                    if version == 20:
+                        create_workflow_transition_schema(conn)
+                        conn.execute("PRAGMA user_version = 21")
                     run_sqlite_integrity_checks(conn, store_name="runtime-control", foreign_keys=False)
                     conn.commit()
                 except Exception:
@@ -314,6 +331,7 @@ class RuntimeControlStore(
                 create_browser_lane_schema(conn)
                 create_execution_failure_schema(conn)
                 create_recovery_attention_schema(conn)
+                create_workflow_transition_schema(conn)
                 conn.execute("BEGIN IMMEDIATE")
                 with conn:
                     create_failure_envelope_schema(conn)
@@ -445,7 +463,19 @@ class RuntimeControlStore(
         expected_ledger_revision: int,
         expected_reconciliation_revision: int,
         fault_injector: Callable[[str], None] | None = None,
+        advance_detail_transition: bool = False,
+        advance_source_transition: bool = False,
+        transition_created_at: str | None = None,
     ) -> AcceptedSourceOperation:
+        advance_transition = (
+            advance_detail_transition or advance_source_transition
+        )
+        if (
+            advance_detail_transition and advance_source_transition
+        ) or advance_transition != (transition_created_at is not None):
+            raise RuntimeControlError(
+                "runtime_detail_dispatch_transition_invalid"
+            )
         validate_source_operation_acceptance(
             runtime_run_id=runtime_run_id,
             operation_id=operation_id,
@@ -530,13 +560,26 @@ class RuntimeControlStore(
                         expected_reconciliation_revision=expected_reconciliation_revision,
                     ):
                         raise RuntimeControlError("identity_conflict")
-                    conn.commit()
-                    _inject_source_operation_fault(fault_injector, "after_commit")
-                    return AcceptedSourceOperation(
+                    accepted = AcceptedSourceOperation(
                         operation=operation,
                         expectation=expectation,
                         dispatch=dispatch,
                     )
+                    if advance_transition:
+                        assert transition_created_at is not None
+                        _advance_workflow_transition_dispatch_epoch(
+                            conn,
+                            accepted=accepted,
+                            created_at=transition_created_at,
+                            expected_operation_kind=(
+                                "details"
+                                if advance_detail_transition
+                                else "cards"
+                            ),
+                        )
+                    conn.commit()
+                    _inject_source_operation_fault(fault_injector, "after_commit")
+                    return accepted
                 if operation_by_key is not None:
                     raise RuntimeControlError("idempotency_conflict")
                 if _source_dispatch_row_for_operation(conn, runtime_run_id, operation_id) is not None:
@@ -652,16 +695,29 @@ class RuntimeControlStore(
                 if operation_row is None:
                     raise RuntimeControlError("source_operation_acceptance_incomplete")
                 operation, expectation, dispatch = _source_operation_acceptance(conn, operation_row)
+                accepted = AcceptedSourceOperation(
+                    operation=operation,
+                    expectation=expectation,
+                    dispatch=dispatch,
+                )
+                if advance_transition:
+                    assert transition_created_at is not None
+                    _advance_workflow_transition_dispatch_epoch(
+                        conn,
+                        accepted=accepted,
+                        created_at=transition_created_at,
+                        expected_operation_kind=(
+                            "details"
+                            if advance_detail_transition
+                            else "cards"
+                        ),
+                    )
                 conn.commit()
                 _inject_source_operation_fault(fault_injector, "after_commit")
             except (RuntimeControlError, sqlite3.Error, TypeError, ValueError):
                 conn.rollback()
                 raise
-        return AcceptedSourceOperation(
-            operation=operation,
-            expectation=expectation,
-            dispatch=dispatch,
-        )
+        return accepted
 
     def get_source_operation(self, runtime_run_id: str, operation_id: str) -> SourceOperationRecord:
         with self._connect() as conn:
@@ -689,6 +745,937 @@ class RuntimeControlStore(
                 (runtime_run_id,),
             ).fetchone()
         return row is not None
+
+    def has_source_operations_requiring_reconciliation(
+        self,
+        runtime_run_id: str,
+    ) -> bool:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT 1
+                FROM runtime_control_source_operations
+                WHERE runtime_run_id = ?
+                  AND operation_phase = 'reconciled'
+                  AND retry_posture = 'reconcile_first'
+                  AND main_commit_ref IS NULL
+                LIMIT 1
+                """,
+                (runtime_run_id,),
+            ).fetchone()
+        return row is not None
+
+    def open_workflow_round_barrier(
+        self,
+        *,
+        runtime_run_id: str,
+        executor_id: str,
+        attempt_no: int,
+        round_no: int,
+        lanes: tuple[tuple[str, str], ...],
+        work_plan_artifact_ref: str,
+        work_plan_artifact_hash: str,
+        created_at: str,
+    ) -> WorkflowRoundBarrierWriteResult:
+        """Persist the exact lane set before any lane may dispatch."""
+        normalized_lanes = tuple(sorted(set(lanes)))
+        if not normalized_lanes or len(normalized_lanes) != len(lanes):
+            raise RuntimeControlError(
+                "runtime_workflow_barrier_lanes_invalid"
+            )
+        if (
+            not isinstance(work_plan_artifact_ref, str)
+            or not work_plan_artifact_ref
+            or len(work_plan_artifact_ref.encode("utf-8")) > 256
+            or not isinstance(work_plan_artifact_hash, str)
+            or len(work_plan_artifact_hash) != 64
+            or any(
+                character not in "0123456789abcdef"
+                for character in work_plan_artifact_hash
+            )
+        ):
+            raise RuntimeControlError(
+                "runtime_workflow_barrier_work_plan_invalid"
+            )
+        for source_lane_run_id, query_instance_id in normalized_lanes:
+            validate_transition_identity(
+                runtime_run_id=runtime_run_id,
+                source_lane_run_id=source_lane_run_id,
+                query_instance_id=query_instance_id,
+                round_no=round_no,
+                step_kind="source_dispatch",
+            )
+        lane_payload = json.dumps(
+            [
+                {
+                    "queryInstanceId": query_instance_id,
+                    "sourceLaneRunId": source_lane_run_id,
+                }
+                for source_lane_run_id, query_instance_id in normalized_lanes
+            ],
+            ensure_ascii=True,
+            separators=(",", ":"),
+            sort_keys=True,
+        ).encode("utf-8")
+        lane_set_hash = sha256(lane_payload).hexdigest()
+        transaction_started = perf_counter()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                _require_active_executor(
+                    conn,
+                    runtime_run_id,
+                    executor_id,
+                    attempt_no=attempt_no,
+                    observed_at=created_at,
+                )
+                run_row = _run_row(conn, runtime_run_id)
+                if run_row is None:
+                    raise RuntimeControlLookupError(
+                        "runtime_run_not_found"
+                    )
+                require_run_truth_mutable(run_row)
+                if run_row["status"] not in {"starting", "running"}:
+                    raise RuntimeControlError(
+                        "runtime_workflow_transition_run_not_active"
+                    )
+                base_checkpoint_id = run_row["latest_checkpoint_id"]
+                checkpoint_row = (
+                    conn.execute(
+                        """
+                        SELECT safe_boundary, round_no
+                        FROM runtime_control_checkpoints
+                        WHERE runtime_run_id = ? AND checkpoint_id = ?
+                        """,
+                        (runtime_run_id, base_checkpoint_id),
+                    ).fetchone()
+                    if base_checkpoint_id is not None
+                    else None
+                )
+                if (
+                    checkpoint_row is None
+                    or checkpoint_row["safe_boundary"]
+                    != "before_round_controller"
+                    or int(checkpoint_row["round_no"]) != round_no
+                ):
+                    raise RuntimeControlError(
+                        "runtime_workflow_transition_checkpoint_invalid"
+                    )
+                existing = conn.execute(
+                    """
+                    SELECT *
+                    FROM runtime_control_workflow_round_barriers
+                    WHERE runtime_run_id = ? AND round_no = ?
+                    """,
+                    (runtime_run_id, round_no),
+                ).fetchone()
+                if existing is not None:
+                    rows = conn.execute(
+                        """
+                        SELECT source_lane_run_id, query_instance_id
+                        FROM runtime_control_workflow_barrier_lanes
+                        WHERE runtime_run_id = ? AND round_no = ?
+                        ORDER BY source_lane_run_id, query_instance_id
+                        """,
+                        (runtime_run_id, round_no),
+                    ).fetchall()
+                    stored_lanes = tuple(
+                        (row["source_lane_run_id"], row["query_instance_id"])
+                        for row in rows
+                    )
+                    if (
+                        existing["status"] != "active"
+                        or existing["base_checkpoint_id"]
+                        != base_checkpoint_id
+                        or existing["work_plan_artifact_ref"]
+                        != work_plan_artifact_ref
+                        or existing["work_plan_artifact_hash"]
+                        != work_plan_artifact_hash
+                        or int(existing["expected_lane_count"])
+                        != len(normalized_lanes)
+                        or existing["lane_set_hash"] != lane_set_hash
+                        or stored_lanes != normalized_lanes
+                    ):
+                        raise RuntimeControlError(
+                            "runtime_workflow_barrier_conflict"
+                        )
+                    logical_payload_hash, logical_payload_size = (
+                        workflow_round_barrier_logical_payload(
+                            runtime_run_id=runtime_run_id,
+                            round_no=round_no,
+                            base_checkpoint_id=str(
+                                existing["base_checkpoint_id"]
+                            ),
+                            work_plan_artifact_ref=str(
+                                existing["work_plan_artifact_ref"]
+                            ),
+                            work_plan_artifact_hash=str(
+                                existing["work_plan_artifact_hash"]
+                            ),
+                            lane_set_hash=str(existing["lane_set_hash"]),
+                            lanes=stored_lanes,
+                            executor_attempt_no=int(
+                                existing["executor_attempt_no"]
+                            ),
+                            created_at=str(existing["created_at"]),
+                        )
+                    )
+                    conn.commit()
+                    return WorkflowRoundBarrierWriteResult(
+                        lane_set_hash=lane_set_hash,
+                        logical_payload_hash=logical_payload_hash,
+                        logical_payload_size_bytes=(
+                            logical_payload_size
+                        ),
+                        transaction_duration_ms=(
+                            perf_counter() - transaction_started
+                        )
+                        * 1000,
+                        inserted=False,
+                    )
+                logical_payload_hash, logical_payload_size = (
+                    workflow_round_barrier_logical_payload(
+                        runtime_run_id=runtime_run_id,
+                        round_no=round_no,
+                        base_checkpoint_id=str(base_checkpoint_id),
+                        work_plan_artifact_ref=(
+                            work_plan_artifact_ref
+                        ),
+                        work_plan_artifact_hash=(
+                            work_plan_artifact_hash
+                        ),
+                        lane_set_hash=lane_set_hash,
+                        lanes=normalized_lanes,
+                        executor_attempt_no=attempt_no,
+                        created_at=created_at,
+                    )
+                )
+                conn.execute(
+                    """
+                    INSERT INTO runtime_control_workflow_round_barriers (
+                      runtime_run_id, round_no, base_checkpoint_id,
+                      work_plan_artifact_ref, work_plan_artifact_hash,
+                      expected_lane_count, lane_set_hash, status,
+                      executor_attempt_no, created_at, settled_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL)
+                    """,
+                    (
+                        runtime_run_id,
+                        round_no,
+                        base_checkpoint_id,
+                        work_plan_artifact_ref,
+                        work_plan_artifact_hash,
+                        len(normalized_lanes),
+                        lane_set_hash,
+                        attempt_no,
+                        created_at,
+                    ),
+                )
+                conn.executemany(
+                    """
+                    INSERT INTO runtime_control_workflow_barrier_lanes (
+                      runtime_run_id, round_no, source_lane_run_id,
+                      query_instance_id, status, settled_at
+                    )
+                    VALUES (?, ?, ?, ?, 'pending', NULL)
+                    """,
+                    (
+                        (
+                            runtime_run_id,
+                            round_no,
+                            source_lane_run_id,
+                            query_instance_id,
+                        )
+                        for source_lane_run_id, query_instance_id
+                        in normalized_lanes
+                    ),
+                )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return WorkflowRoundBarrierWriteResult(
+            lane_set_hash=lane_set_hash,
+            logical_payload_hash=logical_payload_hash,
+            logical_payload_size_bytes=logical_payload_size,
+            transaction_duration_ms=(
+                perf_counter() - transaction_started
+            )
+            * 1000,
+            inserted=True,
+        )
+
+    def skip_workflow_barrier_lane(
+        self,
+        *,
+        runtime_run_id: str,
+        executor_id: str,
+        attempt_no: int,
+        round_no: int,
+        source_lane_run_id: str,
+        query_instance_id: str,
+        settled_at: str,
+    ) -> None:
+        validate_transition_identity(
+            runtime_run_id=runtime_run_id,
+            source_lane_run_id=source_lane_run_id,
+            query_instance_id=query_instance_id,
+            round_no=round_no,
+            step_kind="source_dispatch",
+        )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                _require_active_executor(
+                    conn,
+                    runtime_run_id,
+                    executor_id,
+                    attempt_no=attempt_no,
+                    observed_at=settled_at,
+                )
+                updated = conn.execute(
+                    """
+                    UPDATE runtime_control_workflow_barrier_lanes
+                    SET status = 'skipped', settled_at = ?
+                    WHERE runtime_run_id = ? AND round_no = ?
+                      AND source_lane_run_id = ?
+                      AND query_instance_id = ?
+                      AND status = 'pending'
+                    """,
+                    (
+                        settled_at,
+                        runtime_run_id,
+                        round_no,
+                        source_lane_run_id,
+                        query_instance_id,
+                    ),
+                )
+                if updated.rowcount != 1:
+                    row = conn.execute(
+                        """
+                        SELECT status
+                        FROM runtime_control_workflow_barrier_lanes
+                        WHERE runtime_run_id = ? AND round_no = ?
+                          AND source_lane_run_id = ?
+                          AND query_instance_id = ?
+                        """,
+                        (
+                            runtime_run_id,
+                            round_no,
+                            source_lane_run_id,
+                            query_instance_id,
+                        ),
+                    ).fetchone()
+                    if row is None or row["status"] != "skipped":
+                        raise RuntimeControlError(
+                            "runtime_workflow_barrier_lane_conflict"
+                        )
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+
+    def write_workflow_transition(
+        self,
+        *,
+        runtime_run_id: str,
+        source_lane_run_id: str,
+        query_instance_id: str,
+        executor_id: str,
+        attempt_no: int,
+        round_no: int,
+        step_kind: str,
+        continuation: dict[str, object],
+        artifact_refs: tuple[str, ...],
+        source_operation_ids: tuple[str, ...],
+        created_at: str,
+        transition_id: str | None = None,
+        fault_injector: Callable[[str], None] | None = None,
+    ) -> WorkflowTransitionWriteResult:
+        """Append one compact step and optionally commit prior source facts."""
+        validate_transition_identity(
+            runtime_run_id=runtime_run_id,
+            source_lane_run_id=source_lane_run_id,
+            query_instance_id=query_instance_id,
+            round_no=round_no,
+            step_kind=step_kind,
+        )
+        payload_json, payload_hash, payload_size_bytes = (
+            workflow_transition_payload(
+                continuation=continuation,
+                artifact_refs=artifact_refs,
+            )
+        )
+        if (
+            not isinstance(source_operation_ids, tuple)
+            or len(source_operation_ids)
+            != len(set(source_operation_ids))
+        ):
+            raise RuntimeControlError(
+                "runtime_workflow_transition_source_operations_invalid"
+            )
+        stored_transition_id = transition_id or (
+            f"rttransition_{uuid4().hex}"
+        )
+        started = perf_counter()
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                _require_active_executor(
+                    conn,
+                    runtime_run_id,
+                    executor_id,
+                    attempt_no=attempt_no,
+                    observed_at=created_at,
+                )
+                run_row = _run_row(conn, runtime_run_id)
+                if run_row is None:
+                    raise RuntimeControlLookupError(
+                        "runtime_run_not_found"
+                    )
+                require_run_truth_mutable(run_row)
+                if run_row["status"] not in {"starting", "running"}:
+                    raise RuntimeControlError(
+                        "runtime_workflow_transition_run_not_active"
+                    )
+                active_row = conn.execute(
+                    """
+                    SELECT *
+                    FROM runtime_control_workflow_transitions
+                    WHERE runtime_run_id = ?
+                      AND source_lane_run_id = ?
+                      AND query_instance_id = ?
+                      AND status = 'active'
+                    """,
+                    (
+                        runtime_run_id,
+                        source_lane_run_id,
+                        query_instance_id,
+                    ),
+                ).fetchone()
+                active = (
+                    workflow_transition_from_row(active_row)
+                    if active_row is not None
+                    else None
+                )
+                if active is not None and (
+                    active.round_no == round_no
+                    and active.step_kind == step_kind
+                    and active.continuation == continuation
+                    and active.artifact_refs == artifact_refs
+                ):
+                    _require_transition_source_commits(
+                        conn,
+                        runtime_run_id=runtime_run_id,
+                        transition_id=active.transition_id,
+                        operation_ids=source_operation_ids,
+                    )
+                    conn.commit()
+                    return WorkflowTransitionWriteResult(
+                        transition=active,
+                        transaction_duration_ms=(
+                            perf_counter() - started
+                        )
+                        * 1000,
+                        inserted=False,
+                    )
+                if active is None:
+                    if step_kind != "source_dispatch":
+                        raise RuntimeControlError(
+                            "runtime_workflow_transition_parent_missing"
+                        )
+                    base_checkpoint_id = run_row[
+                        "latest_checkpoint_id"
+                    ]
+                    if base_checkpoint_id is None:
+                        raise RuntimeControlError(
+                            "runtime_workflow_transition_checkpoint_missing"
+                        )
+                    checkpoint_row = conn.execute(
+                        """
+                        SELECT safe_boundary, round_no
+                        FROM runtime_control_checkpoints
+                        WHERE runtime_run_id = ? AND checkpoint_id = ?
+                        """,
+                        (runtime_run_id, base_checkpoint_id),
+                    ).fetchone()
+                    if (
+                        checkpoint_row is None
+                        or checkpoint_row["safe_boundary"]
+                        != "before_round_controller"
+                        or int(checkpoint_row["round_no"]) != round_no
+                    ):
+                        raise RuntimeControlError(
+                            "runtime_workflow_transition_checkpoint_invalid"
+                        )
+                    parent_transition_id = None
+                    barrier_lane = conn.execute(
+                        """
+                        SELECT lane.status, barrier.base_checkpoint_id,
+                               barrier.status AS barrier_status
+                        FROM runtime_control_workflow_barrier_lanes AS lane
+                        JOIN runtime_control_workflow_round_barriers AS barrier
+                          ON barrier.runtime_run_id = lane.runtime_run_id
+                         AND barrier.round_no = lane.round_no
+                        WHERE lane.runtime_run_id = ? AND lane.round_no = ?
+                          AND lane.source_lane_run_id = ?
+                          AND lane.query_instance_id = ?
+                        """,
+                        (
+                            runtime_run_id,
+                            round_no,
+                            source_lane_run_id,
+                            query_instance_id,
+                        ),
+                    ).fetchone()
+                    if (
+                        barrier_lane is None
+                        or barrier_lane["status"] != "pending"
+                        or barrier_lane["barrier_status"] != "active"
+                        or barrier_lane["base_checkpoint_id"]
+                        != base_checkpoint_id
+                    ):
+                        raise RuntimeControlError(
+                            "runtime_workflow_barrier_lane_missing"
+                        )
+                else:
+                    if (
+                        active.step_kind
+                        not in {
+                            "source_dispatch",
+                            "detail_dispatch",
+                        }
+                        or step_kind
+                        not in {"detail_queued", "lane_completed"}
+                        or (
+                            step_kind == "lane_completed"
+                            and active.step_kind
+                            not in {"source_dispatch", "detail_dispatch"}
+                        )
+                        or active.round_no != round_no
+                    ):
+                        raise RuntimeControlError(
+                            "runtime_workflow_transition_order_invalid"
+                        )
+                    base_checkpoint_id = active.base_checkpoint_id
+                    parent_transition_id = active.transition_id
+                    updated = conn.execute(
+                        """
+                        UPDATE runtime_control_workflow_transitions
+                        SET status = 'superseded', settled_at = ?
+                        WHERE transition_id = ? AND status = 'active'
+                        """,
+                        (created_at, active.transition_id),
+                    )
+                    if updated.rowcount != 1:
+                        raise RuntimeControlError(
+                            "runtime_workflow_transition_conflict"
+                        )
+                if conn.execute(
+                    """
+                    SELECT 1 FROM runtime_control_workflow_transitions
+                    WHERE transition_id = ?
+                    """,
+                    (stored_transition_id,),
+                ).fetchone() is not None:
+                    raise RuntimeControlError(
+                        "runtime_workflow_transition_identity_conflict"
+                    )
+                _inject_source_operation_fault(
+                    fault_injector,
+                    "before_transition_insert",
+                )
+                conn.execute(
+                    """
+                    INSERT INTO runtime_control_workflow_transitions (
+                      transition_id, runtime_run_id, source_lane_run_id,
+                      query_instance_id, parent_transition_id,
+                      base_checkpoint_id, round_no, step_kind, payload_json,
+                      payload_hash, payload_size_bytes, status,
+                      executor_attempt_no, created_at, settled_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL)
+                    """,
+                    (
+                        stored_transition_id,
+                        runtime_run_id,
+                        source_lane_run_id,
+                        query_instance_id,
+                        parent_transition_id,
+                        base_checkpoint_id,
+                        round_no,
+                        step_kind,
+                        payload_json,
+                        payload_hash,
+                        payload_size_bytes,
+                        attempt_no,
+                        created_at,
+                    ),
+                )
+                if active is None:
+                    activated = conn.execute(
+                        """
+                        UPDATE runtime_control_workflow_barrier_lanes
+                        SET status = 'active'
+                        WHERE runtime_run_id = ? AND round_no = ?
+                          AND source_lane_run_id = ?
+                          AND query_instance_id = ?
+                          AND status = 'pending'
+                        """,
+                        (
+                            runtime_run_id,
+                            round_no,
+                            source_lane_run_id,
+                            query_instance_id,
+                        ),
+                    )
+                    if activated.rowcount != 1:
+                        raise RuntimeControlError(
+                            "runtime_workflow_barrier_lane_conflict"
+                        )
+                _inject_source_operation_fault(
+                    fault_injector,
+                    "after_transition_insert",
+                )
+                _commit_source_operations_with_ref(
+                    conn,
+                    runtime_run_id=runtime_run_id,
+                    commit_ref=stored_transition_id,
+                    operation_ids=source_operation_ids,
+                    conflict_reason=(
+                        "runtime_workflow_transition_source_commit_conflict"
+                    ),
+                )
+                if step_kind == "lane_completed":
+                    completed = conn.execute(
+                        """
+                        UPDATE runtime_control_workflow_barrier_lanes
+                        SET status = 'completed', settled_at = ?
+                        WHERE runtime_run_id = ? AND round_no = ?
+                          AND source_lane_run_id = ?
+                          AND query_instance_id = ?
+                          AND status = 'active'
+                        """,
+                        (
+                            created_at,
+                            runtime_run_id,
+                            round_no,
+                            source_lane_run_id,
+                            query_instance_id,
+                        ),
+                    )
+                    if completed.rowcount != 1:
+                        raise RuntimeControlError(
+                            "runtime_workflow_barrier_lane_conflict"
+                        )
+                _inject_source_operation_fault(
+                    fault_injector,
+                    "after_source_operation_commits",
+                )
+                row = conn.execute(
+                    """
+                    SELECT *
+                    FROM runtime_control_workflow_transitions
+                    WHERE transition_id = ?
+                    """,
+                    (stored_transition_id,),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeControlError(
+                        "runtime_workflow_transition_incomplete"
+                    )
+                transition = workflow_transition_from_row(row)
+                conn.commit()
+                _inject_source_operation_fault(
+                    fault_injector,
+                    "after_commit",
+                )
+            except Exception:
+                conn.rollback()
+                raise
+        return WorkflowTransitionWriteResult(
+            transition=transition,
+            transaction_duration_ms=(perf_counter() - started) * 1000,
+            inserted=True,
+        )
+
+    def get_active_workflow_transition(
+        self,
+        *,
+        runtime_run_id: str,
+        source_lane_run_id: str,
+        query_instance_id: str,
+    ) -> RuntimeWorkflowTransition | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM runtime_control_workflow_transitions
+                WHERE runtime_run_id = ?
+                  AND source_lane_run_id = ?
+                  AND query_instance_id = ?
+                  AND status = 'active'
+                """,
+                (
+                    runtime_run_id,
+                    source_lane_run_id,
+                    query_instance_id,
+                ),
+            ).fetchone()
+        return (
+            workflow_transition_from_row(row)
+            if row is not None
+            else None
+        )
+
+    def get_active_workflow_transition_chain(
+        self,
+        *,
+        runtime_run_id: str,
+        source_lane_run_id: str,
+        query_instance_id: str,
+    ) -> tuple[RuntimeWorkflowTransition, ...]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT *
+                FROM runtime_control_workflow_transitions
+                WHERE runtime_run_id = ?
+                  AND source_lane_run_id = ?
+                  AND query_instance_id = ?
+                  AND status = 'active'
+                """,
+                (
+                    runtime_run_id,
+                    source_lane_run_id,
+                    query_instance_id,
+                ),
+            ).fetchone()
+            return _workflow_transition_chain_from_active_row(
+                conn,
+                active_row=row,
+                runtime_run_id=runtime_run_id,
+                source_lane_run_id=source_lane_run_id,
+                query_instance_id=query_instance_id,
+            )
+
+    def get_active_workflow_transition_chains(
+        self,
+        *,
+        runtime_run_id: str,
+    ) -> tuple[tuple[RuntimeWorkflowTransition, ...], ...]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT source_lane_run_id, query_instance_id
+                FROM runtime_control_workflow_transitions
+                WHERE runtime_run_id = ? AND status = 'active'
+                ORDER BY source_lane_run_id, query_instance_id
+                """,
+                (runtime_run_id,),
+            ).fetchall()
+        return tuple(
+            self.get_active_workflow_transition_chain(
+                runtime_run_id=runtime_run_id,
+                source_lane_run_id=row["source_lane_run_id"],
+                query_instance_id=row["query_instance_id"],
+            )
+            for row in rows
+        )
+
+    def get_workflow_round_resume_lanes(
+        self,
+        *,
+        runtime_run_id: str,
+        base_checkpoint_id: str,
+    ) -> tuple[RuntimeWorkflowLaneResume, ...]:
+        """Load the exact durable lane set for one cold-resume barrier."""
+        with self._connect() as conn:
+            barrier_rows = conn.execute(
+                """
+                SELECT *
+                FROM runtime_control_workflow_round_barriers
+                WHERE runtime_run_id = ? AND status = 'active'
+                ORDER BY round_no
+                """,
+                (runtime_run_id,),
+            ).fetchall()
+            if not barrier_rows:
+                active = conn.execute(
+                    """
+                    SELECT 1
+                    FROM runtime_control_workflow_transitions
+                    WHERE runtime_run_id = ? AND status = 'active'
+                    LIMIT 1
+                    """,
+                    (runtime_run_id,),
+                ).fetchone()
+                if active is not None:
+                    raise RuntimeControlError(
+                        "runtime_workflow_round_barrier_missing"
+                    )
+                return ()
+            if (
+                len(barrier_rows) != 1
+                or barrier_rows[0]["base_checkpoint_id"]
+                != base_checkpoint_id
+            ):
+                raise RuntimeControlError(
+                    "runtime_workflow_round_barrier_invalid"
+                )
+            barrier = barrier_rows[0]
+            round_no = int(barrier["round_no"])
+            work_plan_artifact_ref = barrier[
+                "work_plan_artifact_ref"
+            ]
+            work_plan_artifact_hash = barrier[
+                "work_plan_artifact_hash"
+            ]
+            if (
+                not isinstance(work_plan_artifact_ref, str)
+                or not work_plan_artifact_ref
+                or not isinstance(work_plan_artifact_hash, str)
+                or len(work_plan_artifact_hash) != 64
+            ):
+                raise RuntimeControlError(
+                    "runtime_workflow_round_barrier_invalid"
+                )
+            lane_rows = conn.execute(
+                """
+                SELECT source_lane_run_id, query_instance_id, status
+                FROM runtime_control_workflow_barrier_lanes
+                WHERE runtime_run_id = ? AND round_no = ?
+                ORDER BY source_lane_run_id, query_instance_id
+                """,
+                (runtime_run_id, round_no),
+            ).fetchall()
+            if len(lane_rows) != int(barrier["expected_lane_count"]):
+                raise RuntimeControlError(
+                    "runtime_workflow_round_barrier_invalid"
+                )
+            lane_payload = json.dumps(
+                [
+                    {
+                        "queryInstanceId": row["query_instance_id"],
+                        "sourceLaneRunId": row["source_lane_run_id"],
+                    }
+                    for row in lane_rows
+                ],
+                ensure_ascii=True,
+                separators=(",", ":"),
+                sort_keys=True,
+            ).encode("utf-8")
+            if sha256(lane_payload).hexdigest() != barrier["lane_set_hash"]:
+                raise RuntimeControlError(
+                    "runtime_workflow_round_barrier_invalid"
+                )
+            active_rows = conn.execute(
+                """
+                SELECT *
+                FROM runtime_control_workflow_transitions
+                WHERE runtime_run_id = ? AND status = 'active'
+                ORDER BY source_lane_run_id, query_instance_id
+                """,
+                (runtime_run_id,),
+            ).fetchall()
+            active_by_lane = {
+                (row["source_lane_run_id"], row["query_instance_id"]): row
+                for row in active_rows
+            }
+            if len(active_by_lane) != len(active_rows):
+                raise RuntimeControlError(
+                    "runtime_workflow_round_barrier_invalid"
+                )
+            resumes: list[RuntimeWorkflowLaneResume] = []
+            for lane_row in lane_rows:
+                source_lane_run_id = lane_row["source_lane_run_id"]
+                query_instance_id = lane_row["query_instance_id"]
+                lane_status = lane_row["status"]
+                active_row = active_by_lane.pop(
+                    (source_lane_run_id, query_instance_id),
+                    None,
+                )
+                if lane_status in {"pending", "skipped"}:
+                    if active_row is not None:
+                        raise RuntimeControlError(
+                            "runtime_workflow_round_barrier_invalid"
+                        )
+                    transitions: tuple[RuntimeWorkflowTransition, ...] = ()
+                else:
+                    if lane_status not in {"active", "completed"}:
+                        raise RuntimeControlError(
+                            "runtime_workflow_round_barrier_invalid"
+                        )
+                    transitions = _workflow_transition_chain_from_active_row(
+                        conn,
+                        active_row=active_row,
+                        runtime_run_id=runtime_run_id,
+                        source_lane_run_id=source_lane_run_id,
+                        query_instance_id=query_instance_id,
+                    )
+                    if not transitions or (
+                        lane_status == "completed"
+                        and transitions[-1].step_kind != "lane_completed"
+                    ) or (
+                        lane_status == "active"
+                        and transitions[-1].step_kind == "lane_completed"
+                    ):
+                        raise RuntimeControlError(
+                            "runtime_workflow_round_barrier_invalid"
+                        )
+                resumes.append(
+                    RuntimeWorkflowLaneResume(
+                        round_no=round_no,
+                        base_checkpoint_id=base_checkpoint_id,
+                        source_lane_run_id=source_lane_run_id,
+                        query_instance_id=query_instance_id,
+                        barrier_status=lane_status,
+                        work_plan_artifact_ref=work_plan_artifact_ref,
+                        work_plan_artifact_hash=work_plan_artifact_hash,
+                        transitions=transitions,
+                    )
+                )
+            if active_by_lane:
+                raise RuntimeControlError(
+                    "runtime_workflow_round_barrier_invalid"
+                )
+        return tuple(resumes)
+
+    def get_workflow_round_barrier_lanes(
+        self,
+        *,
+        runtime_run_id: str,
+        round_no: int,
+    ) -> tuple[tuple[str, str, str], ...]:
+        with self._connect() as conn:
+            barrier = conn.execute(
+                """
+                SELECT status
+                FROM runtime_control_workflow_round_barriers
+                WHERE runtime_run_id = ? AND round_no = ?
+                """,
+                (runtime_run_id, round_no),
+            ).fetchone()
+            if barrier is None:
+                return ()
+            rows = conn.execute(
+                """
+                SELECT source_lane_run_id, query_instance_id, status
+                FROM runtime_control_workflow_barrier_lanes
+                WHERE runtime_run_id = ? AND round_no = ?
+                ORDER BY source_lane_run_id, query_instance_id
+                """,
+                (runtime_run_id, round_no),
+            ).fetchall()
+        return tuple(
+            (
+                row["source_lane_run_id"],
+                row["query_instance_id"],
+                row["status"],
+            )
+            for row in rows
+        )
 
     def get_source_operation_admission_expectation(
         self,
@@ -1179,6 +2166,129 @@ class RuntimeControlStore(
                 profile_binding_generation=profile_binding_generation,
                 browser_control_scope_id=browser_control_scope_id,
                 controller_fence_ref=controller_fence_ref,
+            )
+
+    def mint_current_safe_retry_dispatch_epoch(
+        self,
+        *,
+        runtime_run_id: str,
+        operation_id: str,
+        executor_id: str,
+        attempt_no: int,
+        observed_at: str,
+        runtime_attempt_authority_ref: str,
+        runtime_attempt_fence_ref: str,
+        profile_binding_generation: int,
+        browser_control_scope_id: str,
+        controller_fence_ref: str | None,
+    ) -> AcceptedSourceOperation:
+        """Mint the next dispatch epoch from current durable run facts."""
+        with self._connect() as conn:
+            operation_row = _source_operation_row(
+                conn,
+                runtime_run_id,
+                operation_id,
+            )
+            if operation_row is None:
+                raise RuntimeControlLookupError(
+                    "source_operation_not_found"
+                )
+            operation = source_operation_from_row(operation_row)
+            reconciliation_row = conn.execute(
+                """
+                SELECT *
+                FROM runtime_control_source_reconciliations
+                WHERE runtime_run_id = ? AND operation_id = ?
+                  AND committed_ledger_revision = ?
+                  AND committed_reconciliation_revision = ?
+                  AND decision_kind = 'no_dispatch_proved'
+                  AND retry_posture = 'safe_retry'
+                ORDER BY rowid DESC
+                LIMIT 1
+                """,
+                (
+                    runtime_run_id,
+                    operation_id,
+                    operation.ledger_revision,
+                    operation.reconciliation_revision,
+                ),
+            ).fetchone()
+            if reconciliation_row is None:
+                raise RuntimeControlError(
+                    "source_safe_retry_reconciliation_not_found"
+                )
+            reconciliation = source_reconciliation_from_row(
+                reconciliation_row
+            )
+            latest_dispatch_row = _latest_source_dispatch_row(
+                conn,
+                runtime_run_id,
+                operation_id,
+            )
+            if latest_dispatch_row is None:
+                raise RuntimeControlError(
+                    "source_safe_retry_previous_epoch_missing"
+                )
+            next_ordinal = (
+                int(
+                    latest_dispatch_row[
+                        "dispatch_authorization_ordinal"
+                    ]
+                )
+                + 1
+            )
+            identity_digest = sha256(
+                (
+                    f"{runtime_run_id}:{operation_id}:"
+                    f"{reconciliation.reconciliation_id}:"
+                    f"{next_ordinal}"
+                ).encode()
+            ).hexdigest()[:48]
+            authority = issue_safe_retry_turnover_authority(
+                conn,
+                self._safe_retry_authority_issuer,
+                runtime_run_id=runtime_run_id,
+                executor_id=executor_id,
+                attempt_no=attempt_no,
+                observed_at=observed_at,
+                runtime_attempt_authority_ref=(
+                    runtime_attempt_authority_ref
+                ),
+                runtime_attempt_fence_ref=runtime_attempt_fence_ref,
+                profile_binding_generation=profile_binding_generation,
+                browser_control_scope_id=browser_control_scope_id,
+                controller_fence_ref=controller_fence_ref,
+            )
+            return mint_safe_retry_dispatch_epoch(
+                conn,
+                self._safe_retry_authority_issuer,
+                runtime_run_id=runtime_run_id,
+                operation_id=operation_id,
+                reconciliation_id=reconciliation.reconciliation_id,
+                expected_reconciliation_ledger_revision=(
+                    reconciliation.committed_ledger_revision
+                ),
+                expected_reconciliation_revision=(
+                    reconciliation.committed_reconciliation_revision
+                ),
+                outbox_id=f"safe-retry-outbox-{identity_digest}",
+                dispatch_intent_id=(
+                    f"safe-retry-dispatch-{identity_digest}"
+                ),
+                authority=authority,
+                fault_injector=None,
+                commit_participant=(
+                    lambda transition_conn, accepted: (
+                        _advance_workflow_transition_dispatch_epoch(
+                            transition_conn,
+                            accepted=accepted,
+                            created_at=observed_at,
+                            expected_operation_kind=(
+                                accepted.operation.operation_kind
+                            ),
+                        )
+                    )
+                ),
             )
 
     def mint_safe_retry_dispatch_epoch(
@@ -1706,6 +2816,91 @@ class RuntimeControlStore(
                     "runtime_executor_release_failed"
                 ) from None
         return _lease_from_row(updated)
+
+    def yield_executor_for_automatic_source_reconciliation(
+        self,
+        *,
+        event: RuntimeControlEventInput,
+        executor_id: str,
+        attempt_no: int,
+    ) -> RuntimeRunRecord:
+        """Atomically yield a live executor after an unknown source effect."""
+        if (
+            event.event_type != "runtime_source_reconciliation_required"
+            or event.status != "resume_requested"
+            or event.stage != "source_reconciliation"
+        ):
+            raise RuntimeControlError(
+                "runtime_source_reconciliation_event_invalid"
+            )
+        with self._connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                lease_row = _require_active_executor(
+                    conn,
+                    event.runtime_run_id,
+                    executor_id,
+                    attempt_no=attempt_no,
+                    observed_at=event.created_at,
+                )
+                run_row = _run_row(conn, event.runtime_run_id)
+                if run_row is None:
+                    raise RuntimeControlLookupError(
+                        "runtime_run_not_found"
+                    )
+                require_run_truth_mutable(run_row)
+                unresolved = conn.execute(
+                    """
+                    SELECT operation_id
+                    FROM runtime_control_source_operations
+                    WHERE runtime_run_id = ?
+                      AND retry_posture = 'reconcile_first'
+                      AND operation_phase = 'reconciled'
+                      AND main_commit_ref IS NULL
+                    ORDER BY operation_id
+                    LIMIT 1
+                    """,
+                    (event.runtime_run_id,),
+                ).fetchone()
+                if unresolved is None:
+                    raise RuntimeControlError(
+                        "runtime_source_operation_unresolved_evidence_missing"
+                    )
+                _append_event_in_transaction(
+                    conn,
+                    event,
+                    snapshot=None,
+                    run_status="resume_requested",
+                    stop_reason_code=None,
+                    completed_at=None,
+                    latest_checkpoint_id=None,
+                )
+                revoked = conn.execute(
+                    """
+                    UPDATE runtime_control_executor_leases
+                    SET status = 'revoked', released_at = ?,
+                        reason_code = 'runtime_source_operation_unresolved'
+                    WHERE lease_id = ?
+                      AND runtime_run_id = ?
+                      AND executor_id = ?
+                      AND attempt_no = ?
+                      AND status = 'active'
+                    """,
+                    (
+                        event.created_at,
+                        lease_row["lease_id"],
+                        event.runtime_run_id,
+                        executor_id,
+                        attempt_no,
+                    ),
+                )
+                if revoked.rowcount != 1:
+                    raise RuntimeControlError("runtime_executor_stale")
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+        return self.get_run(event.runtime_run_id)
 
     def list_active_executor_leases(self, *, executor_id: str | None = None) -> list[RuntimeExecutorLease]:
         clauses = ["status = 'active'"]
@@ -3292,6 +4487,12 @@ class RuntimeControlStore(
                     checkpoint_id=checkpoint_id,
                     operation_ids=source_operation_ids,
                 )
+                _checkpoint_workflow_round_barrier(
+                    conn,
+                    runtime_run_id=runtime_run_id,
+                    round_no=round_no,
+                    checkpointed_at=created_at,
+                )
                 write_checkpoint_participant(conn, checkpoint)
                 self._update_checkpoint_pointer(conn, checkpoint)
                 conn.commit()
@@ -4745,6 +5946,23 @@ def _commit_source_operations_with_checkpoint(
     checkpoint_id: str,
     operation_ids: tuple[str, ...],
 ) -> None:
+    _commit_source_operations_with_ref(
+        conn,
+        runtime_run_id=runtime_run_id,
+        commit_ref=checkpoint_id,
+        operation_ids=operation_ids,
+        conflict_reason="source_operation_checkpoint_conflict",
+    )
+
+
+def _commit_source_operations_with_ref(
+    conn: sqlite3.Connection,
+    *,
+    runtime_run_id: str,
+    commit_ref: str,
+    operation_ids: tuple[str, ...],
+    conflict_reason: str,
+) -> None:
     if len(operation_ids) != len(set(operation_ids)):
         raise RuntimeControlError("source_operation_checkpoint_duplicate")
     for operation_id in operation_ids:
@@ -4772,7 +5990,7 @@ def _commit_source_operations_with_checkpoint(
               AND source_operation_disposition IS NOT NULL
             """,
             (
-                checkpoint_id,
+                commit_ref,
                 runtime_run_id,
                 operation_id,
                 operation.operation_phase,
@@ -4780,7 +5998,387 @@ def _commit_source_operations_with_checkpoint(
             ),
         )
         if updated.rowcount != 1:
-            raise RuntimeControlError("source_operation_checkpoint_conflict")
+            raise RuntimeControlError(conflict_reason)
+
+
+def _require_transition_source_commits(
+    conn: sqlite3.Connection,
+    *,
+    runtime_run_id: str,
+    transition_id: str,
+    operation_ids: tuple[str, ...],
+) -> None:
+    for operation_id in operation_ids:
+        row = _source_operation_row(
+            conn,
+            runtime_run_id,
+            operation_id,
+        )
+        if row is None:
+            raise RuntimeControlLookupError(
+                "source_operation_not_found"
+            )
+        operation = source_operation_from_row(row)
+        if (
+            operation.operation_phase != "main_committed"
+            or operation.main_commit_ref != transition_id
+        ):
+            raise RuntimeControlError(
+                "runtime_workflow_transition_source_commit_conflict"
+            )
+
+
+def _workflow_transition_chain_from_active_row(
+    conn: sqlite3.Connection,
+    *,
+    active_row: sqlite3.Row | None,
+    runtime_run_id: str,
+    source_lane_run_id: str,
+    query_instance_id: str,
+) -> tuple[RuntimeWorkflowTransition, ...]:
+    if active_row is None:
+        return ()
+    row = active_row
+    chain: list[RuntimeWorkflowTransition] = []
+    seen: set[str] = set()
+    while row is not None:
+        transition = workflow_transition_from_row(row)
+        if (
+            transition.runtime_run_id != runtime_run_id
+            or transition.source_lane_run_id != source_lane_run_id
+            or transition.query_instance_id != query_instance_id
+            or transition.transition_id in seen
+        ):
+            raise RuntimeControlError(
+                "runtime_workflow_transition_chain_invalid"
+            )
+        seen.add(transition.transition_id)
+        chain.append(transition)
+        if transition.parent_transition_id is None:
+            break
+        row = conn.execute(
+            """
+            SELECT *
+            FROM runtime_control_workflow_transitions
+            WHERE runtime_run_id = ? AND transition_id = ?
+              AND source_lane_run_id = ? AND query_instance_id = ?
+            """,
+            (
+                runtime_run_id,
+                transition.parent_transition_id,
+                source_lane_run_id,
+                query_instance_id,
+            ),
+        ).fetchone()
+        if row is None:
+            raise RuntimeControlError(
+                "runtime_workflow_transition_chain_invalid"
+            )
+    chain.reverse()
+    if (
+        chain[0].step_kind != "source_dispatch"
+        or any(
+            current.parent_transition_id != previous.transition_id
+            or current.base_checkpoint_id != previous.base_checkpoint_id
+            for previous, current in zip(
+                chain,
+                chain[1:],
+                strict=False,
+            )
+        )
+    ):
+        raise RuntimeControlError(
+            "runtime_workflow_transition_chain_invalid"
+        )
+    return tuple(chain)
+
+
+def _advance_workflow_transition_dispatch_epoch(
+    conn: sqlite3.Connection,
+    *,
+    accepted: AcceptedSourceOperation,
+    created_at: str,
+    expected_operation_kind: str,
+) -> None:
+    if (
+        expected_operation_kind not in {"cards", "details"}
+        or accepted.operation.operation_kind
+        != expected_operation_kind
+    ):
+        raise RuntimeControlError(
+            "runtime_workflow_dispatch_transition_mismatch"
+        )
+    rows = conn.execute(
+        """
+        SELECT *
+        FROM runtime_control_workflow_transitions
+        WHERE runtime_run_id = ? AND status = 'active'
+        """,
+        (accepted.operation.runtime_run_id,),
+    ).fetchall()
+    matching: list[RuntimeWorkflowTransition] = []
+    for row in rows:
+        transition = workflow_transition_from_row(row)
+        if transition.continuation.get("operationId") == (
+            accepted.operation.operation_id
+        ):
+            matching.append(transition)
+    if len(matching) != 1:
+        raise RuntimeControlError(
+            "runtime_workflow_dispatch_transition_missing"
+        )
+    active = matching[0]
+    continuation = dict(active.continuation)
+    current_ordinal = (
+        accepted.dispatch.dispatch_authorization_ordinal
+    )
+    allowed_step_kinds = (
+        {"detail_queued", "detail_dispatch"}
+        if expected_operation_kind == "details"
+        else {"source_dispatch"}
+    )
+    if (
+        active.step_kind not in allowed_step_kinds
+        or continuation.get("operationId")
+        != accepted.operation.operation_id
+        or continuation.get("requestHash")
+        != accepted.operation.canonical_request_hash
+    ):
+        raise RuntimeControlError(
+            "runtime_workflow_dispatch_transition_mismatch"
+        )
+    target_values: dict[str, object] = {
+        "dispatchAuthorizationOrdinal": current_ordinal,
+        "dispatchIntentId": accepted.dispatch.dispatch_intent_id,
+        "dispatchIntentDigest": (
+            accepted.dispatch.dispatch_intent_digest
+        ),
+        "runtimeAttemptNo": accepted.expectation.runtime_attempt_no,
+        "runtimeAttemptFenceRef": (
+            accepted.expectation.runtime_attempt_fence_ref
+        ),
+        "browserControlScopeId": (
+            accepted.expectation.browser_control_scope_id
+        ),
+    }
+    if all(
+        continuation.get(key) == value
+        for key, value in target_values.items()
+    ) and active.step_kind == (
+        "detail_dispatch"
+        if expected_operation_kind == "details"
+        else "source_dispatch"
+    ):
+        return
+    previous_ordinal = continuation.get(
+        "dispatchAuthorizationOrdinal"
+    )
+    valid_initial = (
+        current_ordinal == 1
+        and previous_ordinal is None
+        and (
+            (
+                expected_operation_kind == "details"
+                and active.step_kind == "detail_queued"
+                and continuation.get("schemaVersion")
+                == "runtime-detail-queued-continuation/v1"
+            )
+            or (
+                expected_operation_kind == "cards"
+                and active.step_kind == "source_dispatch"
+                and continuation.get("schemaVersion")
+                == "runtime-source-dispatch-continuation/v1"
+            )
+        )
+    )
+    valid_retry = (
+        active.step_kind
+        == (
+            "detail_dispatch"
+            if expected_operation_kind == "details"
+            else "source_dispatch"
+        )
+        and not isinstance(previous_ordinal, bool)
+        and isinstance(previous_ordinal, int)
+        and previous_ordinal + 1 == current_ordinal
+    )
+    valid_advance = valid_initial or valid_retry
+    if not valid_advance:
+        raise RuntimeControlError(
+            "runtime_workflow_dispatch_epoch_mismatch"
+        )
+    continuation["schemaVersion"] = (
+        "runtime-detail-dispatch-continuation/v1"
+        if expected_operation_kind == "details"
+        else "runtime-source-dispatch-continuation/v1"
+    )
+    continuation.update(target_values)
+    payload_json, payload_hash, payload_size_bytes = (
+        workflow_transition_payload(
+            continuation=continuation,
+            artifact_refs=active.artifact_refs,
+        )
+    )
+    identity_digest = sha256(
+        (
+            f"{active.transition_id}:"
+            f"{accepted.dispatch.dispatch_intent_id}:"
+            f"{current_ordinal}"
+        ).encode()
+    ).hexdigest()[:48]
+    transition_id = f"rttransition_dispatch_{identity_digest}"
+    updated = conn.execute(
+        """
+        UPDATE runtime_control_workflow_transitions
+        SET status = 'superseded', settled_at = ?
+        WHERE transition_id = ? AND status = 'active'
+        """,
+        (created_at, active.transition_id),
+    )
+    if updated.rowcount != 1:
+        raise RuntimeControlError(
+            "runtime_workflow_transition_conflict"
+        )
+    conn.execute(
+        """
+        INSERT INTO runtime_control_workflow_transitions (
+          transition_id, runtime_run_id, source_lane_run_id,
+          query_instance_id, parent_transition_id,
+          base_checkpoint_id, round_no, step_kind, payload_json,
+          payload_hash, payload_size_bytes, status,
+          executor_attempt_no, created_at, settled_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, NULL)
+        """,
+        (
+            transition_id,
+            active.runtime_run_id,
+            active.source_lane_run_id,
+            active.query_instance_id,
+            active.transition_id,
+            active.base_checkpoint_id,
+            active.round_no,
+            (
+                "detail_dispatch"
+                if expected_operation_kind == "details"
+                else "source_dispatch"
+            ),
+            payload_json,
+            payload_hash,
+            payload_size_bytes,
+            accepted.expectation.runtime_attempt_no,
+            created_at,
+        ),
+    )
+
+
+def _checkpoint_workflow_round_barrier(
+    conn: sqlite3.Connection,
+    *,
+    runtime_run_id: str,
+    round_no: int | None,
+    checkpointed_at: str,
+) -> None:
+    active_transition_rows = conn.execute(
+        """
+        SELECT * FROM runtime_control_workflow_transitions
+        WHERE runtime_run_id = ? AND status = 'active'
+        ORDER BY source_lane_run_id, query_instance_id
+        """,
+        (runtime_run_id,),
+    ).fetchall()
+    barrier_rows = conn.execute(
+        """
+        SELECT *
+        FROM runtime_control_workflow_round_barriers
+        WHERE runtime_run_id = ? AND status = 'active'
+        ORDER BY round_no
+        """,
+        (runtime_run_id,),
+    ).fetchall()
+    if not active_transition_rows and not barrier_rows:
+        return
+    if round_no is None or len(barrier_rows) != 1:
+        raise RuntimeControlError(
+            "runtime_workflow_round_barrier_unsettled"
+        )
+    barrier = barrier_rows[0]
+    if int(barrier["round_no"]) != round_no:
+        raise RuntimeControlError(
+            "runtime_workflow_round_barrier_unsettled"
+        )
+    lane_rows = conn.execute(
+        """
+        SELECT source_lane_run_id, query_instance_id, status
+        FROM runtime_control_workflow_barrier_lanes
+        WHERE runtime_run_id = ? AND round_no = ?
+        ORDER BY source_lane_run_id, query_instance_id
+        """,
+        (runtime_run_id, round_no),
+    ).fetchall()
+    if (
+        len(lane_rows) != int(barrier["expected_lane_count"])
+        or any(
+            row["status"] not in {"completed", "skipped"}
+            for row in lane_rows
+        )
+    ):
+        raise RuntimeControlError(
+            "runtime_workflow_round_barrier_unsettled"
+        )
+    transition_by_lane: dict[
+        tuple[str, str], RuntimeWorkflowTransition
+    ] = {}
+    for row in active_transition_rows:
+        active = workflow_transition_from_row(row)
+        key = (active.source_lane_run_id, active.query_instance_id)
+        if (
+            active.round_no != round_no
+            or key in transition_by_lane
+            or active.step_kind != "lane_completed"
+        ):
+            raise RuntimeControlError(
+                "runtime_workflow_round_barrier_unsettled"
+            )
+        transition_by_lane[key] = active
+    for lane in lane_rows:
+        key = (lane["source_lane_run_id"], lane["query_instance_id"])
+        active = transition_by_lane.get(key)
+        if (lane["status"] == "completed") != (active is not None):
+            raise RuntimeControlError(
+                "runtime_workflow_round_barrier_unsettled"
+            )
+    if not _all_source_operations_main_committed(
+        conn,
+        runtime_run_id=runtime_run_id,
+    ):
+        raise RuntimeControlError(
+            "runtime_workflow_round_barrier_unsettled"
+        )
+    updated_transitions = conn.execute(
+        """
+        UPDATE runtime_control_workflow_transitions
+        SET status = 'checkpointed', settled_at = ?
+        WHERE runtime_run_id = ? AND round_no = ? AND status = 'active'
+        """,
+        (checkpointed_at, runtime_run_id, round_no),
+    )
+    if updated_transitions.rowcount != len(transition_by_lane):
+        raise RuntimeControlError(
+            "runtime_workflow_transition_conflict"
+        )
+    updated_barrier = conn.execute(
+        """
+        UPDATE runtime_control_workflow_round_barriers
+        SET status = 'checkpointed', settled_at = ?
+        WHERE runtime_run_id = ? AND round_no = ? AND status = 'active'
+        """,
+        (checkpointed_at, runtime_run_id, round_no),
+    )
+    if updated_barrier.rowcount != 1:
+        raise RuntimeControlError(
+            "runtime_workflow_barrier_conflict"
+        )
 
 
 def _create_schema(conn: sqlite3.Connection) -> None:
@@ -6197,19 +7795,21 @@ def _recoverable_checkpoint_from_run_row(
     run_row: sqlite3.Row,
 ) -> RuntimeCheckpoint | RuntimeCheckpointLoadFailure | None:
     checkpoint_id = run_row["latest_checkpoint_id"]
-    if not _all_source_operations_main_committed(
-        conn,
-        runtime_run_id=run_row["runtime_run_id"],
-    ):
+    source_operations_main_committed = (
+        _all_source_operations_main_committed(
+            conn,
+            runtime_run_id=run_row["runtime_run_id"],
+        )
+    )
+    if checkpoint_id is None:
+        if source_operations_main_committed:
+            return None
         return RuntimeCheckpointLoadFailure(
             checkpoint_id=(
-                checkpoint_id
-                or f"source-operation:{run_row['runtime_run_id']}"
+                f"source-operation:{run_row['runtime_run_id']}"
             ),
             reason_code=RUNTIME_SOURCE_OPERATION_UNRESOLVED,
         )
-    if checkpoint_id is None:
-        return None
     checkpoint_row = conn.execute(
         "SELECT * FROM runtime_control_checkpoints WHERE checkpoint_id = ?",
         (checkpoint_id,),
@@ -6217,16 +7817,38 @@ def _recoverable_checkpoint_from_run_row(
     if checkpoint_row is None:
         return RuntimeCheckpointLoadFailure(
             checkpoint_id=checkpoint_id,
-            reason_code=RUNTIME_CHECKPOINT_MISSING,
+            reason_code=(
+                RUNTIME_CHECKPOINT_MISSING
+                if source_operations_main_committed
+                else RUNTIME_SOURCE_OPERATION_UNRESOLVED
+            ),
         )
     if checkpoint_row["runtime_run_id"] != run_row["runtime_run_id"]:
         return RuntimeCheckpointLoadFailure(
             checkpoint_id=checkpoint_id,
-            reason_code=RUNTIME_CHECKPOINT_RUN_MISMATCH,
+            reason_code=(
+                RUNTIME_CHECKPOINT_RUN_MISMATCH
+                if source_operations_main_committed
+                else RUNTIME_SOURCE_OPERATION_UNRESOLVED
+            ),
         )
     checkpoint = _recoverable_checkpoint_from_row_or_failure(checkpoint_row)
     if isinstance(checkpoint, RuntimeCheckpointLoadFailure):
+        if not source_operations_main_committed:
+            return RuntimeCheckpointLoadFailure(
+                checkpoint_id=checkpoint_id,
+                reason_code=RUNTIME_SOURCE_OPERATION_UNRESOLVED,
+            )
         return checkpoint
+    if not _source_operations_recoverable_at_checkpoint(
+        conn,
+        runtime_run_id=run_row["runtime_run_id"],
+        checkpoint_id=checkpoint.checkpoint_id,
+    ):
+        return RuntimeCheckpointLoadFailure(
+            checkpoint_id=checkpoint.checkpoint_id,
+            reason_code=RUNTIME_SOURCE_OPERATION_UNRESOLVED,
+        )
     run_source_ids, run_source_ids_valid = _strict_run_source_ids(run_row["source_ids_json"])
     candidate_truth_valid = (
         _candidate_truth_matches_checkpoint(conn, checkpoint)
@@ -6243,7 +7865,6 @@ def _recoverable_checkpoint_from_run_row(
         }
         else True
     )
-    source_operations_main_committed = True
     invalid_reason = validate_recoverable_checkpoint(
         checkpoint,
         RuntimeCheckpointValidationContext(
@@ -6253,9 +7874,7 @@ def _recoverable_checkpoint_from_run_row(
             run_source_ids=run_source_ids,
             run_source_ids_valid=run_source_ids_valid,
             candidate_truth_valid=candidate_truth_valid,
-            source_operations_main_committed=(
-                source_operations_main_committed
-            ),
+            source_operations_main_committed=True,
         ),
     )
     if invalid_reason is not None:
@@ -6285,6 +7904,545 @@ def _all_source_operations_main_committed(
         (runtime_run_id,),
     ).fetchone()
     return row is None
+
+
+def _source_operations_recoverable_at_checkpoint(
+    conn: sqlite3.Connection,
+    *,
+    runtime_run_id: str,
+    checkpoint_id: str,
+) -> bool:
+    active_rows = conn.execute(
+        """
+        SELECT *
+        FROM runtime_control_workflow_transitions
+        WHERE runtime_run_id = ? AND status = 'active'
+        ORDER BY source_lane_run_id, query_instance_id
+        """,
+        (runtime_run_id,),
+    ).fetchall()
+    barrier_rows = conn.execute(
+        """
+        SELECT *
+        FROM runtime_control_workflow_round_barriers
+        WHERE runtime_run_id = ? AND status = 'active'
+        ORDER BY round_no
+        """,
+        (runtime_run_id,),
+    ).fetchall()
+    if not active_rows and not barrier_rows:
+        return _all_source_operations_main_committed(
+            conn,
+            runtime_run_id=runtime_run_id,
+        )
+    if len(barrier_rows) != 1:
+        return False
+    barrier = barrier_rows[0]
+    if barrier["base_checkpoint_id"] != checkpoint_id:
+        return False
+    work_plan_artifact_ref = barrier["work_plan_artifact_ref"]
+    work_plan_artifact_hash = barrier["work_plan_artifact_hash"]
+    if (
+        not isinstance(work_plan_artifact_ref, str)
+        or not work_plan_artifact_ref
+        or not isinstance(work_plan_artifact_hash, str)
+        or len(work_plan_artifact_hash) != 64
+    ):
+        return False
+    round_no = int(barrier["round_no"])
+    lane_rows = conn.execute(
+        """
+        SELECT source_lane_run_id, query_instance_id, status
+        FROM runtime_control_workflow_barrier_lanes
+        WHERE runtime_run_id = ? AND round_no = ?
+        ORDER BY source_lane_run_id, query_instance_id
+        """,
+        (runtime_run_id, round_no),
+    ).fetchall()
+    if len(lane_rows) != int(barrier["expected_lane_count"]):
+        return False
+    lane_keys = tuple(
+        (row["source_lane_run_id"], row["query_instance_id"])
+        for row in lane_rows
+    )
+    lane_payload = json.dumps(
+        [
+            {
+                "queryInstanceId": query_instance_id,
+                "sourceLaneRunId": source_lane_run_id,
+            }
+            for source_lane_run_id, query_instance_id in lane_keys
+        ],
+        ensure_ascii=True,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    if sha256(lane_payload).hexdigest() != barrier["lane_set_hash"]:
+        return False
+
+    active_by_lane: dict[
+        tuple[str, str], RuntimeWorkflowTransition
+    ] = {}
+    try:
+        for row in active_rows:
+            active = workflow_transition_from_row(row)
+            lane_key = (
+                active.source_lane_run_id,
+                active.query_instance_id,
+            )
+            if (
+                active.base_checkpoint_id != checkpoint_id
+                or active.round_no != round_no
+                or lane_key not in lane_keys
+                or lane_key in active_by_lane
+                or work_plan_artifact_ref not in active.artifact_refs
+            ):
+                return False
+            active_by_lane[lane_key] = active
+    except RuntimeControlError:
+        return False
+
+    unresolved_rows = conn.execute(
+        """
+        SELECT *
+        FROM runtime_control_source_operations
+        WHERE runtime_run_id = ?
+          AND (operation_phase != 'main_committed'
+               OR main_commit_ref IS NULL)
+        ORDER BY operation_id
+        """,
+        (runtime_run_id,),
+    ).fetchall()
+    try:
+        unresolved_by_id = {
+            operation.operation_id: operation
+            for operation in (
+                source_operation_from_row(row)
+                for row in unresolved_rows
+            )
+        }
+    except RuntimeControlError:
+        return False
+    expected_unresolved_ids: set[str] = set()
+
+    for lane_row in lane_rows:
+        lane_key = (
+            lane_row["source_lane_run_id"],
+            lane_row["query_instance_id"],
+        )
+        lane_status = lane_row["status"]
+        active = active_by_lane.get(lane_key)
+        if lane_status == "pending":
+            if active is not None:
+                return False
+            continue
+        if lane_status == "skipped":
+            if active is not None:
+                return False
+            continue
+        if lane_status == "completed":
+            if (
+                active is None
+                or active.step_kind != "lane_completed"
+                or not _completed_lane_transition_is_recoverable(
+                    conn,
+                    active=active,
+                )
+            ):
+                return False
+            continue
+        if lane_status != "active" or active is None:
+            return False
+        if active.step_kind == "source_dispatch":
+            operation_id = active.continuation.get("operationId")
+            if not isinstance(operation_id, str):
+                return False
+            operation = unresolved_by_id.get(operation_id)
+            if operation is None:
+                if not _queued_source_dispatch_is_recoverable(
+                    conn,
+                    active=active,
+                    work_plan_artifact_ref=work_plan_artifact_ref,
+                    work_plan_artifact_hash=work_plan_artifact_hash,
+                ):
+                    return False
+            else:
+                if not _source_dispatch_is_recoverable(
+                    conn,
+                    active=active,
+                    operation=operation,
+                    work_plan_artifact_ref=work_plan_artifact_ref,
+                    work_plan_artifact_hash=work_plan_artifact_hash,
+                ):
+                    return False
+                expected_unresolved_ids.add(operation_id)
+            continue
+        if active.step_kind == "detail_queued":
+            if not _queued_detail_transition_is_recoverable(
+                conn,
+                active=active,
+            ):
+                return False
+            continue
+        if active.step_kind != "detail_dispatch":
+            return False
+        operation_id = active.continuation.get("operationId")
+        if not isinstance(operation_id, str):
+            return False
+        operation = unresolved_by_id.get(operation_id)
+        if operation is None or not _detail_dispatch_is_recoverable(
+            conn,
+            active=active,
+            operation=operation,
+        ):
+            return False
+        expected_unresolved_ids.add(operation_id)
+    return expected_unresolved_ids == set(unresolved_by_id)
+
+
+def _queued_source_dispatch_is_recoverable(
+    conn: sqlite3.Connection,
+    *,
+    active: RuntimeWorkflowTransition,
+    work_plan_artifact_ref: str,
+    work_plan_artifact_hash: str,
+) -> bool:
+    continuation = active.continuation
+    operation_id = continuation.get("operationId")
+    request_hash = continuation.get("requestHash")
+    return (
+        continuation.get("schemaVersion")
+        == "runtime-source-dispatch-continuation/v1"
+        and isinstance(operation_id, str)
+        and isinstance(request_hash, str)
+        and len(request_hash) == 64
+        and continuation.get("queryFingerprint") == request_hash
+        and continuation.get("roundWorkPlanArtifactRef")
+        == work_plan_artifact_ref
+        and continuation.get("roundWorkPlanArtifactHash")
+        == work_plan_artifact_hash
+        and work_plan_artifact_ref in active.artifact_refs
+        and _source_operation_row(
+            conn,
+            active.runtime_run_id,
+            operation_id,
+        )
+        is None
+    )
+
+
+def _source_dispatch_is_recoverable(
+    conn: sqlite3.Connection,
+    *,
+    active: RuntimeWorkflowTransition,
+    operation: SourceOperationRecord,
+    work_plan_artifact_ref: str,
+    work_plan_artifact_hash: str,
+) -> bool:
+    continuation = active.continuation
+    if (
+        continuation.get("schemaVersion")
+        != "runtime-source-dispatch-continuation/v1"
+        or continuation.get("operationId") != operation.operation_id
+        or continuation.get("requestHash")
+        != operation.canonical_request_hash
+        or continuation.get("queryFingerprint")
+        != operation.canonical_request_hash
+        or continuation.get("roundWorkPlanArtifactRef")
+        != work_plan_artifact_ref
+        or continuation.get("roundWorkPlanArtifactHash")
+        != work_plan_artifact_hash
+        or work_plan_artifact_ref not in active.artifact_refs
+        or operation.operation_kind != "cards"
+        or operation.main_commit_ref is not None
+    ):
+        return False
+    row = _source_operation_row(
+        conn,
+        operation.runtime_run_id,
+        operation.operation_id,
+    )
+    if row is None:
+        return False
+    try:
+        accepted = _source_operation_acceptance(conn, row)
+    except RuntimeControlError:
+        return False
+    dispatch = accepted.dispatch
+    expectation = accepted.expectation
+    if (
+        continuation.get("dispatchAuthorizationOrdinal")
+        != dispatch.dispatch_authorization_ordinal
+        or continuation.get("dispatchIntentId")
+        != dispatch.dispatch_intent_id
+        or continuation.get("dispatchIntentDigest")
+        != dispatch.dispatch_intent_digest
+        or continuation.get("runtimeAttemptNo")
+        != expectation.runtime_attempt_no
+        or continuation.get("runtimeAttemptFenceRef")
+        != expectation.runtime_attempt_fence_ref
+        or continuation.get("browserControlScopeId")
+        != expectation.browser_control_scope_id
+    ):
+        return False
+    if operation.operation_phase == "observed":
+        return (
+            operation.retry_posture == "no_retry"
+            and operation.conclusive_observation_ref is not None
+            and operation.source_operation_disposition is not None
+            and dispatch.status == "acknowledged"
+        )
+    if (
+        operation.dispatch_intent_ref is not None
+        or operation.conclusive_observation_ref is not None
+        or operation.source_operation_disposition is not None
+        or dispatch.status not in {"pending", "acknowledged"}
+    ):
+        return False
+    reconciliation = None
+    if operation.reconciliation_revision > 0:
+        reconciliation_row = conn.execute(
+            """
+            SELECT *
+            FROM runtime_control_source_reconciliations
+            WHERE runtime_run_id = ? AND operation_id = ?
+              AND committed_reconciliation_revision = ?
+              AND decision_kind = 'no_dispatch_proved'
+              AND retry_posture = 'safe_retry'
+              AND dispatch_intent_ref IS NULL
+              AND conclusive_observation_ref IS NULL
+              AND source_operation_disposition IS NULL
+            ORDER BY rowid DESC
+            LIMIT 1
+            """,
+            (
+                operation.runtime_run_id,
+                operation.operation_id,
+                operation.reconciliation_revision,
+            ),
+        ).fetchone()
+        if reconciliation_row is None:
+            return False
+        reconciliation = source_reconciliation_from_row(
+            reconciliation_row
+        )
+    if operation.retry_posture == "safe_retry":
+        return (
+            operation.operation_phase == "reconciled"
+            and reconciliation is not None
+            and reconciliation.committed_ledger_revision
+            == operation.ledger_revision
+        )
+    if (
+        operation.retry_posture != "no_retry"
+        or operation.operation_phase not in {"accepted", "reconciled"}
+    ):
+        return False
+    if dispatch.safe_retry_commit_ref is None:
+        return (
+            operation.operation_phase == "accepted"
+            and operation.reconciliation_revision == 0
+        )
+    return (
+        reconciliation is not None
+        and dispatch.safe_retry_commit_ref
+        == reconciliation.reconciliation_id
+    )
+
+
+def _detail_transition_artifacts_are_bound(
+    active: RuntimeWorkflowTransition,
+) -> bool:
+    continuation = active.continuation
+    required_refs = (
+        continuation.get("requestArtifactRef"),
+        continuation.get("workPlanArtifactRef"),
+        continuation.get("cardsArtifactRef"),
+    )
+    cursor = continuation.get("detailCursor")
+    high_watermark = continuation.get("detailCompletedHighWatermark")
+    work_plan_hash = continuation.get("workPlanHash")
+    return (
+        all(
+            isinstance(ref, str) and ref in active.artifact_refs
+            for ref in required_refs
+        )
+        and isinstance(work_plan_hash, str)
+        and len(work_plan_hash) == 64
+        and continuation.get("workPlanPhase")
+        in {"locators", "captures"}
+        and not isinstance(cursor, bool)
+        and isinstance(cursor, int)
+        and cursor >= 0
+        and not isinstance(high_watermark, bool)
+        and isinstance(high_watermark, int)
+        and high_watermark == cursor - 1
+    )
+
+
+def _queued_detail_transition_is_recoverable(
+    conn: sqlite3.Connection,
+    *,
+    active: RuntimeWorkflowTransition,
+) -> bool:
+    continuation = active.continuation
+    operation_id = continuation.get("operationId")
+    request_hash = continuation.get("requestHash")
+    return (
+        continuation.get("schemaVersion")
+        == "runtime-detail-queued-continuation/v1"
+        and isinstance(operation_id, str)
+        and isinstance(request_hash, str)
+        and len(request_hash) == 64
+        and _detail_transition_artifacts_are_bound(active)
+        and _source_operation_row(
+            conn,
+            active.runtime_run_id,
+            operation_id,
+        )
+        is None
+    )
+
+
+def _detail_dispatch_is_recoverable(
+    conn: sqlite3.Connection,
+    *,
+    active: RuntimeWorkflowTransition,
+    operation: SourceOperationRecord,
+) -> bool:
+    continuation = active.continuation
+    if (
+        continuation.get("schemaVersion")
+        != "runtime-detail-dispatch-continuation/v1"
+        or continuation.get("operationId") != operation.operation_id
+        or continuation.get("requestHash")
+        != operation.canonical_request_hash
+        or not _detail_transition_artifacts_are_bound(active)
+        or operation.main_commit_ref is not None
+    ):
+        return False
+    row = _source_operation_row(
+        conn,
+        operation.runtime_run_id,
+        operation.operation_id,
+    )
+    if row is None:
+        return False
+    try:
+        accepted = _source_operation_acceptance(conn, row)
+    except RuntimeControlError:
+        return False
+    dispatch = accepted.dispatch
+    expectation = accepted.expectation
+    if (
+        continuation.get("dispatchAuthorizationOrdinal")
+        != dispatch.dispatch_authorization_ordinal
+        or continuation.get("dispatchIntentId")
+        != dispatch.dispatch_intent_id
+        or continuation.get("dispatchIntentDigest")
+        != dispatch.dispatch_intent_digest
+        or continuation.get("runtimeAttemptNo")
+        != expectation.runtime_attempt_no
+        or continuation.get("runtimeAttemptFenceRef")
+        != expectation.runtime_attempt_fence_ref
+        or continuation.get("browserControlScopeId")
+        != expectation.browser_control_scope_id
+    ):
+        return False
+    if operation.operation_phase == "observed":
+        return (
+            operation.retry_posture == "no_retry"
+            and operation.conclusive_observation_ref is not None
+            and operation.source_operation_disposition is not None
+            and dispatch.status == "acknowledged"
+        )
+    if (
+        operation.dispatch_intent_ref is not None
+        or operation.conclusive_observation_ref is not None
+        or operation.source_operation_disposition is not None
+        or dispatch.status not in {"pending", "acknowledged"}
+    ):
+        return False
+    reconciliation = None
+    if operation.reconciliation_revision > 0:
+        reconciliation_row = conn.execute(
+            """
+            SELECT *
+            FROM runtime_control_source_reconciliations
+            WHERE runtime_run_id = ? AND operation_id = ?
+              AND committed_reconciliation_revision = ?
+              AND decision_kind = 'no_dispatch_proved'
+              AND retry_posture = 'safe_retry'
+              AND dispatch_intent_ref IS NULL
+              AND conclusive_observation_ref IS NULL
+              AND source_operation_disposition IS NULL
+            ORDER BY rowid DESC
+            LIMIT 1
+            """,
+            (
+                operation.runtime_run_id,
+                operation.operation_id,
+                operation.reconciliation_revision,
+            ),
+        ).fetchone()
+        if reconciliation_row is None:
+            return False
+        reconciliation = source_reconciliation_from_row(
+            reconciliation_row
+        )
+    if operation.retry_posture == "safe_retry":
+        return (
+            operation.operation_phase == "reconciled"
+            and reconciliation is not None
+            and reconciliation.committed_ledger_revision
+            == operation.ledger_revision
+        )
+    if (
+        operation.retry_posture != "no_retry"
+        or operation.operation_phase not in {"accepted", "reconciled"}
+    ):
+        return False
+    if dispatch.safe_retry_commit_ref is None:
+        return (
+            operation.operation_phase == "accepted"
+            and operation.reconciliation_revision == 0
+        )
+    return (
+        reconciliation is not None
+        and dispatch.safe_retry_commit_ref
+        == reconciliation.reconciliation_id
+    )
+
+
+def _completed_lane_transition_is_recoverable(
+    conn: sqlite3.Connection,
+    *,
+    active: RuntimeWorkflowTransition,
+) -> bool:
+    continuation = active.continuation
+    operation_id = continuation.get("operationId")
+    if (
+        continuation.get("schemaVersion")
+        != "runtime-lane-completed-continuation/v1"
+        or not isinstance(operation_id, str)
+        or continuation.get("laneResultKind")
+        not in {"cards_only", "liepin_detail_work_plan"}
+    ):
+        return False
+    row = _source_operation_row(
+        conn,
+        active.runtime_run_id,
+        operation_id,
+    )
+    if row is None:
+        return False
+    operation = source_operation_from_row(row)
+    return (
+        operation.operation_phase == "main_committed"
+        and operation.main_commit_ref == active.transition_id
+        and operation.conclusive_observation_ref is not None
+        and operation.conclusive_observation_ref in active.artifact_refs
+    )
 
 
 def _checkpoint_continuation_cursor(
@@ -7163,7 +9321,11 @@ def _require_source_reconciliation_transition(
     if decision.decision_kind == "no_dispatch_proved":
         if operation.dispatch_intent_ref is not None or operation.conclusive_observation_ref is not None:
             raise RuntimeControlError("source_reconciliation_transition_conflict")
-        if current_disposition != target_disposition:
+        if (
+            target_disposition is not None
+            or current_disposition
+            not in {None, "reconciliation_unknown"}
+        ):
             raise RuntimeControlError("source_reconciliation_transition_conflict")
     elif decision.decision_kind == "unresolved":
         if operation.conclusive_observation_ref is not None:
@@ -7192,7 +9354,8 @@ def _expired_browser_lane_reconciliation_matches(
     if (
         type(fencing_token) is not int
         or fencing_token < 1
-        or run_row["status"] not in {"needs_attention", "failed"}
+        or run_row["status"]
+        not in {"resume_requested", "needs_attention", "failed"}
         or _needs_admission.run_has_active_executor_lease(
             conn,
             decision.runtime_run_id,
@@ -7318,7 +9481,9 @@ def _source_dispatch_row_for_operation(
         """
         SELECT *
         FROM runtime_control_source_dispatch_outbox
-        WHERE runtime_run_id = ? AND operation_id = ? AND dispatch_authorization_ordinal = 1
+        WHERE runtime_run_id = ? AND operation_id = ?
+        ORDER BY dispatch_authorization_ordinal DESC
+        LIMIT 1
         """,
         (runtime_run_id, operation_id),
     ).fetchone()

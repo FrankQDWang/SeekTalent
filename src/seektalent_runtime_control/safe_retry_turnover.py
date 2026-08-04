@@ -218,6 +218,10 @@ def mint_safe_retry_dispatch_epoch(
     dispatch_intent_id: str,
     authority: object,
     fault_injector: Callable[[str], None] | None,
+    commit_participant: (
+        Callable[[sqlite3.Connection, AcceptedSourceOperation], None]
+        | None
+    ) = None,
 ) -> AcceptedSourceOperation:
     """Consume one exact safe-retry reconciliation and mint its next epoch."""
     _validate_turnover_request(
@@ -251,6 +255,8 @@ def mint_safe_retry_dispatch_epoch(
                 dispatch_intent_id=dispatch_intent_id,
                 authority=replay_authority,
             )
+            if commit_participant is not None:
+                commit_participant(conn, committed)
             conn.commit()
             _inject_fault(fault_injector, "after_commit")
             return committed
@@ -448,6 +454,8 @@ def mint_safe_retry_dispatch_epoch(
             operation_id=operation_id,
             dispatch_authorization_ordinal=next_ordinal,
         )
+        if commit_participant is not None:
+            commit_participant(conn, committed)
         _inject_fault(fault_injector, "before_commit")
         conn.commit()
         _inject_fault(fault_injector, "after_commit")

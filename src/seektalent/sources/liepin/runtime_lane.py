@@ -4,8 +4,8 @@ import asyncio
 import hashlib
 import json
 import math
-from collections.abc import Callable, Collection, Mapping
-from dataclasses import replace
+from collections.abc import Callable, Collection, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import TYPE_CHECKING, cast
 
@@ -21,8 +21,17 @@ from seektalent.core.retrieval.provider_contract import (
     SearchRequest,
     SearchResult,
 )
-from seektalent.source_contracts.first_page_expansion import SourceFirstPageExpansionError, SourceFirstPageExpansionRequest, SourceFirstPageExpansionResult
-from seektalent.models import ResumeCandidate, RuntimeSourceEvidence
+from seektalent.source_contracts.first_page_expansion import (
+    SourceFirstPageExpansionError,
+    SourceFirstPageExpansionRequest,
+    SourceFirstPageExpansionResult,
+)
+from seektalent.models import (
+    LaneType,
+    QueryRole,
+    ResumeCandidate,
+    RuntimeSourceEvidence,
+)
 from seektalent.providers.liepin.adapter import LiepinProviderAdapter
 from seektalent.normalization import normalize_resume
 from seektalent.source_contracts.detail_open_claims import DetailOpenClaimLedger
@@ -39,7 +48,11 @@ from seektalent.providers.liepin.client import (
     is_live_liepin_worker_mode,
 )
 from seektalent.providers.liepin.filter_compiler import LiepinSourceQueryIntent
-from seektalent.providers.liepin.source_compiler import LiepinCompiledQuery, compile_liepin_source_query_intents
+from seektalent.providers.liepin.source_compiler import (
+    LiepinCompiledQuery,
+    compile_liepin_source_query_intents,
+    render_liepin_keyword_query,
+)
 from seektalent.providers.liepin.store import LiepinStore
 from seektalent.providers.liepin.worker_contracts import LiepinWorkerPartialSearchError
 from seektalent.failure_interpretation import (
@@ -61,8 +74,42 @@ from seektalent.source_contracts import (
     RuntimeSourceLaneRequest,
     RuntimeSourceLaneResult,
     RuntimeSourceLaneStatus,
+    RuntimeSourceStepResumeResult,
     SourceQueryExecutionOutcome,
 )
+from seektalent.liepin_round_work_plan_contracts import (
+    LiepinRoundLaneWorkItemV1,
+    LiepinRoundWorkPlanV1,
+)
+from seektalent.liepin_cards_contracts import (
+    LiepinCardsArtifactV1,
+    LiepinCardsOperationRequestV1,
+    canonical_liepin_cards_request_hash,
+    stable_liepin_cards_operation_id,
+)
+from seektalent.canonical_json import canonical_json_bytes
+from seektalent.sources.liepin.round_work_plan import (
+    build_liepin_round_work_plan,
+    source_budget_from_liepin_round_work_plan,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class LiepinRoundResumeResult:
+    plan: LiepinRoundWorkPlanV1
+    lane_result: RuntimeSourceLaneResult
+
+
+@dataclass(frozen=True, slots=True)
+class LiepinPreparedRoundResume:
+    plan: LiepinRoundWorkPlanV1
+    lane_payloads: tuple[dict[str, object], ...]
+    cards_requests: tuple[LiepinCardsOperationRequestV1, ...]
+
+    @property
+    def lane_keys(self) -> tuple[tuple[str, str], ...]:
+        return tuple((lane.source_lane_run_id, lane.query_instance_id) for lane in self.plan.lanes)
+
 
 if TYPE_CHECKING:
     from seektalent.models import RequirementSheet
@@ -79,16 +126,17 @@ def liepin_backend_posture(settings: AppSettings) -> dict[str, str]:
     return {"backend_mode": "blocked", "reason": "no_live_action_backend"}
 
 
-async def run_liepin_first_page_expansion(*, settings: AppSettings,
-        request: SourceFirstPageExpansionRequest,
-        detail_open_claim_ledger: DetailOpenClaimLedger,
-        cards_operation_executor=None) -> SourceFirstPageExpansionResult:
-    if (
-        settings.liepin_worker_mode == "opencli"
-        and cards_operation_executor is None
-    ):
+async def run_liepin_first_page_expansion(
+    *,
+    settings: AppSettings,
+    request: SourceFirstPageExpansionRequest,
+    detail_open_claim_ledger: DetailOpenClaimLedger,
+    cards_operation_executor=None,
+    worker_client: LiepinWorkerClient | None = None,
+) -> SourceFirstPageExpansionResult:
+    if settings.liepin_worker_mode == "opencli" and cards_operation_executor is None:
         raise RuntimeError("liepin_source_operation_executor_required")
-    client = (
+    client = worker_client or (
         build_liepin_worker_client(
             settings,
             cards_operation_executor=cards_operation_executor,
@@ -110,22 +158,33 @@ async def run_liepin_first_page_expansion(*, settings: AppSettings,
         result = await provider.handle_first_page_continuation_with_detail_open_claim_ledger(
             action=request.action,
             continuation=cast(ProviderSearchContinuation, request.continuation),
-            detail_open_claim_ledger=detail_open_claim_ledger, logical_round_no=request.round_no,
-            query_instance_id=request.query_instance_id)
+            detail_open_claim_ledger=detail_open_claim_ledger,
+            logical_round_no=request.round_no,
+            query_instance_id=request.query_instance_id,
+        )
     except ProviderFirstPageExpansionError as exc:
-        raise SourceFirstPageExpansionError(str(exc), status=exc.status,
+        raise SourceFirstPageExpansionError(
+            str(exc),
+            status=exc.status,
             safe_reason_code=exc.safe_reason_code,
-            continuation_deleted=exc.continuation_deleted) from exc
+            continuation_deleted=exc.continuation_deleted,
+        ) from exc
     except ProviderSearchError as exc:
-        raise SourceFirstPageExpansionError(str(exc), status="failed",
-            safe_reason_code=exc.reason_code) from exc
+        raise SourceFirstPageExpansionError(str(exc), status="failed", safe_reason_code=exc.reason_code) from exc
     except LiepinWorkerModeError as exc:
-        raise SourceFirstPageExpansionError(str(exc), status="blocked",
-            safe_reason_code=str(exc.code or "liepin_first_page_expansion_blocked")) from exc
+        raise SourceFirstPageExpansionError(
+            str(exc), status="blocked", safe_reason_code=str(exc.code or "liepin_first_page_expansion_blocked")
+        ) from exc
     candidates = tuple(result.search_result.candidates)
-    attributions = tuple(RuntimeQueryCandidateAttribution(source_kind="liepin",
-        query_instance_id=request.query_instance_id, resume_id=item.resume_id,
-        dedup_key=item.dedup_key) for item in candidates)
+    attributions = tuple(
+        RuntimeQueryCandidateAttribution(
+            source_kind="liepin",
+            query_instance_id=request.query_instance_id,
+            resume_id=item.resume_id,
+            dedup_key=item.dedup_key,
+        )
+        for item in candidates
+    )
     source_plan_id = f"{request.runtime_run_id}:source:{request.round_no}:liepin"
     source_lane_run_id = f"{request.runtime_run_id}:expansion:{request.continuation_id}"
     source_plan = RuntimeSourceLanePlan(
@@ -149,24 +208,37 @@ async def run_liepin_first_page_expansion(*, settings: AppSettings,
         )
         for index, candidate in enumerate(candidates, start=1)
     )
-    lane = RuntimeSourceLaneResult(runtime_run_id=request.runtime_run_id,
+    lane = RuntimeSourceLaneResult(
+        runtime_run_id=request.runtime_run_id,
         source_plan_id=source_plan_id,
         source_lane_run_id=source_lane_run_id,
-        source="liepin", lane_mode="card", attempt=request.round_no, status=result.status,
+        source="liepin",
+        lane_mode="card",
+        attempt=request.round_no,
+        status=result.status,
         candidate_store_updates={item.resume_id: item for item in candidates},
         source_evidence_updates=evidence_updates,
         raw_candidate_count=result.search_result.raw_candidate_count,
-        candidate_query_attributions=attributions, stop_reason_code=result.safe_reason_code)
-    return SourceFirstPageExpansionResult(source_kind="liepin",
-        query_instance_id=request.query_instance_id, continuation_id=request.continuation_id,
-        status=result.status, candidates=candidates, candidate_query_attributions=attributions,
-        lane_result=lane, first_page_visible_count=result.first_page_visible_count,
+        candidate_query_attributions=attributions,
+        stop_reason_code=result.safe_reason_code,
+    )
+    return SourceFirstPageExpansionResult(
+        source_kind="liepin",
+        query_instance_id=request.query_instance_id,
+        continuation_id=request.continuation_id,
+        status=result.status,
+        candidates=candidates,
+        candidate_query_attributions=attributions,
+        lane_result=lane,
+        first_page_visible_count=result.first_page_visible_count,
         first_page_eligible_count=result.first_page_eligible_count,
         initial_opened_count=result.initial_opened_count,
         expansion_opened_count=result.expansion_opened_count,
         expansion_skipped_seen_count=result.expansion_skipped_seen_count,
         expansion_terminal_failure_count=result.expansion_terminal_failure_count,
-        safe_reason_code=result.safe_reason_code, continuation_deleted=result.continuation_deleted)
+        safe_reason_code=result.safe_reason_code,
+        continuation_deleted=result.continuation_deleted,
+    )
 
 
 async def run_liepin_source_lane(
@@ -178,10 +250,7 @@ async def run_liepin_source_lane(
     detail_open_claim_ledger: DetailOpenClaimLedger | None = None,
     cards_operation_executor=None,
 ) -> RuntimeSourceLaneResult:
-    if (
-        settings.liepin_worker_mode == "opencli"
-        and cards_operation_executor is None
-    ):
+    if settings.liepin_worker_mode == "opencli" and cards_operation_executor is None:
         raise RuntimeError("liepin_source_operation_executor_required")
     runtime_run_id = request.runtime_run_id or f"runtime-source-lane:{request.source}"
     source_plan_id = request.source_plan_id or f"{runtime_run_id}:source:0:liepin"
@@ -221,9 +290,22 @@ async def run_liepin_source_lane(
     if cards_operation_executor is not None:
         bind_lane = getattr(cards_operation_executor, "bind_lane", None)
         if callable(bind_lane):
+            lane_query_terms = tuple(request.source_query_terms or _basic_source_query_terms(request))
             bind_lane(
                 source_lane_run_id,
                 request.logical_query_instance_id or source_lane_run_id,
+                source_plan_id=source_plan_id,
+                round_no=request.logical_round_no or request.attempt,
+                query_terms=lane_query_terms,
+                keyword_query=(request.logical_keyword_query or " ".join(lane_query_terms)),
+                query_fingerprint=(
+                    request.logical_query_fingerprint or request.logical_query_instance_id or source_lane_run_id
+                ),
+                query_role=request.logical_query_role or "exploit",
+                requested_count=(request.logical_requested_count or request.source_budget_policy.card_target or 1),
+                max_pages=request.source_budget_policy.max_pages,
+                max_cards=(request.logical_provider_scan_limit or request.source_budget_policy.max_cards),
+                claim_aware=detail_open_claim_ledger is not None,
             )
     client = worker_client or (
         build_liepin_worker_client(
@@ -257,9 +339,10 @@ async def run_liepin_source_lane(
         compiled_search_request=compiled_search_request,
     )
     query_terms = list(search_request.query_terms)
-    query_fingerprint = search_request.provider_context.get("query_fingerprint") or hashlib.sha256(
-        " ".join(query_terms).encode("utf-8")
-    ).hexdigest()
+    query_fingerprint = (
+        search_request.provider_context.get("query_fingerprint")
+        or hashlib.sha256(" ".join(query_terms).encode("utf-8")).hexdigest()
+    )
     try:
         if _uses_private_detail_open_claim_route(
             worker_client=client,
@@ -268,7 +351,11 @@ async def run_liepin_source_lane(
         ):
             if detail_open_claim_ledger is None:
                 raise ValueError("liepin_detail_open_claim_route_missing_ledger")
-            if request.logical_round_no is None or request.logical_round_no < 1 or not request.logical_query_instance_id:
+            if (
+                request.logical_round_no is None
+                or request.logical_round_no < 1
+                or not request.logical_query_instance_id
+            ):
                 raise ValueError("liepin_detail_open_claim_route_missing_logical_provenance")
             search_result = await provider.search_with_detail_open_claim_ledger(
                 search_request,
@@ -372,11 +459,9 @@ async def run_liepin_logical_query_bundle(
     worker_client: LiepinWorkerClient | None = None,
     detail_open_claim_ledger: DetailOpenClaimLedger | None = None,
     cards_operation_executor=None,
+    round_resume_context: Mapping[str, object] | None = None,
 ) -> RuntimeSourceLaneResult:
-    if (
-        settings.liepin_worker_mode == "opencli"
-        and cards_operation_executor is None
-    ):
+    if settings.liepin_worker_mode == "opencli" and cards_operation_executor is None:
         raise RuntimeError("liepin_source_operation_executor_required")
     if not logical_queries:
         raise ValueError("Liepin logical query bundle requires at least one logical query.")
@@ -385,6 +470,45 @@ async def run_liepin_logical_query_bundle(
     )
     compiled_queries = compiled_bundle.queries if compiled_bundle is not None else ()
     context = normalize_runtime_liepin_context(liepin_context)
+    bind_round_work_plan = getattr(
+        cards_operation_executor,
+        "bind_round_work_plan",
+        None,
+    )
+    round_plan: LiepinRoundWorkPlanV1 | None = None
+    if callable(bind_round_work_plan):
+        if round_resume_context is None:
+            raise ValueError("liepin_round_resume_context_required")
+        round_work_plan_authority = getattr(
+            cards_operation_executor,
+            "round_work_plan_authority",
+            None,
+        )
+        if not callable(round_work_plan_authority):
+            raise ValueError("liepin_round_work_plan_authority_required")
+        round_numbers = {query.round_no for query in logical_queries}
+        if len(round_numbers) != 1:
+            raise ValueError("liepin_round_work_plan_round_mismatch")
+        base_checkpoint_id, accepted_requirement_revision_id = round_work_plan_authority(
+            round_no=next(iter(round_numbers))
+        )
+        round_plan = build_liepin_round_work_plan(
+            runtime_run_id=runtime_run_id,
+            base_checkpoint_id=base_checkpoint_id,
+            accepted_requirement_revision_id=(accepted_requirement_revision_id),
+            source_plan_id=source_plan_id,
+            job_title=job_title,
+            jd=jd,
+            notes=notes,
+            requirement_sheet=requirement_sheet,
+            logical_queries=logical_queries,
+            compiled_queries=compiled_queries,
+            source_budget_policy=source_budget_policy,
+            context=context,
+            detail_claim_aware=detail_open_claim_ledger is not None,
+            resume_context=round_resume_context,
+        )
+        bind_round_work_plan(round_plan)
     bundle_worker_client = worker_client or (
         build_liepin_worker_client(
             settings,
@@ -394,6 +518,9 @@ async def run_liepin_logical_query_bundle(
         if cards_operation_executor is not None
         else build_liepin_worker_client(settings)
     )
+
+    started_lane_keys: set[tuple[str, str]] = set()
+    skipped_lane_keys: set[tuple[str, str]] = set()
 
     async def run_logical_query(index: int, logical_query: LogicalQueryDispatch) -> RuntimeSourceLaneResult:
         logical_compiled_queries = tuple(
@@ -432,6 +559,7 @@ async def run_liepin_logical_query_bundle(
             lane_run_id = f"{source_plan_id}:round:{logical_query.round_no}:lane:{index}"
             if compiled_query is not None:
                 lane_run_id = f"{lane_run_id}:target:{target_index}"
+            started_lane_keys.add((lane_run_id, logical_query.query_instance_id))
             result = await run_liepin_source_lane(
                 settings=settings,
                 request=RuntimeSourceLaneRequest(
@@ -466,6 +594,11 @@ async def run_liepin_logical_query_bundle(
                 logical_query=logical_query,
                 compiled_query=compiled_query,
             )
+            _complete_durable_liepin_lane(
+                cards_operation_executor=cards_operation_executor,
+                result=result,
+                query_instance_id=logical_query.query_instance_id,
+            )
             target_results.append(result)
             logical_result = (
                 result if logical_result is None else merge_liepin_card_lane_results(logical_result, result)
@@ -477,6 +610,20 @@ async def run_liepin_logical_query_bundle(
                 break
         if logical_result is None:
             raise ValueError("Liepin logical query bundle requires at least one logical query.")
+        if round_plan is not None and _reconciliation_required_reason((logical_result,)) is None:
+            skipped_lane_keys.update(
+                (
+                    lane.source_lane_run_id,
+                    lane.query_instance_id,
+                )
+                for lane in round_plan.lanes
+                if lane.logical_query_ordinal == index
+                and (
+                    lane.source_lane_run_id,
+                    lane.query_instance_id,
+                )
+                not in started_lane_keys
+            )
         return _with_liepin_query_execution_outcome(
             logical_result,
             logical_query=logical_query,
@@ -487,9 +634,7 @@ async def run_liepin_logical_query_bundle(
     if settings.liepin_worker_mode == "opencli" or context.backend_mode == "opencli":
         for index, logical_query in enumerate(logical_queries, start=1):
             logical_results[index] = await run_logical_query(index, logical_query)
-            if _reconciliation_required_reason(
-                (logical_results[index],)
-            ) is not None:
+            if _reconciliation_required_reason((logical_results[index],)) is not None:
                 break
     else:
         tasks: dict[int, asyncio.Task[RuntimeSourceLaneResult]] = {}
@@ -498,16 +643,548 @@ async def run_liepin_logical_query_bundle(
                 tasks[index] = task_group.create_task(run_logical_query(index, logical_query))
         logical_results = {index: tasks[index].result() for index in tasks}
 
+    skip_lane = getattr(cards_operation_executor, "skip_lane", None)
+    if callable(skip_lane) and round_plan is not None:
+        for lane in round_plan.lanes:
+            lane_key = (
+                lane.source_lane_run_id,
+                lane.query_instance_id,
+            )
+            if lane_key in skipped_lane_keys:
+                skip_lane(
+                    round_no=round_plan.round_no,
+                    source_lane_run_id=lane.source_lane_run_id,
+                    query_instance_id=lane.query_instance_id,
+                )
+
     merged_result: RuntimeSourceLaneResult | None = None
     for index in sorted(logical_results):
         logical_result = logical_results[index]
         merged_result = (
-            logical_result
-            if merged_result is None
-            else merge_liepin_card_lane_results(merged_result, logical_result)
+            logical_result if merged_result is None else merge_liepin_card_lane_results(merged_result, logical_result)
         )
     assert merged_result is not None
     return merged_result
+
+
+def prepare_liepin_round_work_plan_resume(
+    *,
+    resume_lanes: object,
+    cards_operation_executor,
+) -> LiepinPreparedRoundResume:
+    """Load and validate durable resume inputs without executing a source step."""
+    if not isinstance(resume_lanes, list) or not resume_lanes:
+        raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+    lane_payloads: dict[tuple[str, str], dict[str, object]] = {}
+    plan_binding: tuple[str, str, str] | None = None
+    for raw in resume_lanes:
+        if not isinstance(raw, Mapping):
+            raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+        raw_mapping = cast(Mapping[str, object], raw)
+        source_lane_run_id = raw_mapping.get("sourceLaneRunId")
+        query_instance_id = raw_mapping.get("queryInstanceId")
+        base_checkpoint_id = raw_mapping.get("baseCheckpointId")
+        artifact_ref = raw_mapping.get("workPlanArtifactRef")
+        artifact_hash = raw_mapping.get("workPlanArtifactHash")
+        if (
+            not isinstance(source_lane_run_id, str)
+            or not isinstance(query_instance_id, str)
+            or not isinstance(base_checkpoint_id, str)
+            or not isinstance(artifact_ref, str)
+            or not isinstance(artifact_hash, str)
+        ):
+            raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+        key = (source_lane_run_id, query_instance_id)
+        binding = (base_checkpoint_id, artifact_ref, artifact_hash)
+        if key in lane_payloads or (plan_binding is not None and plan_binding != binding):
+            raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+        lane_payloads[key] = dict(raw_mapping)
+        plan_binding = binding
+    assert plan_binding is not None
+    prepare_plan = getattr(
+        cards_operation_executor,
+        "prepare_recovered_round_work_plan",
+        None,
+    )
+    if not callable(prepare_plan):
+        raise ValueError("runtime_workflow_round_plan_preparer_missing")
+    plan = prepare_plan(
+        artifact_ref=plan_binding[1],
+        artifact_hash=plan_binding[2],
+    )
+    plan_keys = tuple((lane.source_lane_run_id, lane.query_instance_id) for lane in plan.lanes)
+    if plan.base_checkpoint_id != plan_binding[0] or set(plan_keys) != set(lane_payloads):
+        raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+
+    from seektalent.models import RequirementSheet
+
+    requirement_sheet = RequirementSheet.model_validate(plan.requirement_sheet)
+    budget = source_budget_from_liepin_round_work_plan(plan)
+    requests: list[LiepinCardsOperationRequestV1] = []
+    ordered_payloads: list[dict[str, object]] = []
+    for lane in plan.lanes:
+        raw = lane_payloads[(lane.source_lane_run_id, lane.query_instance_id)]
+        request = _cards_operation_request_from_round_plan_lane(
+            plan=plan,
+            lane=lane,
+            requirement_sheet=requirement_sheet,
+            budget=budget,
+        )
+        _validate_round_resume_lane_payload(
+            raw=raw,
+            plan=plan,
+            lane=lane,
+            request=request,
+            artifact_ref=plan_binding[1],
+            artifact_hash=plan_binding[2],
+        )
+        ordered_payloads.append(raw)
+        requests.append(request)
+    return LiepinPreparedRoundResume(
+        plan=plan,
+        lane_payloads=tuple(ordered_payloads),
+        cards_requests=tuple(requests),
+    )
+
+
+async def resume_liepin_round_work_plan(
+    *,
+    settings: AppSettings,
+    prepared_resume: object,
+    detail_open_claim_ledger: DetailOpenClaimLedger,
+    cards_operation_executor,
+) -> LiepinRoundResumeResult:
+    """Execute only a plan already validated by the Runtime authority."""
+    if not isinstance(prepared_resume, LiepinPreparedRoundResume):
+        raise ValueError("runtime_workflow_round_resume_plan_invalid")
+    plan = prepared_resume.plan
+    activate_plan = getattr(
+        cards_operation_executor,
+        "activate_recovered_round_work_plan",
+        None,
+    )
+    if not callable(activate_plan):
+        raise ValueError("runtime_workflow_round_plan_activator_missing")
+    activate_plan(plan)
+
+    from seektalent.models import RequirementSheet
+
+    requirement_sheet = RequirementSheet.model_validate(plan.requirement_sheet)
+    budget = source_budget_from_liepin_round_work_plan(plan)
+    lane_payloads = {
+        (lane.source_lane_run_id, lane.query_instance_id): raw
+        for lane, raw in zip(
+            plan.lanes,
+            prepared_resume.lane_payloads,
+            strict=True,
+        )
+    }
+    requests = {
+        (lane.source_lane_run_id, lane.query_instance_id): request
+        for lane, request in zip(
+            plan.lanes,
+            prepared_resume.cards_requests,
+            strict=True,
+        )
+    }
+    logical_results: dict[int, RuntimeSourceLaneResult] = {}
+    target_results: dict[int, list[RuntimeSourceLaneResult]] = {}
+    logical_dispatches: dict[int, LogicalQueryDispatch] = {}
+
+    for lane in plan.lanes:
+        raw = lane_payloads[(lane.source_lane_run_id, lane.query_instance_id)]
+        if raw.get("roundNo") != plan.round_no:
+            raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+        status = raw.get("barrierStatus")
+        raw_transitions = raw.get("transitions")
+        if not isinstance(raw_transitions, list):
+            raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+        prior_target_results = target_results.get(
+            lane.logical_query_ordinal,
+            [],
+        )
+        captured_detail_count = sum(len(item.candidate_store_updates) for item in prior_target_results)
+        remaining_target = max(
+            0,
+            lane.logical_target_total - captured_detail_count,
+        )
+        if status == "skipped":
+            if raw_transitions:
+                raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+            continue
+        if status == "pending":
+            if raw_transitions:
+                raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+            if remaining_target == 0:
+                cards_operation_executor.skip_lane(
+                    round_no=plan.round_no,
+                    source_lane_run_id=lane.source_lane_run_id,
+                    query_instance_id=lane.query_instance_id,
+                )
+                continue
+            result = await _run_pending_round_plan_lane(
+                settings=settings,
+                plan=plan,
+                lane=lane,
+                requirement_sheet=requirement_sheet,
+                budget=budget,
+                detail_open_claim_ledger=detail_open_claim_ledger,
+                cards_operation_executor=cards_operation_executor,
+                logical_requested_count=remaining_target,
+            )
+        elif status in {"active", "completed"}:
+            if not raw_transitions or not all(isinstance(item, Mapping) for item in raw_transitions):
+                raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+            active = cast(Mapping[str, object], raw_transitions[-1])
+            step_kind = active.get("stepKind")
+            if status == "active" and step_kind == "source_dispatch":
+                if remaining_target == 0:
+                    raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+                result = await _run_pending_round_plan_lane(
+                    settings=settings,
+                    plan=plan,
+                    lane=lane,
+                    requirement_sheet=requirement_sheet,
+                    budget=budget,
+                    detail_open_claim_ledger=detail_open_claim_ledger,
+                    cards_operation_executor=cards_operation_executor,
+                    logical_requested_count=remaining_target,
+                )
+            elif status == "active" and step_kind in {
+                "detail_queued",
+                "detail_dispatch",
+            }:
+                resumed = cards_operation_executor.resume_detail_workflow_transition(
+                    dict(active),
+                    detail_open_claim_ledger=(detail_open_claim_ledger),
+                )
+                result = resumed.lane_result
+            elif status == "completed" and step_kind == "lane_completed":
+                continuation = active.get("continuation")
+                if not isinstance(continuation, Mapping):
+                    raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+                continuation_mapping = cast(Mapping[str, object], continuation)
+                if continuation_mapping.get("laneResultKind") == "liepin_detail_work_plan":
+                    resumed = cards_operation_executor.resume_completed_detail_workflow_transition(dict(active))
+                    result = resumed.lane_result
+                elif continuation_mapping.get("laneResultKind") == "cards_only":
+                    artifact = cards_operation_executor.resume_completed_cards_workflow_transition(
+                        dict(active),
+                        expected_request=requests[
+                            (
+                                lane.source_lane_run_id,
+                                lane.query_instance_id,
+                            )
+                        ],
+                    )
+                    result = build_resumed_liepin_cards_lane_result(
+                        plan=plan,
+                        lane=lane,
+                        budget=budget,
+                        artifact=artifact,
+                    )
+                else:
+                    raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+            else:
+                raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+        else:
+            raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+
+        package = RuntimeQueryPackage(
+            source_kind="liepin",
+            query_role=lane.query_role,
+            lane_type=lane.lane_type,
+            query_instance_id=lane.query_instance_id,
+            query_fingerprint=lane.query_fingerprint,
+            term_group_key=lane.term_group_key,
+            query_terms=tuple(lane.logical_query_terms),
+            keyword_query=lane.keyword_query,
+        )
+        result = replace(
+            result,
+            executed_query_packages=(package,),
+            query_execution_outcomes=(),
+            candidate_query_attributions=(),
+        )
+        _complete_durable_liepin_lane(
+            cards_operation_executor=cards_operation_executor,
+            result=result,
+            query_instance_id=lane.query_instance_id,
+        )
+        targets = target_results.setdefault(
+            lane.logical_query_ordinal,
+            [],
+        )
+        targets.append(result)
+        previous = logical_results.get(lane.logical_query_ordinal)
+        logical_results[lane.logical_query_ordinal] = (
+            result if previous is None else merge_liepin_card_lane_results(previous, result)
+        )
+        logical_dispatches.setdefault(
+            lane.logical_query_ordinal,
+            _logical_dispatch_from_round_plan_lane(plan, lane),
+        )
+        if _reconciliation_required_reason((result,)) is not None:
+            break
+
+    merged: RuntimeSourceLaneResult | None = None
+    for logical_ordinal in sorted(logical_results):
+        logical_result = _with_liepin_query_execution_outcome(
+            logical_results[logical_ordinal],
+            logical_query=logical_dispatches[logical_ordinal],
+            target_results=target_results[logical_ordinal],
+        )
+        merged = logical_result if merged is None else merge_liepin_card_lane_results(merged, logical_result)
+    if merged is None:
+        raise ValueError("runtime_workflow_round_resume_result_missing")
+    return LiepinRoundResumeResult(plan=plan, lane_result=merged)
+
+
+def _validate_round_resume_lane_payload(
+    *,
+    raw: Mapping[str, object],
+    plan: LiepinRoundWorkPlanV1,
+    lane: LiepinRoundLaneWorkItemV1,
+    request: LiepinCardsOperationRequestV1,
+    artifact_ref: str,
+    artifact_hash: str,
+) -> None:
+    if (
+        raw.get("roundNo") != plan.round_no
+        or raw.get("baseCheckpointId") != plan.base_checkpoint_id
+        or raw.get("sourceLaneRunId") != lane.source_lane_run_id
+        or raw.get("queryInstanceId") != lane.query_instance_id
+        or raw.get("workPlanArtifactRef") != artifact_ref
+        or raw.get("workPlanArtifactHash") != artifact_hash
+    ):
+        raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+    status = raw.get("barrierStatus")
+    transitions = raw.get("transitions")
+    if not isinstance(transitions, list):
+        raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+    if status in {"pending", "skipped"}:
+        if transitions:
+            raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+        return
+    if status not in {"active", "completed"} or not transitions:
+        raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+    if not all(isinstance(item, Mapping) for item in transitions):
+        raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+    transition_items = [cast(Mapping[str, object], item) for item in transitions]
+    previous_transition_id: str | None = None
+    for index, item in enumerate(transition_items):
+        transition_id = item.get("transitionId")
+        parent_transition_id = item.get("parentTransitionId")
+        if (
+            not isinstance(transition_id, str)
+            or item.get("sourceLaneRunId") != lane.source_lane_run_id
+            or item.get("queryInstanceId") != lane.query_instance_id
+            or item.get("baseCheckpointId") != plan.base_checkpoint_id
+            or item.get("roundNo") != plan.round_no
+            or parent_transition_id != previous_transition_id
+        ):
+            raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+        if index == 0 and item.get("stepKind") != "source_dispatch":
+            raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+        previous_transition_id = transition_id
+    root = transition_items[0]
+    root_continuation = root.get("continuation")
+    root_artifact_refs = root.get("artifactRefs")
+    expected_request_hash = canonical_liepin_cards_request_hash(request)
+    if not isinstance(root_continuation, Mapping) or not isinstance(root_artifact_refs, list):
+        raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+    root_continuation_mapping = cast(Mapping[str, object], root_continuation)
+    if (
+        root_continuation_mapping.get("schemaVersion") != "runtime-source-dispatch-continuation/v1"
+        or root_continuation_mapping.get("operationId") != stable_liepin_cards_operation_id(request)
+        or root_continuation_mapping.get("requestHash") != expected_request_hash
+        or root_continuation_mapping.get("queryFingerprint") != expected_request_hash
+        or root_continuation_mapping.get("roundWorkPlanArtifactRef") != artifact_ref
+        or root_continuation_mapping.get("roundWorkPlanArtifactHash") != artifact_hash
+        or artifact_ref not in root_artifact_refs
+    ):
+        raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+    final_step = transition_items[-1].get("stepKind")
+    if (status == "completed" and final_step != "lane_completed") or (
+        status == "active" and final_step == "lane_completed"
+    ):
+        raise ValueError("runtime_workflow_round_resume_lanes_invalid")
+
+
+def _round_plan_lane_runtime_request(
+    *,
+    plan: LiepinRoundWorkPlanV1,
+    lane: LiepinRoundLaneWorkItemV1,
+    requirement_sheet: "RequirementSheet",
+    budget: RuntimeSourceBudgetPolicy,
+    logical_requested_count: int | None = None,
+) -> tuple[RuntimeSourceLaneRequest, SearchRequest | None]:
+    compiled = lane.compiled_search_request
+    compiled_request = (
+        SearchRequest(
+            query_terms=list(compiled.query_terms),
+            query_role=compiled.query_role,
+            keyword_query=compiled.keyword_query,
+            adapter_notes=list(compiled.adapter_notes),
+            runtime_constraints=[],
+            fetch_mode=compiled.fetch_mode,
+            page_size=compiled.page_size,
+            provider_context=dict(compiled.provider_context),
+            cursor=compiled.cursor,
+        )
+        if compiled is not None
+        else None
+    )
+    request = RuntimeSourceLaneRequest(
+        source="liepin",
+        lane_mode="card",
+        job_title=plan.job_title,
+        jd=plan.jd,
+        notes=plan.notes,
+        requirement_sheet=requirement_sheet,
+        runtime_run_id=plan.runtime_run_id,
+        source_plan_id=plan.source_plan_id,
+        source_lane_run_id=lane.source_lane_run_id,
+        source_query_terms=tuple(lane.query_terms),
+        logical_round_no=plan.round_no,
+        logical_query_instance_id=lane.query_instance_id,
+        logical_query_fingerprint=lane.query_fingerprint,
+        logical_query_role=lane.query_role,
+        logical_keyword_query=lane.keyword_query,
+        logical_requested_count=(
+            logical_requested_count if logical_requested_count is not None else lane.logical_target_total
+        ),
+        logical_provider_scan_limit=lane.provider_scan_limit,
+        logical_unsupported_filter_reason_codes=(lane.unsupported_filter_reason_codes),
+        source_budget_policy=budget,
+        source_context=plan.source_context,
+    )
+    return request, compiled_request
+
+
+def _cards_operation_request_from_round_plan_lane(
+    *,
+    plan: LiepinRoundWorkPlanV1,
+    lane: LiepinRoundLaneWorkItemV1,
+    requirement_sheet: "RequirementSheet",
+    budget: RuntimeSourceBudgetPolicy,
+) -> LiepinCardsOperationRequestV1:
+    request, compiled_request = _round_plan_lane_runtime_request(
+        plan=plan,
+        lane=lane,
+        requirement_sheet=requirement_sheet,
+        budget=budget,
+    )
+    context = normalize_runtime_liepin_context(plan.source_context)
+    search_request = _card_search_request(
+        request=request,
+        context=context,
+        source_lane_run_id=lane.source_lane_run_id,
+        compiled_search_request=compiled_request,
+    )
+    raw_native_filters = search_request.provider_context.get("liepin_native_filters_json")
+    native_filters: dict[str, object] | None = None
+    if isinstance(raw_native_filters, str) and raw_native_filters.strip():
+        try:
+            decoded_native_filters = json.loads(raw_native_filters)
+        except json.JSONDecodeError:
+            raise ValueError("runtime_workflow_round_native_filters_invalid") from None
+        if not isinstance(decoded_native_filters, dict):
+            raise ValueError("runtime_workflow_round_native_filters_invalid")
+        native_filters = {str(key): value for key, value in decoded_native_filters.items()}
+    max_cards = _positive_context_int(
+        search_request.provider_context.get("liepin_max_cards"),
+        default=search_request.page_size,
+    )
+    max_pages = _positive_context_int(
+        search_request.provider_context.get("liepin_max_pages"),
+        default=1,
+    )
+    return LiepinCardsOperationRequestV1.model_validate(
+        {
+            "contract_version": ("seektalent.source.liepin-cards.request/v1"),
+            "runtime_run_id": plan.runtime_run_id,
+            "source_lane_run_id": lane.source_lane_run_id,
+            "query_instance_id": lane.query_instance_id,
+            "keyword_query": render_liepin_keyword_query(
+                search_request.query_terms,
+                logical_keyword_query=search_request.keyword_query,
+            ),
+            "max_pages": max_pages,
+            "max_cards": max_cards,
+            "native_filters": native_filters,
+        },
+        strict=True,
+    )
+
+
+async def _run_pending_round_plan_lane(
+    *,
+    settings: AppSettings,
+    plan: LiepinRoundWorkPlanV1,
+    lane: LiepinRoundLaneWorkItemV1,
+    requirement_sheet: "RequirementSheet",
+    budget: RuntimeSourceBudgetPolicy,
+    detail_open_claim_ledger: DetailOpenClaimLedger,
+    cards_operation_executor,
+    logical_requested_count: int,
+) -> RuntimeSourceLaneResult:
+    request, compiled_request = _round_plan_lane_runtime_request(
+        plan=plan,
+        lane=lane,
+        requirement_sheet=requirement_sheet,
+        budget=budget,
+        logical_requested_count=logical_requested_count,
+    )
+    return await run_liepin_source_lane(
+        settings=settings,
+        request=request,
+        compiled_search_request=compiled_request,
+        detail_open_claim_ledger=detail_open_claim_ledger,
+        cards_operation_executor=cards_operation_executor,
+    )
+
+
+def _logical_dispatch_from_round_plan_lane(
+    plan: LiepinRoundWorkPlanV1,
+    lane: LiepinRoundLaneWorkItemV1,
+) -> LogicalQueryDispatch:
+    if lane.lane_type not in {"exploit", "prf_probe", "generic_explore"}:
+        raise ValueError("runtime_workflow_round_lane_type_invalid")
+    return LogicalQueryDispatch(
+        round_no=plan.round_no,
+        query_role=lane.query_role,
+        lane_type=cast(LaneType, lane.lane_type),
+        query_instance_id=lane.query_instance_id,
+        query_fingerprint=lane.query_fingerprint,
+        term_group_key=lane.term_group_key,
+        primary_anchor_family_id=lane.primary_anchor_family_id,
+        non_anchor_term_family_ids=(lane.non_anchor_term_family_ids),
+        query_terms=tuple(lane.logical_query_terms),
+        keyword_query=lane.keyword_query,
+        requested_count=lane.logical_requested_count,
+        source_plan_version=lane.source_plan_version,
+    )
+
+
+def _complete_durable_liepin_lane(
+    *,
+    cards_operation_executor: object | None,
+    result: RuntimeSourceLaneResult,
+    query_instance_id: str,
+) -> None:
+    if result.status not in {"completed", "partial"} or _reconciliation_required_reason((result,)) is not None:
+        return
+    complete_lane = getattr(
+        cards_operation_executor,
+        "complete_lane",
+        None,
+    )
+    if callable(complete_lane):
+        complete_lane(
+            source_lane_run_id=result.source_lane_run_id,
+            query_instance_id=query_instance_id,
+        )
 
 
 def _uses_private_detail_open_claim_route(
@@ -546,13 +1223,8 @@ def merge_liepin_card_lane_results(
             right_evidence=second_evidence_by_resume_id.get(resume_id, ()),
         )
         candidate_updates[resume_id] = merged_candidate
-    normalized_updates = {
-        resume_id: normalize_resume(candidate)
-        for resume_id, candidate in candidate_updates.items()
-    }
-    reconciliation_reason = _reconciliation_required_reason(
-        (first, second)
-    )
+    normalized_updates = {resume_id: normalize_resume(candidate) for resume_id, candidate in candidate_updates.items()}
+    reconciliation_reason = _reconciliation_required_reason((first, second))
     if reconciliation_reason is not None:
         status: RuntimeSourceLaneStatus = "blocked"
         stop_reason_code = reconciliation_reason
@@ -563,12 +1235,8 @@ def merge_liepin_card_lane_results(
         blocked_reason_code = None
     else:
         status = second.status
-        stop_reason_code = (
-            second.stop_reason_code or first.stop_reason_code
-        )
-        blocked_reason_code = (
-            second.blocked_reason_code or first.blocked_reason_code
-        )
+        stop_reason_code = second.stop_reason_code or first.stop_reason_code
+        blocked_reason_code = second.blocked_reason_code or first.blocked_reason_code
     return RuntimeSourceLaneResult(
         runtime_run_id=first.runtime_run_id,
         source_plan_id=first.source_plan_id,
@@ -581,7 +1249,9 @@ def merge_liepin_card_lane_results(
         normalized_store_updates=normalized_updates,
         source_evidence_updates=evidence_updates,
         provider_snapshots=first.provider_snapshots + second.provider_snapshots,
-        private_first_page_continuations=(first.private_first_page_continuations + second.private_first_page_continuations),
+        private_first_page_continuations=(
+            first.private_first_page_continuations + second.private_first_page_continuations
+        ),
         raw_candidate_count=int(first.raw_candidate_count or 0) + int(second.raw_candidate_count or 0),
         provider_snapshot_refs=first.provider_snapshot_refs + second.provider_snapshot_refs,
         safe_summary_refs=first.safe_summary_refs + second.safe_summary_refs,
@@ -593,11 +1263,7 @@ def merge_liepin_card_lane_results(
         candidate_query_attributions=first.candidate_query_attributions + second.candidate_query_attributions,
         blocked_reason_code=blocked_reason_code,
         stop_reason_code=stop_reason_code,
-        retryable=(
-            False
-            if reconciliation_reason is not None
-            else first.retryable or second.retryable
-        ),
+        retryable=(False if reconciliation_reason is not None else first.retryable or second.retryable),
         safe_error_summary=first.safe_error_summary or second.safe_error_summary,
         error_ref=first.error_ref or second.error_ref,
     )
@@ -654,9 +1320,7 @@ def _with_liepin_query_execution_outcome(
         dispatch_started=any(item.query_started for item in target_results),
         raw_candidate_count=raw_candidate_count,
         unique_candidate_count=len(candidate_identity_keys),
-        duplicate_candidate_count=(
-            pre_click_duplicate_count + cross_target_duplicate_candidate_count
-        ),
+        duplicate_candidate_count=(pre_click_duplicate_count + cross_target_duplicate_candidate_count),
         pre_click_skipped_seen_count=pre_click_duplicate_count,
         exhausted_reason=safe_reason,
         safe_reason_code=safe_reason,
@@ -689,9 +1353,7 @@ def _outcome_status(target_results: Collection[RuntimeSourceLaneResult]):
 
 
 def _shared_safe_reason(target_results: Collection[RuntimeSourceLaneResult]) -> str | None:
-    reconciliation_reason = _reconciliation_required_reason(
-        target_results
-    )
+    reconciliation_reason = _reconciliation_required_reason(target_results)
     if reconciliation_reason is not None:
         return reconciliation_reason
     reasons = {
@@ -710,9 +1372,7 @@ def _reconciliation_required_reason(
             result.stop_reason_code,
             result.blocked_reason_code,
         ):
-            if public_source_problem_code(reason) == (
-                "liepin_browser_lane_reconciliation_required"
-            ):
+            if public_source_problem_code(reason) == ("liepin_browser_lane_reconciliation_required"):
                 return reason
     return None
 
@@ -860,6 +1520,18 @@ async def _run_detail_lane(
             bind_lane(
                 source_lane_run_id,
                 request.logical_query_instance_id or source_lane_run_id,
+                source_plan_id=source_plan_id,
+                round_no=request.logical_round_no or request.attempt,
+                query_terms=tuple(query_terms),
+                keyword_query=(request.logical_keyword_query or " ".join(query_terms)),
+                query_fingerprint=(
+                    request.logical_query_fingerprint or request.logical_query_instance_id or source_lane_run_id
+                ),
+                query_role=request.logical_query_role or "exploit",
+                requested_count=(request.logical_requested_count or request.source_budget_policy.detail_target or 1),
+                max_pages=request.source_budget_policy.max_pages,
+                max_cards=request.source_budget_policy.max_cards,
+                claim_aware=False,
             )
     client = worker_client or build_liepin_worker_client(
         settings,
@@ -1069,7 +1741,11 @@ def _card_lane_events(
             event_type=event_type,
             status=status,
             safe_counts=(
-                {"cards_seen": int(raw_candidate_count or candidate_count), "details_opened": candidate_count, "candidates": candidate_count}
+                {
+                    "cards_seen": int(raw_candidate_count or candidate_count),
+                    "details_opened": candidate_count,
+                    "candidates": candidate_count,
+                }
                 if detail_backed
                 else {"cards_seen": int(raw_candidate_count or candidate_count), "candidates": candidate_count}
             ),
@@ -1218,6 +1894,272 @@ def _source_evidence_for_candidate(
         reason_code="source_detail_candidate" if evidence_level == "detail" else "source_card_candidate",
         safe_reason_codes=("source_detail_candidate" if evidence_level == "detail" else "source_card_candidate",),
         source_references=candidate.source_references,
+    )
+
+
+def build_resumed_liepin_cards_lane_result(
+    *,
+    plan: LiepinRoundWorkPlanV1,
+    lane: LiepinRoundLaneWorkItemV1,
+    budget: RuntimeSourceBudgetPolicy,
+    artifact: LiepinCardsArtifactV1,
+) -> RuntimeSourceLaneResult:
+    """Project one completed cards artifact without re-entering the provider."""
+    from seektalent.providers.liepin.mapper import map_liepin_worker_card
+    from seektalent.providers.liepin.worker_contracts import (
+        LiepinSafeCardSummary,
+        LiepinWorkerCandidateCard,
+    )
+
+    mapped_candidates = []
+    for raw_card in artifact.cards[: budget.max_cards]:
+        card = {str(key): value for key, value in raw_card.items()}
+        summary_payload = {key: card[key] for key in LiepinSafeCardSummary.model_fields if key in card}
+        if "masked_name" not in summary_payload and isinstance(
+            card.get("display_name_masked"),
+            bool,
+        ):
+            summary_payload["masked_name"] = card["display_name_masked"]
+        summary = LiepinSafeCardSummary.model_validate(summary_payload)
+        fingerprint = hashlib.sha256(
+            canonical_json_bytes(
+                {
+                    "contract": "seektalent.liepin-card-identity/v1",
+                    "card": card,
+                }
+            )
+        ).hexdigest()
+        mapped_candidates.append(
+            map_liepin_worker_card(
+                LiepinWorkerCandidateCard(
+                    payload=card,
+                    normalized_text="",
+                    provider_subject_id=None,
+                    provider_listing_id=None,
+                    synthetic_candidate_fingerprint=fingerprint,
+                    identity_confidence="synthetic_fingerprint",
+                    extraction_source="dom_fallback",
+                    extractor_version=("liepin-opencli-deterministic-v1"),
+                    pii_classification="no_direct_contact",
+                    retention_policy="provider_snapshot_7d",
+                    access_scope="local_run_only",
+                    redaction_state="raw_provider_payload",
+                    safeCardSummary=summary,
+                )
+            )
+        )
+    candidates = tuple(item.candidate for item in mapped_candidates)
+    source_plan = RuntimeSourceLanePlan(
+        source_plan_id=plan.source_plan_id,
+        runtime_run_id=plan.runtime_run_id,
+        source="liepin",
+        label="Liepin",
+        lane_mode="card",
+        backend_mode="runtime_source_lane",
+        max_cards=budget.max_cards,
+        max_details=budget.max_details,
+        produces_private_first_page_continuations=True,
+        source_budget_policy=budget,
+    )
+    collected_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    evidence_updates = tuple(
+        _source_evidence_for_candidate(
+            source_plan=source_plan,
+            candidate=candidate,
+            collected_at=collected_at,
+            evidence_level="card",
+            source_lane_run_id=lane.source_lane_run_id,
+            provider_rank=index,
+            query_fingerprint=lane.query_fingerprint,
+        )
+        for index, candidate in enumerate(candidates, start=1)
+    )
+    attributions = tuple(
+        RuntimeQueryCandidateAttribution(
+            source_kind="liepin",
+            query_instance_id=lane.query_instance_id,
+            resume_id=candidate.resume_id,
+            dedup_key=candidate.dedup_key,
+        )
+        for candidate in candidates
+    )
+    if artifact.status == "succeeded":
+        status: RuntimeSourceLaneStatus = "completed"
+    elif artifact.status == "partial":
+        status = "partial"
+    else:
+        status = "failed"
+    return RuntimeSourceLaneResult(
+        runtime_run_id=plan.runtime_run_id,
+        source_plan_id=plan.source_plan_id,
+        source_lane_run_id=lane.source_lane_run_id,
+        source="liepin",
+        lane_mode="card",
+        attempt=plan.round_no,
+        status=status,
+        candidate_store_updates={candidate.resume_id: candidate for candidate in candidates},
+        source_evidence_updates=evidence_updates,
+        provider_snapshots=tuple(item.provider_snapshot for item in mapped_candidates),
+        raw_candidate_count=artifact.cards_seen,
+        events=(
+            RuntimeSourceLaneEvent(
+                schema_version="runtime_source_lane_event_v1",
+                runtime_run_id=plan.runtime_run_id,
+                source_plan_id=plan.source_plan_id,
+                source_lane_run_id=lane.source_lane_run_id,
+                source="liepin",
+                attempt=plan.round_no,
+                event_seq=1,
+                event_type="source_lane_completed",
+                status=status,
+                safe_counts={"cards_seen": artifact.cards_seen},
+                safe_reason_code=artifact.safe_reason_code,
+            ),
+        ),
+        query_started=True,
+        candidate_query_attributions=attributions,
+        stop_reason_code=artifact.safe_reason_code,
+    )
+
+
+def build_resumed_liepin_detail_lane_result(
+    *,
+    plan,
+    structured_results: Sequence[Mapping[str, object]],
+) -> RuntimeSourceStepResumeResult:
+    """Project a completed durable capture queue through the normal lane boundary."""
+    from seektalent.providers.liepin.mapper import (
+        liepin_worker_detail_from_resume_payload,
+        map_liepin_worker_detail,
+    )
+
+    if plan.phase != "captures":
+        raise ValueError("runtime_detail_work_plan_capture_required")
+    candidates: list[ResumeCandidate] = []
+    provider_snapshots: list[object] = []
+    rank_by_resume_id: dict[str, int] = {}
+    item_by_rank = {item.rank: item for item in plan.items}
+    for structured in structured_results:
+        resume = structured.get("resume")
+        raw_counts = structured.get("counts")
+        rank = cast(Mapping[str, object], raw_counts).get("rank") if isinstance(raw_counts, Mapping) else None
+        if (
+            structured.get("ingest_ready") is not True
+            or not isinstance(resume, Mapping)
+            or isinstance(rank, bool)
+            or not isinstance(rank, int)
+        ):
+            continue
+        item = item_by_rank.get(rank)
+        if item is None or item.provider_candidate_key_hash is None:
+            raise ValueError("runtime_detail_work_plan_result_mismatch")
+        resume_payload = {str(key): value for key, value in resume.items()}
+        resume_payload["claim_aware"] = True
+        resume_payload["provider_candidate_key_hash"] = item.provider_candidate_key_hash
+        mapped = map_liepin_worker_detail(
+            liepin_worker_detail_from_resume_payload(
+                resume_payload,
+                action_trace_ref=None,
+            )
+        )
+        candidates.append(mapped.candidate)
+        provider_snapshots.append(mapped.provider_snapshot)
+        rank_by_resume_id[mapped.candidate.resume_id] = rank
+
+    source_plan = RuntimeSourceLanePlan(
+        source_plan_id=plan.source_plan_id,
+        runtime_run_id=plan.runtime_run_id,
+        source="liepin",
+        label="Liepin",
+        lane_mode="detail",
+        backend_mode="runtime_source_lane",
+        max_cards=plan.max_cards,
+        max_details=plan.requested_count,
+        produces_private_first_page_continuations=True,
+    )
+    collected_at = datetime.now().astimezone().isoformat(timespec="seconds")
+    evidence_updates = tuple(
+        _source_evidence_for_candidate(
+            source_plan=source_plan,
+            candidate=candidate,
+            collected_at=collected_at,
+            evidence_level="detail",
+            source_lane_run_id=plan.source_lane_run_id,
+            provider_rank=rank_by_resume_id[candidate.resume_id],
+            query_fingerprint=plan.query_fingerprint,
+        )
+        for candidate in candidates
+    )
+    attributions = tuple(
+        RuntimeQueryCandidateAttribution(
+            source_kind="liepin",
+            query_instance_id=plan.query_instance_id,
+            resume_id=candidate.resume_id,
+            dedup_key=candidate.dedup_key,
+        )
+        for candidate in candidates
+    )
+    status: RuntimeSourceLaneStatus = "completed" if len(candidates) >= plan.requested_count else "partial"
+    lane_result = RuntimeSourceLaneResult(
+        runtime_run_id=plan.runtime_run_id,
+        source_plan_id=plan.source_plan_id,
+        source_lane_run_id=plan.source_lane_run_id,
+        source="liepin",
+        lane_mode="detail",
+        attempt=plan.round_no,
+        status=status,
+        candidate_store_updates={candidate.resume_id: candidate for candidate in candidates},
+        source_evidence_updates=evidence_updates,
+        provider_snapshots=tuple(provider_snapshots),
+        raw_candidate_count=len(plan.items),
+        events=(
+            RuntimeSourceLaneEvent(
+                schema_version="runtime_source_lane_event_v1",
+                runtime_run_id=plan.runtime_run_id,
+                source_plan_id=plan.source_plan_id,
+                source_lane_run_id=plan.source_lane_run_id,
+                source="liepin",
+                attempt=plan.round_no,
+                event_seq=1,
+                event_type="detail_completed",
+                status=status,
+                safe_counts={"details_opened": len(candidates)},
+            ),
+        ),
+        executed_query_packages=(
+            RuntimeQueryPackage(
+                source_kind="liepin",
+                query_role=plan.query_role,
+                query_instance_id=plan.query_instance_id,
+                query_fingerprint=plan.query_fingerprint,
+                query_terms=tuple(plan.query_terms),
+                keyword_query=plan.keyword_query,
+            ),
+        ),
+        query_started=True,
+        query_execution_outcomes=(
+            SourceQueryExecutionOutcome(
+                query_instance_id=plan.query_instance_id,
+                status=status,
+                dispatch_started=True,
+                raw_candidate_count=len(plan.items),
+                unique_candidate_count=len(candidates),
+                exhausted_reason=(None if status == "completed" else "durable_detail_target_not_met"),
+                safe_reason_code=(None if status == "completed" else "durable_detail_target_not_met"),
+            ),
+        ),
+        candidate_query_attributions=attributions,
+        stop_reason_code=(None if status == "completed" else "durable_detail_target_not_met"),
+    )
+    return RuntimeSourceStepResumeResult(
+        round_no=plan.round_no,
+        lane_result=lane_result,
+        query_terms=tuple(plan.query_terms),
+        keyword_query=plan.keyword_query,
+        query_instance_id=plan.query_instance_id,
+        query_fingerprint=plan.query_fingerprint,
+        query_role=cast(QueryRole, plan.query_role),
+        requested_count=plan.requested_count,
     )
 
 
@@ -1402,13 +2344,11 @@ def _card_search_request(
     compiled_search_request: SearchRequest | None,
 ) -> SearchRequest:
     default_query_terms = list(request.source_query_terms or _basic_source_query_terms(request))
-    default_query_fingerprint = request.logical_query_fingerprint or hashlib.sha256(
-        " ".join(default_query_terms).encode("utf-8")
-    ).hexdigest()
+    default_query_fingerprint = (
+        request.logical_query_fingerprint or hashlib.sha256(" ".join(default_query_terms).encode("utf-8")).hexdigest()
+    )
     provider_scan_limit = (
-        request.logical_provider_scan_limit
-        or request.logical_requested_count
-        or request.source_budget_policy.max_cards
+        request.logical_provider_scan_limit or request.logical_requested_count or request.source_budget_policy.max_cards
     )
     if compiled_search_request is not None and compiled_search_request.fetch_mode == "detail":
         page_size = int(request.logical_requested_count or compiled_search_request.page_size or 10)
@@ -1547,15 +2487,9 @@ def _build_provider(
         worker_search_started_callback=worker_search_started_callback,
         store=store,
         verify_session_gate=(
-            create_production_liepin_verify_session_gate(settings)
-            if settings.liepin_worker_mode == "opencli"
-            else None
+            create_production_liepin_verify_session_gate(settings) if settings.liepin_worker_mode == "opencli" else None
         ),
-        readiness_preparer=(
-            readiness_preparer
-            if settings.liepin_worker_mode == "opencli"
-            else None
-        ),
+        readiness_preparer=(readiness_preparer if settings.liepin_worker_mode == "opencli" else None),
     )
 
 

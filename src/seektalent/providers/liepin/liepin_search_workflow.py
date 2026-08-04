@@ -70,6 +70,16 @@ class LiepinSearchWorkflowSite(Protocol):
         expected_provider_candidate_key_hash: str | None = None,
     ) -> tuple[dict[str, object], OpenCliBrowserResult]: ...
 
+    def bind_liepin_detail_work_plan(
+        self,
+        *,
+        source_run_id: str,
+        phase: str,
+        items: Sequence[tuple[int, str, str | None]],
+        target_resumes: int,
+        claim_aware: bool,
+    ) -> None: ...
+
     def discard_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> None: ...
 
     def restore_liepin_search_page(self) -> str | None: ...
@@ -150,7 +160,7 @@ class LiepinSearchWorkflow:
             last_reason = effect.safe_reason_code
             if state == "terminal_failed":
                 terminal_failures += 1
-                if not raised:
+                if effect.posture != "unknown" and not raised:
                     continue
             else:
                 interrupted = True
@@ -303,7 +313,22 @@ class LiepinSearchWorkflow:
         detail_urls_by_rank: dict[int, str] = {}
         detail_hashes_by_rank: dict[int, str] = {}
 
-        def remember_detail_urls(cards_to_cache: Sequence[Mapping[str, object]]) -> None:
+        self._bind_detail_work_plan(
+            source_run_id=request.source_run_id,
+            phase="locators",
+            items=tuple(
+                (rank, ref, None)
+                for card in card_items
+                if (selected := _card_ref_and_rank(card)) is not None
+                for ref, rank in (selected,)
+            ),
+            target_resumes=request.target_resumes,
+            claim_aware=detail_open_claim_context is not None,
+        )
+
+        def remember_detail_urls(
+            cards_to_cache: Sequence[Mapping[str, object]],
+        ) -> str | None:
             for card in cards_to_cache:
                 selected = _card_ref_and_rank(card)
                 if selected is None:
@@ -320,6 +345,9 @@ class LiepinSearchWorkflow:
                     rank=rank,
                     open_mode="resolve_locator",
                 )
+                effect = _detail_effect_from_result(envelope, result)
+                if effect.posture == "unknown":
+                    return effect.safe_reason_code
                 if not result.ok:
                     continue
                 detail_url = envelope.get("detail_url")
@@ -335,6 +363,7 @@ class LiepinSearchWorkflow:
                 ):
                     detail_urls_by_rank[rank] = detail_url
                     detail_hashes_by_rank[rank] = key_hash
+            return None
 
         def has_cached_url_for_remaining_candidate() -> bool:
             for card in card_items:
@@ -346,16 +375,24 @@ class LiepinSearchWorkflow:
                     return True
             return False
 
-        remember_detail_urls(card_items)
-        self._append_event(
-            request.source_run_id,
-            {
-                "action_kind": "detail_urls_cached",
-                "route_kind": "search",
-                "ok": True,
-                "cached_detail_urls": len(detail_urls_by_rank),
-            },
-        )
+        locator_interrupted_reason = remember_detail_urls(card_items)
+        detail_urls_event: dict[str, object] = {
+            "action_kind": "detail_urls_cached",
+            "route_kind": "search",
+            "ok": locator_interrupted_reason is None,
+            "cached_detail_urls": len(detail_urls_by_rank),
+        }
+        if locator_interrupted_reason is not None:
+            detail_urls_event["safe_reason_code"] = locator_interrupted_reason
+        self._append_event(request.source_run_id, detail_urls_event)
+        if locator_interrupted_reason is not None:
+            emit_detail_claim_outcomes()
+            return self._site.blocked_resumes_envelope(
+                source_run_id=request.source_run_id,
+                query=request.query,
+                safe_reason_code=locator_interrupted_reason,
+                cards_seen=cards_seen_for_resume,
+            )
 
         baseline_candidates: tuple[LiepinFirstPageCandidate, ...] = ()
         last_detail_safe_reason = "liepin_opencli_detail_not_opened"
@@ -393,6 +430,24 @@ class LiepinSearchWorkflow:
             )
             if not baseline_candidates:
                 last_detail_safe_reason = "liepin_opencli_candidate_identity_missing"
+
+        self._bind_detail_work_plan(
+            source_run_id=request.source_run_id,
+            phase="captures",
+            items=tuple(
+                (rank, ref, provider_candidate_key_hash)
+                for card in card_items
+                if (selected := _card_ref_and_rank(card)) is not None
+                for ref, rank in (selected,)
+                if (
+                    provider_candidate_key_hash
+                    := detail_hashes_by_rank.get(rank)
+                )
+                is not None
+            ),
+            target_resumes=request.target_resumes,
+            claim_aware=detail_open_claim_context is not None,
+        )
 
         if visible_card_count == 0 and cards_seen_for_resume == 0:
             emit_detail_claim_outcomes()
@@ -504,16 +559,17 @@ class LiepinSearchWorkflow:
                 if not capture_result.ok:
                     last_detail_safe_reason = effect.safe_reason_code
                     continue
-            elif (
-                apply_detail_claim(
+            else:
+                claim_state = apply_detail_claim(
                     rank=selected_rank,
                     provider_candidate_key_hash=provider_candidate_key_hash,
                     effect=effect,
                 )
-                != "opened"
-            ):
-                last_detail_safe_reason = effect.safe_reason_code
-                continue
+                if claim_state != "opened":
+                    last_detail_safe_reason = effect.safe_reason_code
+                    if effect.posture == "unknown":
+                        break
+                    continue
 
             opened += 1
             if opened >= request.target_resumes:
@@ -549,7 +605,7 @@ class LiepinSearchWorkflow:
             refreshed_card_items = _structured_card_items(refreshed)
             if refreshed_card_items and detail_open_claim_context is None:
                 card_items = refreshed_card_items
-                remember_detail_urls(card_items)
+                locator_interrupted_reason = remember_detail_urls(card_items)
             cards_seen_for_resume = max(cards_seen_for_resume, len(refreshed_card_items))
             self._append_event(
                 request.source_run_id,
@@ -561,6 +617,23 @@ class LiepinSearchWorkflow:
                     "cards_seen": cards_seen_for_resume,
                 },
             )
+            if locator_interrupted_reason is not None:
+                break
+
+        if locator_interrupted_reason is not None:
+            emit_detail_claim_outcomes()
+            envelope = self._site.blocked_resumes_envelope(
+                source_run_id=request.source_run_id,
+                query=request.query,
+                safe_reason_code=locator_interrupted_reason,
+                cards_seen=cards_seen_for_resume,
+            )
+            envelope["_private_first_page_continuations"] = (
+                (replace(private_continuation, initial_opened_count=opened),)
+                if private_continuation is not None
+                else ()
+            )
+            return envelope
 
         if opened == 0:
             emit_detail_claim_outcomes()
@@ -604,6 +677,23 @@ class LiepinSearchWorkflow:
 
     def _append_event(self, source_run_id: str, event: Mapping[str, object]) -> None:
         self._site.append_agent_event(source_run_id, event)
+
+    def _bind_detail_work_plan(
+        self,
+        *,
+        source_run_id: str,
+        phase: str,
+        items: Sequence[tuple[int, str, str | None]],
+        target_resumes: int,
+        claim_aware: bool,
+    ) -> None:
+        self._site.bind_liepin_detail_work_plan(
+            source_run_id=source_run_id,
+            phase=phase,
+            items=items,
+            target_resumes=target_resumes,
+            claim_aware=claim_aware,
+        )
 
     def _extract_cards_transition(
         self,

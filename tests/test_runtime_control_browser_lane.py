@@ -425,6 +425,11 @@ def test_cards_effect_holds_and_releases_browser_lane(
         "_execute_with_lane",
         execute_with_lane,
     )
+    monkeypatch.setattr(
+        LiepinCardsSourceOperationExecutor,
+        "_ensure_source_dispatch_transition",
+        lambda *_args: None,
+    )
     request = LiepinCardsOperationRequestV1(
         contract_version="seektalent.source.liepin-cards.request/v1",
         runtime_run_id="rtrun-cards",
@@ -480,6 +485,11 @@ def test_cards_reconciliation_unknown_keeps_browser_lane_fenced(
                 ),
             },
         ),
+    )
+    monkeypatch.setattr(
+        LiepinCardsSourceOperationExecutor,
+        "_ensure_source_dispatch_transition",
+        lambda *_args: None,
     )
 
     executor._execute(  # noqa: SLF001
@@ -578,6 +588,7 @@ def test_details_reconciliation_unknown_keeps_browser_lane_fenced(
 
 def test_default_production_lane_contention_yields_promptly(
     tmp_path: Path,
+    monkeypatch,
 ) -> None:
     settings = make_settings(
         workspace_root=str(tmp_path),
@@ -616,6 +627,11 @@ def test_default_production_lane_contention_yields_promptly(
         max_pages=1,
         max_cards=10,
         native_filters=None,
+    )
+    monkeypatch.setattr(
+        LiepinCardsSourceOperationExecutor,
+        "_ensure_source_dispatch_transition",
+        lambda *_args: None,
     )
 
     started = time.monotonic()

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import TYPE_CHECKING
 
 import httpx
 
@@ -24,6 +25,9 @@ from seektalent.source_contracts import (
 )
 
 from .evidence import _record_source_provider_results_from_lane, _source_lane_result_from_retrieval_result
+
+if TYPE_CHECKING:
+    from seektalent.sources.liepin.runtime_lane import LiepinWorkerClient
 
 _SOURCE_ROUND_STATUSES: dict[str, SourceRoundDispatchStatus] = {
     "blocked": "blocked", "completed": "completed", "failed": "failed", "partial": "partial"
@@ -112,7 +116,7 @@ async def _run_cts_source_round(
         source_plan=source_plan,
         retrieval_result=result,
         round_no=context.round_no,
-        runtime_run_id=context.tracer.run_id,
+        runtime_run_id=context.runtime_run_id or context.tracer.run_id,
         logical_queries=request.logical_queries,
     )
     lane_result = replace(
@@ -145,6 +149,7 @@ async def _run_liepin_source_round(
     request: SourceRoundDispatchRequest,
     source_id: str,
     cards_operation_executor: object | None = None,
+    worker_client: "LiepinWorkerClient | None" = None,
 ) -> SourceRoundAdapterResult:
     source_plan = context.source_plan_by_source[source_id]
     safe_posture = dict(source_plan.safe_posture)
@@ -173,7 +178,7 @@ async def _run_liepin_source_round(
 
     result = await source_adapters_facade.run_liepin_logical_query_bundle(
         settings=runtime.settings,
-        runtime_run_id=context.tracer.run_id,
+        runtime_run_id=context.runtime_run_id or context.tracer.run_id,
         source_plan_id=source_plan.source_plan_id,
         job_title=str(getattr(context.run_state.input_truth, "job_title", "")),
         jd=str(getattr(context.run_state.input_truth, "jd", "")),
@@ -185,6 +190,8 @@ async def _run_liepin_source_round(
         liepin_context=context.source_context,
         detail_open_claim_ledger=context.detail_open_claim_ledger,
         cards_operation_executor=cards_operation_executor,
+        worker_client=worker_client,
+        round_resume_context=context.round_resume_context,
     )
     _record_source_provider_results_from_lane(
         runtime=runtime,

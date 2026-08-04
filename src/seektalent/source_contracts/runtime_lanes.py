@@ -376,6 +376,20 @@ class RuntimeSourceLaneResult:
 
 
 @dataclass(frozen=True, kw_only=True)
+class RuntimeSourceStepResumeResult:
+    """Complete lane delta reconstructed from one durable source queue."""
+
+    round_no: int
+    lane_result: RuntimeSourceLaneResult
+    query_terms: tuple[str, ...]
+    keyword_query: str
+    query_instance_id: str
+    query_fingerprint: str
+    query_role: QueryRole
+    requested_count: int
+
+
+@dataclass(frozen=True, kw_only=True)
 class RuntimeSourceLaneRequest:
     source: SourceKind
     lane_mode: RuntimeSourceLaneMode

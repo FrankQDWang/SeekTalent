@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-import os
+from collections.abc import Callable
 from hashlib import sha256
 from pathlib import Path
 
 from pydantic import ValidationError
 
 from seektalent.source_port.liepin_cards_contract import LiepinCardsArtifactV1
+from seektalent.source_port._atomic_artifact import (
+    publish_content_addressed_bytes,
+)
 from seektalent.source_port.wire_primitives import canonical_json_bytes
 
 
@@ -18,33 +21,19 @@ _REF_PREFIX = "liepin-cards://sha256/"
 def write_liepin_cards_artifact(
     root: Path,
     artifact: LiepinCardsArtifactV1,
+    *,
+    fault_injector: Callable[[str], None] | None = None,
 ) -> tuple[str, str]:
     if type(artifact) is not LiepinCardsArtifactV1:
         raise TypeError("artifact must be LiepinCardsArtifactV1")
     payload = canonical_json_bytes(artifact.model_dump(mode="json"))
     digest = sha256(payload).hexdigest()
-    artifact_root = root.resolve(strict=False)
-    artifact_root.mkdir(parents=True, exist_ok=True, mode=0o700)
-    path = artifact_root / f"{digest}.json"
-    try:
-        descriptor = os.open(
-            path,
-            os.O_WRONLY | os.O_CREAT | os.O_EXCL,
-            0o600,
-        )
-    except FileExistsError:
-        if path.read_bytes() != payload:
-            raise RuntimeError("liepin_cards_artifact_hash_conflict") from None
-    else:
-        try:
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(payload)
-                handle.flush()
-                os.fsync(handle.fileno())
-            _persist_directory(artifact_root)
-        except BaseException:
-            path.unlink(missing_ok=True)
-            raise
+    publish_content_addressed_bytes(
+        root,
+        payload,
+        digest,
+        fault_injector=fault_injector,
+    )
     return f"{_REF_PREFIX}{digest}", digest
 
 
@@ -70,16 +59,6 @@ def read_liepin_cards_artifact(
     if canonical_json_bytes(artifact.model_dump(mode="json")) != raw:
         raise ValueError("liepin_cards_artifact_noncanonical")
     return artifact
-
-
-def _persist_directory(path: Path) -> None:
-    if os.name != "posix":
-        return
-    descriptor = os.open(path, os.O_RDONLY)
-    try:
-        os.fsync(descriptor)
-    finally:
-        os.close(descriptor)
 
 
 __all__ = ["read_liepin_cards_artifact", "write_liepin_cards_artifact"]

@@ -111,6 +111,23 @@ class _LiepinSearchWorkflowSite:
             expected_provider_candidate_key_hash=expected_provider_candidate_key_hash,
         )
 
+    def bind_liepin_detail_work_plan(
+        self,
+        *,
+        source_run_id: str,
+        phase: str,
+        items: Sequence[tuple[int, str, str | None]],
+        target_resumes: int,
+        claim_aware: bool,
+    ) -> None:
+        self.adapter._bind_liepin_detail_work_plan(
+            source_run_id=source_run_id,
+            phase=phase,
+            items=items,
+            target_resumes=target_resumes,
+            claim_aware=claim_aware,
+        )
+
     def discard_liepin_detail_resume(self, *, source_run_id: str, rank: int) -> None:
         self.adapter._discard_collected_liepin_detail_resume(source_run_id=source_run_id, rank=rank)
 

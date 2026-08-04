@@ -1097,6 +1097,18 @@ def test_artifact_tamper_and_identity_mismatch_fail_closed(tmp_path: Path) -> No
     with pytest.raises(ValueError):
         read_liepin_details_artifact(tmp_path, ref, expected_hash="f" * 64)
 
+    (tmp_path / f"{digest}.json").write_bytes(b"truncated-final")
+    repaired_ref, repaired_digest = write_liepin_details_artifact(
+        tmp_path,
+        artifact,
+    )
+    assert (repaired_ref, repaired_digest) == (ref, digest)
+    assert read_liepin_details_artifact(
+        tmp_path,
+        repaired_ref,
+        expected_hash=repaired_digest,
+    ) == artifact
+
     request = _request()
     identity = _identity(request)
     observation = LiepinDetailsObservationV1(

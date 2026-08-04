@@ -28,6 +28,7 @@ from seektalent.source_contracts.runtime_lanes import (
     RuntimeSourceLanePlan,
     RuntimeSourceLaneRequest,
     RuntimeSourceLaneResult,
+    RuntimeSourceStepResumeResult,
     RuntimeSourceLaneStatus,
     SourceQueryExecutionOutcome,
 )
@@ -60,6 +61,7 @@ __all__ = [
     "RuntimeSourceLanePlan",
     "RuntimeSourceLaneRequest",
     "RuntimeSourceLaneResult",
+    "RuntimeSourceStepResumeResult",
     "RuntimeSourceLaneStatus",
     "SourceQueryExecutionOutcome",
 ]
