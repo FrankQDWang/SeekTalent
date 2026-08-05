@@ -32,7 +32,7 @@ wtscli_source="$temp_root/wtscli-fork"
 wtscli_bundle="$temp_root/wtscli-browser-bridge"
 native_evidence="$temp_root/native-launch-binding-evidence.json"
 source_revision="$(git rev-parse HEAD)"
-build_dir="$ROOT/dist/tmp/0.8.2-${source_revision:0:12}"
+build_dir="${SEEKTALENT_RELEASE_BUILD_DIR:-$temp_root/release-build}"
 wheel_dir="$build_dir"
 wheelhouse_dir="$build_dir/wheelhouse-macos-arm64"
 delivery_dir="$build_dir"
@@ -70,11 +70,11 @@ uv run --group dev python -m pytest \
 
 mkdir -p "$wheel_dir" "$wheelhouse_dir"
 if [[ -n "$release_wheel" ]]; then
-  if [[ ! -f "$release_wheel" || "$(basename "$release_wheel")" != "seektalent-0.8.2-py3-none-any.whl" ]]; then
-    echo "SEEKTALENT_RELEASE_WHEEL must name the exact 0.8.2 wheel." >&2
+  if [[ ! -f "$release_wheel" || "$(basename "$release_wheel")" != "seektalent-0.8.3-py3-none-any.whl" ]]; then
+    echo "SEEKTALENT_RELEASE_WHEEL must name the exact 0.8.3 wheel." >&2
     exit 1
   fi
-  cp "$release_wheel" "$wheel_dir/seektalent-0.8.2-py3-none-any.whl"
+  cp "$release_wheel" "$wheel_dir/seektalent-0.8.3-py3-none-any.whl"
   uv build --sdist --out-dir "$wheel_dir"
 else
   uv build --out-dir "$wheel_dir"
@@ -97,7 +97,7 @@ uv run --group dev python scripts/build_domi_delivery_bundle.py \
   --platform macos-arm64 \
   --source-revision "$source_revision"
 
-SEEKTALENT_NATIVE_DELIVERY_ARCHIVE="$delivery_dir/seektalent-offline-0.8.2-macos-arm64-py313.zip" \
+SEEKTALENT_NATIVE_DELIVERY_ARCHIVE="$delivery_dir/seektalent-offline-0.8.3-macos-arm64-py313.zip" \
 SEEKTALENT_NATIVE_DELIVERY_PLATFORM="macos-arm64" \
   uv run --group dev python -m pytest tests/test_build_domi_delivery_bundle.py -q
 

@@ -1898,7 +1898,7 @@ wheels = [
 
 [[package]]
 name = "seektalent"
-version = "0.8.2"
+version = "0.8.3"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography", version = "48.0.0", source = { registry = "https://pypi.org/simple" }, marker = "platform_machine == 'x86_64' and sys_platform == 'darwin'" },

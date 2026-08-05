@@ -30,8 +30,13 @@ def test_default_dependencies_exclude_remote_eval_logging_packages() -> None:
 
 def test_built_wheel_runs_outside_repo(tmp_path: Path) -> None:
     repo_root = Path(__file__).resolve().parents[1]
-    subprocess.run(["uv", "build"], cwd=repo_root, check=True)
-    wheel = max((repo_root / "dist").glob("seektalent-*.whl"))
+    build_dir = tmp_path / "build"
+    subprocess.run(
+        ["uv", "build", "--out-dir", str(build_dir)],
+        cwd=repo_root,
+        check=True,
+    )
+    wheel = max(build_dir.glob("seektalent-*.whl"))
     with zipfile.ZipFile(wheel) as archive:
         archive_names = set(archive.namelist())
     for name in REQUIRED_PROMPTS:
