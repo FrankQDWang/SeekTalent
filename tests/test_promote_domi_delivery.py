@@ -10,10 +10,15 @@ import zipfile
 
 import pytest
 
-from scripts.promote_domi_delivery import PLATFORMS, promote_delivery
+from scripts.promote_domi_delivery import (
+    PLATFORMS,
+    promote_delivery,
+    stage_delivery,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
+VERSION = "0.8.3"
 
 
 def test_promotion_script_runs_by_file_path_without_pythonpath() -> None:
@@ -33,110 +38,206 @@ def test_promotion_script_runs_by_file_path_without_pythonpath() -> None:
     assert "usage:" in completed.stdout
 
 
-def test_promotion_preserves_old_artifacts_and_requires_one_exact_identity(
+def test_stage_keeps_only_three_candidate_zips_in_tmp(
     tmp_path: Path,
 ) -> None:
-    dist = tmp_path / "dist"
-    build = dist / "tmp" / "0.8.2-aaaaaaaaaaaa"
-    build.mkdir(parents=True)
-    (dist / ".gitignore").write_text("*\n", encoding="utf-8")
-    old_current = dist / "seektalent-offline-0.7.47-macos-arm64-py313.zip"
-    old_current.write_bytes(b"0.7.47")
-    (dist / "seektalent-0.7.49.tar.gz").write_bytes(b"0.7.49")
-    last = dist / "last-version"
-    last.mkdir()
-    old_current_intel = last / "seektalent-offline-0.7.47-macos-x86_64-py313.zip"
-    old_current_intel.write_bytes(b"0.7.47-intel")
-    (last / "seektalent-offline-0.7.46-macos-arm64-py313.zip").write_bytes(
-        b"0.7.46"
+    dist = _dist_layout(tmp_path)
+    production_files = {
+        path.name: path.read_bytes()
+        for path in (dist / "last-version").iterdir()
+    }
+    build = _build_release(tmp_path, source_revision="a" * 40)
+
+    identity = stage_delivery(dist_dir=dist, build_dir=build)
+
+    assert identity["source_revision"] == "a" * 40
+    assert set(path.name for path in dist.iterdir()) == {
+        "README.md",
+        "active",
+        "last-version",
+        "tmp",
+    }
+    assert list((dist / "active").iterdir()) == []
+    assert {
+        path.name: path.read_bytes()
+        for path in (dist / "last-version").iterdir()
+    } == production_files
+    assert {path.name for path in (dist / "tmp").iterdir()} == {
+        f"seektalent-offline-{VERSION}-{platform}-py313.zip"
+        for platform in PLATFORMS
+    }
+
+
+def test_promote_moves_tmp_to_active_and_preserves_production_last_version(
+    tmp_path: Path,
+) -> None:
+    dist = _dist_layout(tmp_path)
+    production_files = {
+        path.name: path.read_bytes()
+        for path in (dist / "last-version").iterdir()
+    }
+    build = _build_release(tmp_path, source_revision="a" * 40)
+    stage_delivery(dist_dir=dist, build_dir=build)
+
+    identity = promote_delivery(dist_dir=dist)
+
+    assert identity["source_revision"] == "a" * 40
+    assert list((dist / "tmp").iterdir()) == []
+    assert {path.name for path in (dist / "active").iterdir()} == {
+        f"seektalent-offline-{VERSION}-{platform}-py313.zip"
+        for platform in PLATFORMS
+    }
+    assert {
+        path.name: path.read_bytes()
+        for path in (dist / "last-version").iterdir()
+    } == production_files
+
+
+def test_next_promotion_rotates_active_to_last_version(
+    tmp_path: Path,
+) -> None:
+    dist = _dist_layout(tmp_path)
+    first_build = _build_release(
+        tmp_path / "first",
+        source_revision="a" * 40,
+    )
+    stage_delivery(dist_dir=dist, build_dir=first_build)
+    promote_delivery(dist_dir=dist)
+    active_before = {
+        path.name: path.read_bytes() for path in (dist / "active").iterdir()
+    }
+    second_build = _build_release(
+        tmp_path / "second",
+        source_revision="c" * 40,
+    )
+    stage_delivery(dist_dir=dist, build_dir=second_build)
+
+    promote_delivery(dist_dir=dist)
+
+    assert {
+        path.name: path.read_bytes()
+        for path in (dist / "last-version").iterdir()
+    } == active_before
+    assert list((dist / "tmp").iterdir()) == []
+
+
+def test_next_promotion_accepts_an_older_valid_active_version(
+    tmp_path: Path,
+) -> None:
+    dist = _dist_layout(tmp_path)
+    old_active = _delivery_archives(
+        dist / "active",
+        version="0.8.2",
+        source_revision="d" * 40,
+    )
+    old_active_bytes = {path.name: path.read_bytes() for path in old_active}
+    build = _build_release(tmp_path, source_revision="a" * 40)
+    stage_delivery(dist_dir=dist, build_dir=build)
+
+    promote_delivery(dist_dir=dist)
+
+    assert {
+        path.name: path.read_bytes()
+        for path in (dist / "last-version").iterdir()
+    } == old_active_bytes
+    assert {path.name for path in (dist / "active").iterdir()} == {
+        f"seektalent-offline-{VERSION}-{platform}-py313.zip"
+        for platform in PLATFORMS
+    }
+
+
+def test_stage_rejects_top_level_wheel_that_differs_from_archives(
+    tmp_path: Path,
+) -> None:
+    dist = _dist_layout(tmp_path)
+    build = _build_release(tmp_path, source_revision="a" * 40)
+    (build / f"seektalent-{VERSION}-py3-none-any.whl").write_bytes(
+        b"different-wheel"
     )
 
-    (build / "seektalent-0.8.2-py3-none-any.whl").write_bytes(b"wheel")
-    (build / "seektalent-0.8.2.tar.gz").write_bytes(b"sdist")
-    source_revision = "a" * 40
-    fixture_sha = "b" * 64
-    for platform_name in PLATFORMS:
-        archive = build / (
-            f"seektalent-offline-0.8.2-{platform_name}-py313.zip"
+    with pytest.raises(ValueError, match="top-level wheel does not match"):
+        stage_delivery(dist_dir=dist, build_dir=build)
+
+
+def test_stage_rejects_unexpected_dist_entries(tmp_path: Path) -> None:
+    dist = _dist_layout(tmp_path)
+    (dist / "archive").mkdir()
+    build = _build_release(tmp_path, source_revision="a" * 40)
+
+    with pytest.raises(ValueError, match="unexpected dist entries: archive"):
+        stage_delivery(dist_dir=dist, build_dir=build)
+
+
+def test_promotion_scope_matches_the_three_platform_release_handoff() -> None:
+    assert PLATFORMS == ("macos-arm64", "macos-x86_64", "windows-x64")
+
+
+def _dist_layout(tmp_path: Path) -> Path:
+    dist = tmp_path / "dist"
+    for name in ("active", "last-version", "tmp"):
+        (dist / name).mkdir(parents=True)
+    (dist / "README.md").write_text("delivery states\n", encoding="utf-8")
+    for platform in PLATFORMS:
+        (dist / "last-version" / f"production-{platform}.zip").write_bytes(
+            f"0.7.47-{platform}".encode()
+        )
+    return dist
+
+
+def _build_release(
+    tmp_path: Path,
+    *,
+    source_revision: str,
+) -> Path:
+    build = tmp_path / "build"
+    build.mkdir(parents=True)
+    wheel_bytes = f"wheel-{source_revision}".encode()
+    wheel_sha = hashlib.sha256(wheel_bytes).hexdigest()
+    (build / f"seektalent-{VERSION}-py3-none-any.whl").write_bytes(
+        wheel_bytes
+    )
+    (build / f"seektalent-{VERSION}.tar.gz").write_bytes(b"sdist")
+    archives = _delivery_archives(
+        build,
+        version=VERSION,
+        source_revision=source_revision,
+        wheel_sha=wheel_sha,
+    )
+    for archive in archives:
+        archive.with_name(f"{archive.name}.sha256").write_text(
+            f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  "
+            f"{archive.name}\n",
+            encoding="utf-8",
+        )
+    return build
+
+
+def _delivery_archives(
+    directory: Path,
+    *,
+    version: str,
+    source_revision: str,
+    wheel_sha: str = "e" * 64,
+) -> tuple[Path, ...]:
+    directory.mkdir(parents=True, exist_ok=True)
+    archives: list[Path] = []
+    for platform in PLATFORMS:
+        archive = directory / (
+            f"seektalent-offline-{version}-{platform}-py313.zip"
         )
         manifest = {
             "schema_version": 2,
-            "product_version": "0.8.2",
-            "platform": platform_name,
+            "product_version": version,
+            "platform": platform,
             "source_revision": source_revision,
-            "product_build_id": f"seektalent-0.8.2+{source_revision}",
-            "acceptance_fixture": {"sha256": fixture_sha},
-            "seektalent_wheel_sha256": hashlib.sha256(b"wheel").hexdigest(),
+            "product_build_id": f"seektalent-{version}+{source_revision}",
+            "acceptance_fixture": {"sha256": "b" * 64},
+            "seektalent_wheel_sha256": wheel_sha,
         }
         with zipfile.ZipFile(archive, "w") as delivery:
             delivery.writestr(
                 f"{archive.stem}/delivery-manifest.json",
                 json.dumps(manifest),
             )
-        archive.with_name(f"{archive.name}.sha256").write_text(
-            f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
-            encoding="utf-8",
-        )
-
-    identity = promote_delivery(dist_dir=dist, build_dir=build)
-
-    assert identity["source_revision"] == source_revision
-    assert (dist / old_current.name).exists() is False
-    assert (dist / "last-version" / old_current.name).read_bytes() == b"0.7.47"
-    assert (dist / "last-version" / old_current_intel.name).read_bytes() == b"0.7.47-intel"
-    archived = dist / "archive" / "before-0.8.2-aaaaaaaaaaaa"
-    assert (archived / "top-level" / "seektalent-0.7.49.tar.gz").exists()
-    assert (
-        archived
-        / "last-version"
-        / "seektalent-offline-0.7.46-macos-arm64-py313.zip"
-    ).exists()
-    for platform_name in PLATFORMS:
-        assert (
-            dist
-            / f"seektalent-offline-0.8.2-{platform_name}-py313.zip"
-        ).exists()
-
-
-def test_promotion_rejects_top_level_wheel_that_differs_from_delivery_archives(
-    tmp_path: Path,
-) -> None:
-    dist = tmp_path / "dist"
-    build = dist / "tmp" / "0.8.2-aaaaaaaaaaaa"
-    build.mkdir(parents=True)
-    (dist / ".gitignore").write_text("*\n", encoding="utf-8")
-    (build / "seektalent-0.8.2-py3-none-any.whl").write_bytes(b"intermediate-wheel")
-    (build / "seektalent-0.8.2.tar.gz").write_bytes(b"sdist")
-    source_revision = "a" * 40
-    fixture_sha = "b" * 64
-    exact_wheel_sha = hashlib.sha256(b"exact-wheel").hexdigest()
-    for platform_name in PLATFORMS:
-        archive = build / (
-            f"seektalent-offline-0.8.2-{platform_name}-py313.zip"
-        )
-        with zipfile.ZipFile(archive, "w") as delivery:
-            delivery.writestr(
-                f"{archive.stem}/delivery-manifest.json",
-                json.dumps(
-                    {
-                        "schema_version": 2,
-                        "product_version": "0.8.2",
-                        "platform": platform_name,
-                        "source_revision": source_revision,
-                        "product_build_id": f"seektalent-0.8.2+{source_revision}",
-                        "acceptance_fixture": {"sha256": fixture_sha},
-                        "seektalent_wheel_sha256": exact_wheel_sha,
-                    }
-                ),
-            )
-        archive.with_name(f"{archive.name}.sha256").write_text(
-            f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n",
-            encoding="utf-8",
-        )
-
-    with pytest.raises(ValueError, match="top-level wheel does not match"):
-        promote_delivery(dist_dir=dist, build_dir=build)
-
-
-def test_promotion_scope_matches_the_three_platform_release_handoff() -> None:
-    assert PLATFORMS == ("macos-arm64", "macos-x86_64", "windows-x64")
+        archives.append(archive)
+    return tuple(archives)

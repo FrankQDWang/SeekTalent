@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import shutil
+import tempfile
 from typing import cast
 import zipfile
 from pathlib import Path
@@ -14,145 +15,208 @@ from seektalent.version import __version__
 
 ROOT = Path(__file__).resolve().parents[1]
 PLATFORMS = ("macos-arm64", "macos-x86_64", "windows-x64")
+DIST_ENTRIES = frozenset({"README.md", "active", "last-version", "tmp"})
 
 
-def promote_delivery(
+def stage_delivery(
     *,
     dist_dir: Path,
     build_dir: Path,
     expected_source_revision: str | None = None,
 ) -> dict[str, str]:
-    """Validate one exact release handoff and preserve every previous artifact."""
+    """Validate one native build set and publish only its ZIPs to tmp."""
     dist_dir = dist_dir.resolve(strict=True)
     build_dir = build_dir.resolve(strict=True)
-    artifacts, identity = _validated_artifacts(build_dir)
-    if (
-        expected_source_revision is not None
-        and identity["source_revision"] != expected_source_revision
-    ):
-        raise ValueError("delivery source revision does not match checkout")
-    short_revision = identity["source_revision"][:12]
-    archive_dir = dist_dir / "archive" / f"before-{__version__}-{short_revision}"
-    if archive_dir.exists():
-        raise FileExistsError(f"archive destination already exists: {archive_dir}")
-
-    previous_top = [
-        path
-        for path in dist_dir.iterdir()
-        if path.name not in {".gitignore", "archive", "last-version", "tmp"}
-    ]
-    previous_release = [
-        path
-        for path in previous_top
-        if "0.7.47" in path.name
-    ]
-    previous_last = dist_dir / "last-version"
-    previous_last_release_names = (
-        [
-            path.name
-            for path in previous_last.iterdir()
-            if path.is_file() and "0.7.47" in path.name
-        ]
-        if previous_last.exists()
-        else []
-    )
-    archived_top = [path for path in previous_top if path not in previous_release]
-
-    archive_top = archive_dir / "top-level"
-    archive_top.mkdir(parents=True)
-    for path in archived_top:
-        shutil.move(str(path), archive_top / path.name)
-    if previous_last.exists():
-        shutil.move(str(previous_last), archive_dir / "last-version")
-
-    next_last = dist_dir / "last-version"
-    next_last.mkdir()
-    for path in previous_release:
-        shutil.move(str(path), next_last / path.name)
-    archived_last = archive_dir / "last-version"
-    for name in previous_last_release_names:
-        destination = next_last / name
-        if not destination.exists():
-            shutil.copy2(archived_last / name, destination)
-    for source in artifacts:
-        shutil.copy2(source, dist_dir / source.name)
+    archives, identity = _validated_build_artifacts(build_dir)
+    _require_source_revision(identity, expected_source_revision)
+    _require_dist_layout(dist_dir)
+    _replace_archive_directory(dist_dir / "tmp", archives)
     return identity
 
 
-def _validated_artifacts(build_dir: Path) -> tuple[list[Path], dict[str, str]]:
+def promote_delivery(
+    *,
+    dist_dir: Path,
+    expected_source_revision: str | None = None,
+) -> dict[str, str]:
+    """Move the tested tmp candidate to active and rotate active to last."""
+    dist_dir = dist_dir.resolve(strict=True)
+    _require_dist_layout(dist_dir)
+    staged = _archive_paths(dist_dir / "tmp", allow_empty=False)
+    identity = _validated_delivery_archives(staged)
+    _require_source_revision(identity, expected_source_revision)
+
+    active_dir = dist_dir / "active"
+    active = _archive_paths(active_dir, allow_empty=True)
+    if active:
+        _validated_delivery_archives(active, expected_version=None)
+        _replace_archive_directory(dist_dir / "last-version", active)
+    _replace_archive_directory(active_dir, staged)
+    _replace_archive_directory(dist_dir / "tmp", ())
+    return identity
+
+
+def _validated_build_artifacts(
+    build_dir: Path,
+) -> tuple[tuple[Path, ...], dict[str, str]]:
     wheel = build_dir / f"seektalent-{__version__}-py3-none-any.whl"
     sdist = build_dir / f"seektalent-{__version__}.tar.gz"
-    artifacts = [wheel, sdist]
-    manifests: list[dict[str, object]] = []
+    if not wheel.is_file() or not sdist.is_file():
+        raise FileNotFoundError("the exact wheel and sdist are required")
+
+    archives: list[Path] = []
     for platform_name in PLATFORMS:
         archive = build_dir / (
             f"seektalent-offline-{__version__}-{platform_name}-py313.zip"
         )
         checksum = archive.with_name(f"{archive.name}.sha256")
-        artifacts.extend((archive, checksum))
         if not archive.is_file() or not checksum.is_file():
-            raise FileNotFoundError(f"missing delivery artifact for {platform_name}")
+            raise FileNotFoundError(
+                f"missing delivery artifact for {platform_name}"
+            )
         expected_line = f"{_sha256(archive)}  {archive.name}\n"
         if checksum.read_text(encoding="utf-8") != expected_line:
             raise ValueError(f"archive checksum mismatch for {platform_name}")
+        archives.append(archive)
+
+    identity = _validated_delivery_archives(tuple(archives))
+    if identity["seektalent_wheel_sha256"] != _sha256(wheel):
+        raise ValueError("top-level wheel does not match delivery archives")
+    return tuple(archives), identity
+
+
+def _validated_delivery_archives(
+    archives: tuple[Path, ...],
+    *,
+    expected_version: str | None = __version__,
+) -> dict[str, str]:
+    if len(archives) != len(PLATFORMS):
+        raise ValueError("delivery must contain exactly three platform ZIPs")
+
+    identity: dict[str, str] | None = None
+    seen_platforms: set[str] = set()
+    for archive in archives:
+        if not archive.is_file() or archive.suffix != ".zip":
+            raise ValueError("delivery directory may contain only ZIP archives")
         with zipfile.ZipFile(archive) as delivery:
             if delivery.testzip() is not None:
-                raise ValueError(f"corrupt delivery archive for {platform_name}")
-            root = archive.stem
-            manifests.append(
-                json.loads(delivery.read(f"{root}/delivery-manifest.json"))
+                raise ValueError(f"corrupt delivery archive: {archive.name}")
+            manifest = json.loads(
+                delivery.read(f"{archive.stem}/delivery-manifest.json")
             )
-    if not wheel.is_file() or not sdist.is_file():
-        raise FileNotFoundError("the exact wheel and sdist are required")
-    wheel_sha256 = _sha256(wheel)
-
-    first = manifests[0]
-    fixture = first.get("acceptance_fixture")
-    if not isinstance(fixture, dict):
-        raise ValueError("acceptance fixture identity is missing")
-    fixture = cast(dict[str, object], fixture)
-    identity = {
-        "schema_version": str(first.get("schema_version")),
-        "product_version": str(first.get("product_version")),
-        "source_revision": str(first.get("source_revision")),
-        "product_build_id": str(first.get("product_build_id")),
-        "fixture_sha256": str(fixture.get("sha256")),
-        "seektalent_wheel_sha256": str(
-            first.get("seektalent_wheel_sha256")
-        ),
-    }
-    if (
-        identity["schema_version"] != "2"
-        or identity["product_version"] != __version__
-        or len(identity["source_revision"]) != 40
-        or identity["product_build_id"]
-        != f"seektalent-{__version__}+{identity['source_revision']}"
-        or len(identity["fixture_sha256"]) != 64
-    ):
-        raise ValueError("invalid delivery identity")
-    if identity["seektalent_wheel_sha256"] != wheel_sha256:
-        raise ValueError("top-level wheel does not match delivery archives")
-    for platform_name, manifest in zip(PLATFORMS, manifests, strict=True):
-        manifest_fixture = manifest.get("acceptance_fixture")
-        if isinstance(manifest_fixture, dict):
-            manifest_fixture = cast(dict[str, object], manifest_fixture)
+        fixture = manifest.get("acceptance_fixture")
+        if not isinstance(fixture, dict):
+            raise ValueError("acceptance fixture identity is missing")
+        fixture = cast(dict[str, object], fixture)
+        platform_name = str(manifest.get("platform"))
         candidate = {
             "schema_version": str(manifest.get("schema_version")),
             "product_version": str(manifest.get("product_version")),
             "source_revision": str(manifest.get("source_revision")),
             "product_build_id": str(manifest.get("product_build_id")),
-            "fixture_sha256": str(
-                manifest_fixture.get("sha256")
-                if isinstance(manifest_fixture, dict)
-                else None
-            ),
+            "fixture_sha256": str(fixture.get("sha256")),
             "seektalent_wheel_sha256": str(
                 manifest.get("seektalent_wheel_sha256")
             ),
         }
-        if candidate != identity or manifest.get("platform") != platform_name:
+        expected_name = (
+            f"seektalent-offline-{candidate['product_version']}-"
+            f"{platform_name}-py313.zip"
+        )
+        if archive.name != expected_name:
+            raise ValueError("delivery archive name does not match manifest")
+        if identity is None:
+            identity = candidate
+        elif candidate != identity:
             raise ValueError("delivery identity mismatch")
-    return artifacts, identity
+        if platform_name in seen_platforms:
+            raise ValueError("delivery platform is duplicated")
+        seen_platforms.add(platform_name)
+
+    assert identity is not None
+    product_version = identity["product_version"]
+    if (
+        identity["schema_version"] != "2"
+        or (
+            expected_version is not None
+            and product_version != expected_version
+        )
+        or len(identity["source_revision"]) != 40
+        or identity["product_build_id"]
+        != f"seektalent-{product_version}+{identity['source_revision']}"
+        or len(identity["fixture_sha256"]) != 64
+        or len(identity["seektalent_wheel_sha256"]) != 64
+        or seen_platforms != set(PLATFORMS)
+    ):
+        raise ValueError("invalid delivery identity")
+    return identity
+
+
+def _require_dist_layout(dist_dir: Path) -> None:
+    unexpected = sorted(
+        path.name for path in dist_dir.iterdir() if path.name not in DIST_ENTRIES
+    )
+    if unexpected:
+        raise ValueError(f"unexpected dist entries: {', '.join(unexpected)}")
+    readme = dist_dir / "README.md"
+    if not readme.is_file():
+        raise FileNotFoundError("dist README.md is required")
+    for name in ("active", "last-version", "tmp"):
+        path = dist_dir / name
+        if not path.is_dir():
+            raise FileNotFoundError(f"dist directory is required: {name}")
+
+
+def _archive_paths(
+    directory: Path,
+    *,
+    allow_empty: bool,
+) -> tuple[Path, ...]:
+    entries = tuple(sorted(directory.iterdir()))
+    if not entries and allow_empty:
+        return ()
+    if not entries:
+        raise ValueError(f"delivery directory is empty: {directory.name}")
+    if any(not path.is_file() or path.suffix != ".zip" for path in entries):
+        raise ValueError(
+            f"delivery directory may contain only ZIP archives: {directory.name}"
+        )
+    return entries
+
+
+def _replace_archive_directory(
+    target: Path,
+    sources: tuple[Path, ...],
+) -> None:
+    parent = target.parent
+    staged = Path(tempfile.mkdtemp(prefix=f".{target.name}.next-", dir=parent))
+    backup = parent / f".{target.name}.previous"
+    try:
+        for source in sources:
+            shutil.copy2(source, staged / source.name)
+        if backup.exists():
+            raise FileExistsError(f"stale delivery backup exists: {backup}")
+        target.rename(backup)
+        staged.rename(target)
+        shutil.rmtree(backup)
+    except Exception:
+        if not target.exists() and backup.exists():
+            backup.rename(target)
+        raise
+    finally:
+        if staged.exists():
+            shutil.rmtree(staged)
+
+
+def _require_source_revision(
+    identity: dict[str, str],
+    expected_source_revision: str | None,
+) -> None:
+    if (
+        expected_source_revision is not None
+        and identity["source_revision"] != expected_source_revision
+    ):
+        raise ValueError("delivery source revision does not match checkout")
 
 
 def _sha256(path: Path) -> str:
@@ -164,15 +228,26 @@ def _sha256(path: Path) -> str:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Promote one exact three-platform Domi delivery.")
-    parser.add_argument("--dist-dir", type=Path, default=Path("dist"))
-    parser.add_argument("--build-dir", type=Path, required=True)
-    args = parser.parse_args()
-    identity = promote_delivery(
-        dist_dir=args.dist_dir,
-        build_dir=args.build_dir,
-        expected_source_revision=source_revision(ROOT),
+    parser = argparse.ArgumentParser(
+        description="Stage or promote one exact three-platform Domi delivery."
     )
+    parser.add_argument("--dist-dir", type=Path, default=Path("dist"))
+    action = parser.add_mutually_exclusive_group(required=True)
+    action.add_argument("--build-dir", type=Path)
+    action.add_argument("--promote-staged", action="store_true")
+    args = parser.parse_args()
+    revision = source_revision(ROOT)
+    if args.build_dir is not None:
+        identity = stage_delivery(
+            dist_dir=args.dist_dir,
+            build_dir=args.build_dir,
+            expected_source_revision=revision,
+        )
+    else:
+        identity = promote_delivery(
+            dist_dir=args.dist_dir,
+            expected_source_revision=revision,
+        )
     print(json.dumps(identity, sort_keys=True))
     return 0
 
