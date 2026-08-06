@@ -2809,6 +2809,16 @@ class LiepinSiteAdapter:
                         }
                     )
                     return state
+                if exact_city_filter and not city_picker_active:
+                    chip_state = self._apply_focused_city_chip(
+                        section=section,
+                        label=label,
+                        filter_name=filter_name,
+                        events=events,
+                        before_effect=mark_filter_effect_started,
+                    )
+                    if chip_state is not None:
+                        return chip_state
                 if not city_picker_active and (
                     exact_city_filter
                     or not native_filter_option_visible_in_section(state_text, section=section, label=label)
@@ -2868,7 +2878,7 @@ class LiepinSiteAdapter:
                         self._click_native_filter_ref(city_option_ref)
                     else:
                         self._click_native_filter_option(label, state_text=state_text, section=section)
-                    if exact_city_filter:
+                    if city_picker_active:
                         state, reconciliation, confirm_ref = (
                             city_picker.reconcile_city_filter_effect(
                                 self,
@@ -2991,6 +3001,67 @@ class LiepinSiteAdapter:
                 if not state.ok:
                     raise OpenCliBrowserError(state.safe_reason_code)
         return state
+
+    def _apply_focused_city_chip(
+        self,
+        *,
+        section: str,
+        label: str,
+        filter_name: str,
+        events: list[dict[str, object]],
+        before_effect: Callable[[], None],
+    ) -> OpenCliBrowserResult | None:
+        """Click a focused quick-city chip when present.
+
+        Returns the post-click state when the filter is applied. Returns None when
+        no unique chip matches. Raises when the chip click does not apply.
+        """
+        city_chip_ref = city_picker.picker_chip_ref(
+            self,
+            section=section,
+            label=label,
+        )
+        if city_chip_ref is None:
+            return None
+        before_effect()
+        self._click_native_filter_ref(city_chip_ref)
+        events.append(
+            {
+                "action_kind": "click_native_city_chip",
+                "filter": "city",
+                "section": section,
+                "value": label,
+                "ok": True,
+            }
+        )
+        state = self.state()
+        events.append(
+            {
+                "action_kind": "observe_after_native_filter",
+                "filter": "city",
+                "section": section,
+                "ok": state.ok,
+            }
+        )
+        if not state.ok:
+            raise OpenCliBrowserError(state.safe_reason_code)
+        state_text = _opencli_result_text(state)
+        if native_filter_selection_applied(
+            state_text,
+            section=section,
+            label=label,
+        ):
+            events.append(
+                {
+                    "action_kind": "verify_native_filter",
+                    "filter": filter_name,
+                    "section": section,
+                    "value": label,
+                    "ok": True,
+                }
+            )
+            return state
+        raise OpenCliBrowserError("liepin_opencli_filter_unapplied")
 
     def _liepin_city_picker_control_ref(self, *, section: str) -> str:
         return city_picker.picker_control_ref(self, section=section)

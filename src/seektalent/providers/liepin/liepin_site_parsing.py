@@ -1181,8 +1181,28 @@ def _liepin_city_picker_state_probe_script(*, section: str) -> str:
   const box = boxes.find((item) =>
     compact(item.querySelector(".search-item-title")?.textContent).includes(title)
   );
-  const control = box && Array.from(box.querySelectorAll(".btn-choose, button, label, span"))
-    .find((item) => visible(item) && compact(item.textContent) === "其他");
+  const controlCandidates = box
+    ? Array.from(box.querySelectorAll(".btn-choose, button, label, span")).filter((item) => visible(item))
+    : [];
+  const control = controlCandidates.find((item) => compact(item.textContent) === "其他");
+  const chips = [];
+  for (const item of controlCandidates) {
+    const chipLabel = clean(item.textContent).slice(0, 80);
+    const chipCompact = compact(chipLabel);
+    const ref = refOf(item);
+    if (
+      !ref
+      || !chipCompact
+      || chipCompact === "其他"
+      || chipCompact === "不限"
+      || chipCompact.includes(compact(title))
+      || chips.some((chip) => chip.ref === ref)
+    ) {
+      continue;
+    }
+    chips.push({ ref, label: chipLabel });
+    if (chips.length >= 24) break;
+  }
   const exactSearchInputs = Array.from(document.querySelectorAll("input"))
     .filter((item) => clean(item.getAttribute("placeholder")) === "搜索城市");
   const searchInputNode = exactSearchInputs[0] || null;
@@ -1242,6 +1262,7 @@ def _liepin_city_picker_state_probe_script(*, section: str) -> str:
     schema_version: schema,
     section,
     controlRef: refOf(control),
+    chips,
     open: Boolean(pickerRoot),
     searchInputRef: pickerRoot ? refOf(searchInput) : null,
     searchValue: pickerRoot ? clean(searchInput.value).slice(0, 80) : "",

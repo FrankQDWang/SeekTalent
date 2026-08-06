@@ -64,6 +64,74 @@
       "expected_ref": "64"
     },
     {
+      "name": "hot_exact_prefers_select_over_search",
+      "observation": {
+        "schema_version": "seektalent.liepin_city_picker.v1",
+        "section": "expected",
+        "open": true,
+        "searchInputRef": "60",
+        "searchValue": "",
+        "candidates": [
+          {"ref": "71", "kind": "final", "label": "苏州"},
+          {"ref": "72", "kind": "final", "label": "上海"}
+        ],
+        "selectedCities": [],
+        "confirmRefs": ["66"],
+        "pickerPhase": "open",
+        "searchInputPresent": true,
+        "searchInputVisible": true,
+        "citySurfacePresent": true,
+        "confirmPresent": true
+      },
+      "expected_decision": "select_candidate",
+      "expected_ref": "72"
+    },
+    {
+      "name": "hot_without_exact_fill_search",
+      "observation": {
+        "schema_version": "seektalent.liepin_city_picker.v1",
+        "section": "expected",
+        "open": true,
+        "searchInputRef": "60",
+        "searchValue": "",
+        "candidates": [
+          {"ref": "71", "kind": "final", "label": "苏州"},
+          {"ref": "72", "kind": "final", "label": "杭州"}
+        ],
+        "selectedCities": [],
+        "confirmRefs": ["66"],
+        "pickerPhase": "open",
+        "searchInputPresent": true,
+        "searchInputVisible": true,
+        "citySurfacePresent": true,
+        "confirmPresent": true
+      },
+      "expected_decision": "fill_search",
+      "expected_ref": "60"
+    },
+    {
+      "name": "searched_without_exact_is_no_match",
+      "observation": {
+        "schema_version": "seektalent.liepin_city_picker.v1",
+        "section": "expected",
+        "open": true,
+        "searchInputRef": "60",
+        "searchValue": "上海",
+        "candidates": [
+          {"ref": "80", "kind": "suggestion", "label": "上饶"}
+        ],
+        "selectedCities": [],
+        "confirmRefs": ["66"],
+        "pickerPhase": "open",
+        "searchInputPresent": true,
+        "searchInputVisible": true,
+        "citySurfacePresent": true,
+        "confirmPresent": true
+      },
+      "expected_decision": "no_exact_match",
+      "expected_ref": null
+    },
+    {
       "name": "selection_pending_confirmation",
       "observation": {
         "schema_version": "seektalent.liepin_city_picker.v1",
