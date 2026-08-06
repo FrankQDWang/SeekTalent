@@ -3045,22 +3045,79 @@ class LiepinSiteAdapter:
         )
         if not state.ok:
             raise OpenCliBrowserError(state.safe_reason_code)
-        state_text = _opencli_result_text(state)
-        if native_filter_selection_applied(
-            state_text,
-            section=section,
-            label=label,
-        ):
+        # Focused-probe selected evidence is authoritative for chip applied;
+        # page-text remains a non-authorizing supplement. Bound the poll so a
+        # late class update is not mistaken for no effect, without re-clicking.
+        poll_timeout_seconds = min(
+            3.0,
+            float(self._site_config.search_navigation_timeout_seconds),
+        )
+        deadline = time.monotonic() + max(poll_timeout_seconds, 0.1)
+        attempt = 0
+        while True:
+            attempt += 1
+            if city_picker.picker_chip_applied(
+                self,
+                section=section,
+                label=label,
+            ):
+                events.append(
+                    {
+                        "action_kind": "verify_native_filter",
+                        "filter": filter_name,
+                        "section": section,
+                        "value": label,
+                        "ok": True,
+                        "authority": "focused_probe",
+                        "attempt": attempt,
+                    }
+                )
+                return state
+            state_text = _opencli_result_text(state)
+            if native_filter_selection_applied(
+                state_text,
+                section=section,
+                label=label,
+            ):
+                events.append(
+                    {
+                        "action_kind": "verify_native_filter",
+                        "filter": filter_name,
+                        "section": section,
+                        "value": label,
+                        "ok": True,
+                        "authority": "page_text",
+                        "attempt": attempt,
+                    }
+                )
+                return state
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or attempt >= 3:
+                break
+            time.sleep(min(1.0, remaining))
+            state = self.state()
             events.append(
                 {
-                    "action_kind": "verify_native_filter",
-                    "filter": filter_name,
+                    "action_kind": "observe_after_native_filter",
+                    "filter": "city",
                     "section": section,
-                    "value": label,
-                    "ok": True,
+                    "ok": state.ok,
+                    "attempt": attempt + 1,
                 }
             )
-            return state
+            if not state.ok:
+                raise OpenCliBrowserError(state.safe_reason_code)
+        events.append(
+            {
+                "action_kind": "verify_native_filter",
+                "filter": filter_name,
+                "section": section,
+                "value": label,
+                "ok": False,
+                "safe_reason_code": "liepin_opencli_filter_unapplied",
+                "attempt": attempt,
+            }
+        )
         raise OpenCliBrowserError("liepin_opencli_filter_unapplied")
 
     def _liepin_city_picker_control_ref(self, *, section: str) -> str:

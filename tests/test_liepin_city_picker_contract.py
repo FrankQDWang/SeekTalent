@@ -11,6 +11,7 @@ from seektalent.providers.liepin.liepin_city_picker import (
     decide_picker_action,
     observe_picker_ready,
     parse_picker_probe_output,
+    picker_chip_applied,
     picker_chip_ref,
     picker_confirm_ref,
     picker_control_ref,
@@ -75,16 +76,16 @@ def test_city_picker_probe_accepts_quick_city_chips() -> None:
             citySurfacePresent=False,
             confirmPresent=False,
             chips=[
-                {"ref": "21", "label": "北京"},
-                {"ref": "22", "label": "上海"},
+                {"ref": "21", "label": "北京", "selected": False},
+                {"ref": "22", "label": "上海", "selected": True},
             ],
         ),
         section="expected",
     )
 
     assert payload["chips"] == [
-        {"ref": "21", "label": "北京"},
-        {"ref": "22", "label": "上海"},
+        {"ref": "21", "label": "北京", "selected": False},
+        {"ref": "22", "label": "上海", "selected": True},
     ]
 
 
@@ -99,8 +100,8 @@ def test_picker_chip_ref_requires_one_exact_focused_match(
         "_read_picker_state",
         lambda *_args, **_kwargs: {
             "chips": [
-                {"ref": "21", "label": "北京"},
-                {"ref": "22", "label": "上海"},
+                {"ref": "21", "label": "北京", "selected": False},
+                {"ref": "22", "label": "上海", "selected": False},
             ]
         },
     )
@@ -112,12 +113,76 @@ def test_picker_chip_ref_requires_one_exact_focused_match(
         "_read_picker_state",
         lambda *_args, **_kwargs: {
             "chips": [
-                {"ref": "21", "label": "北京"},
-                {"ref": "99", "label": "北京"},
+                {"ref": "21", "label": "北京", "selected": False},
+                {"ref": "99", "label": "北京", "selected": False},
             ]
         },
     )
     assert picker_chip_ref(_Site(), section="expected", label="北京") is None
+
+
+def test_picker_chip_applied_requires_unique_selected_match(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _Site:
+        pass
+
+    monkeypatch.setattr(
+        city_picker_module,
+        "_read_picker_state",
+        lambda *_args, **_kwargs: {
+            "chips": [
+                {"ref": "21", "label": "北京", "selected": True},
+                {"ref": "22", "label": "上海", "selected": False},
+            ]
+        },
+    )
+    assert picker_chip_applied(_Site(), section="expected", label="北京") is True
+    assert picker_chip_applied(_Site(), section="expected", label="上海") is False
+
+    monkeypatch.setattr(
+        city_picker_module,
+        "_read_picker_state",
+        lambda *_args, **_kwargs: {
+            "chips": [
+                {"ref": "21", "label": "北京", "selected": False},
+            ]
+        },
+    )
+    assert picker_chip_applied(_Site(), section="expected", label="北京") is False
+
+    monkeypatch.setattr(
+        city_picker_module,
+        "_read_picker_state",
+        lambda *_args, **_kwargs: {
+            "chips": [
+                {"ref": "21", "label": "北京", "selected": True},
+                {"ref": "99", "label": "北京", "selected": True},
+            ]
+        },
+    )
+    assert picker_chip_applied(_Site(), section="expected", label="北京") is False
+
+
+def test_city_picker_probe_rejects_chip_without_selected_bool() -> None:
+    with pytest.raises(OpenCliBrowserError, match="liepin_opencli_malformed_state"):
+        parse_picker_probe_output(
+            _probe(
+                open=False,
+                searchInputRef=None,
+                searchValue="",
+                candidates=[],
+                selectedCities=[],
+                confirmRefs=[],
+                pickerPhase="closed",
+                searchInputPresent=False,
+                searchInputVisible=False,
+                citySurfacePresent=False,
+                confirmPresent=False,
+                chips=[{"ref": "21", "label": "北京"}],
+            ),
+            section="expected",
+        )
 
 
 def test_city_picker_probe_allows_only_explicit_incomplete_open_readiness() -> None:
@@ -233,22 +298,22 @@ def test_picker_chip_ref_tracks_variable_shortcut_sets(
 
     expected_with_beijing = {
         "chips": [
-            {"ref": "e1", "label": "北京"},
-            {"ref": "e2", "label": "上海"},
-            {"ref": "e3", "label": "福建"},
+            {"ref": "e1", "label": "北京", "selected": False},
+            {"ref": "e2", "label": "上海", "selected": False},
+            {"ref": "e3", "label": "福建", "selected": False},
         ]
     }
     expected_without_beijing = {
         "chips": [
-            {"ref": "e2", "label": "上海"},
-            {"ref": "e3", "label": "福建"},
+            {"ref": "e2", "label": "上海", "selected": False},
+            {"ref": "e3", "label": "福建", "selected": False},
         ]
     }
     empty_shortcuts = {"chips": []}
     current_only = {
         "chips": [
-            {"ref": "c1", "label": "南京"},
-            {"ref": "c2", "label": "杭州"},
+            {"ref": "c1", "label": "南京", "selected": False},
+            {"ref": "c2", "label": "杭州", "selected": False},
         ]
     }
 

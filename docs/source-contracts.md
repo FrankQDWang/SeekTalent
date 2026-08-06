@@ -54,7 +54,9 @@ Provider production code must follow these rules:
   must not repeat the effect inside that transition.
 - Liepin city-picker decisions use the bounded focused probe as their only
   action authority. Whole-page text may verify the final applied filter, but it
-  must not supply fallback refs or authorize a different click path.
+  must not supply fallback refs or authorize a different click path. For the
+  shortcut chip path, applied may also be confirmed by focused-probe chip
+  `selected` evidence; page-text remains a non-authorizing supplement.
 - Liepin detail opening uses the verified locator URL and the bounded owned
   detail tab. A missing locator must fail before effect; it must not fall back
   to clicking a card ref and guessing which tab appeared.
