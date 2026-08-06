@@ -16,6 +16,13 @@ if TYPE_CHECKING:
     from seektalent.providers.liepin.liepin_site_adapter import LiepinSiteAdapter
 
 
+class CityPickerControlNoEffect(OpenCliBrowserError):
+    """The picker control was clicked but remained conclusively closed."""
+
+    def __init__(self) -> None:
+        super().__init__("liepin_opencli_filter_unapplied")
+
+
 def observe_picker_ready(
     site: LiepinSiteAdapter,
     *,
@@ -26,6 +33,7 @@ def observe_picker_ready(
 ) -> OpenCliBrowserResult:
     deadline = _deadline(timeout_seconds)
     attempt = 0
+    readiness_reasons: list[str] = []
     while True:
         attempt += 1
         state = site.state()
@@ -88,8 +96,13 @@ def observe_picker_ready(
             "city_picker_probe_unavailable",
         }:
             return state
+        readiness_reasons.append(str(reason))
         if not _wait_for_next_observation(deadline):
             break
+    if readiness_reasons and all(
+        reason == "city_picker_not_ready" for reason in readiness_reasons
+    ):
+        raise CityPickerControlNoEffect()
     raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
 
 

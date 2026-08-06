@@ -965,6 +965,79 @@ def test_native_filter_effect_failure_does_not_repeat_selection(
     assert selection_calls == 1
 
 
+def test_city_filter_retries_only_observed_control_no_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from seektalent.providers.liepin import liepin_city_picker
+
+    runner = LiepinSiteAdapter(
+        browser_config=OpenCliBrowserConfig(
+            session="seektalent-city-control-no-effect",
+            timeout_seconds=10,
+            pacing_enabled=False,
+        ),
+        site_config=LiepinOpenCliSiteConfig(
+            allowed_hosts=("h.liepin.com",),
+            allowed_start_urls=(LIEPIN_RECRUITER_SEARCH_URL,),
+        ),
+        automation=object(),  # type: ignore[arg-type]
+    )
+    state = OpenCliBrowserResult(ok=True, action="state", private_output="filter-ready")
+    applied = False
+    control_attempts = 0
+    confirm_attempts = 0
+
+    monkeypatch.setattr(
+        "seektalent.providers.liepin.liepin_site_adapter.native_filter_selection_applied",
+        lambda *_args, **_kwargs: applied,
+    )
+    monkeypatch.setattr(runner, "state", lambda: state)
+    monkeypatch.setattr(runner, "_liepin_city_picker_control_ref", lambda **_kwargs: "control")
+
+    def click(ref: str) -> None:
+        nonlocal applied, control_attempts, confirm_attempts
+        if ref == "control":
+            control_attempts += 1
+        elif ref == "confirm":
+            confirm_attempts += 1
+            applied = True
+
+    monkeypatch.setattr(runner, "_click_native_filter_ref", click)
+
+    readiness_calls = 0
+
+    def observe_ready(*_args: object, **_kwargs: object) -> OpenCliBrowserResult:
+        nonlocal readiness_calls
+        readiness_calls += 1
+        if readiness_calls == 1:
+            raise liepin_city_picker.CityPickerControlNoEffect()
+        return state
+
+    monkeypatch.setattr(liepin_city_picker, "observe_picker_ready", observe_ready)
+    monkeypatch.setattr(
+        liepin_city_picker,
+        "resolve_picker_action",
+        lambda *_args, **_kwargs: (state, None, True, "confirm"),
+    )
+    monkeypatch.setattr(
+        liepin_city_picker,
+        "reconcile_city_filter_effect",
+        lambda *_args, **_kwargs: (state, "applied", None),
+    )
+
+    result = runner._select_liepin_native_filter(
+        filter_name="city",
+        section="expected",
+        label="Shanghai",
+        current_state=state,
+        events=[],
+    )
+
+    assert result is state
+    assert control_attempts == 2
+    assert confirm_attempts == 1
+
+
 def test_city_filter_never_uses_page_text_when_focused_probe_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

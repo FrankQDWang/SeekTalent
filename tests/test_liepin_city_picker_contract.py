@@ -7,6 +7,7 @@ import pytest
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserError
 from seektalent.providers.liepin.liepin_city_picker import (
+    CityPickerControlNoEffect,
     decide_picker_action,
     observe_picker_ready,
     parse_picker_probe_output,
@@ -252,3 +253,64 @@ def test_city_picker_reconciliation_transient_observation_stops_at_deadline(
 
     assert elapsed == 2
     assert len(events) == 3
+
+
+def test_city_picker_readiness_classifies_observed_closed_as_control_no_effect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    elapsed = 0.0
+
+    class Site:
+        def state(self) -> OpenCliBrowserResult:
+            return OpenCliBrowserResult(ok=True, action="state", private_output="")
+
+    monkeypatch.setattr(
+        city_picker_module,
+        "native_filter_selection_applied",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        city_picker_module,
+        "_picker_state_for_readiness",
+        lambda *_args, **_kwargs: (
+            {
+                "open": False,
+                "pickerPhase": "closed",
+                "searchInputPresent": False,
+                "searchInputVisible": False,
+                "citySurfacePresent": False,
+                "confirmPresent": False,
+            },
+            {
+                "probe_status": "closed",
+                "probe_search_input_present": False,
+                "probe_search_input_visible": False,
+                "probe_city_surface_present": False,
+                "probe_confirm_present": False,
+            },
+        ),
+    )
+    monkeypatch.setattr(city_picker_module.time, "monotonic", lambda: elapsed)
+
+    def sleep(seconds: float) -> None:
+        nonlocal elapsed
+        elapsed += seconds
+
+    monkeypatch.setattr(city_picker_module.time, "sleep", sleep)
+    events: list[dict[str, object]] = []
+
+    with pytest.raises(CityPickerControlNoEffect):
+        observe_picker_ready(
+            Site(),  # type: ignore[arg-type]
+            section="expected",
+            label="Shanghai",
+            events=events,
+            timeout_seconds=2,
+        )
+
+    assert elapsed == 2
+    assert [event["reason"] for event in events] == [
+        "city_picker_not_ready",
+        "city_picker_not_ready",
+        "city_picker_not_ready",
+    ]
