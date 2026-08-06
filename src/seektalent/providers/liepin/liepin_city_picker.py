@@ -4,7 +4,7 @@ import json
 import re
 import time
 from collections.abc import Callable, Mapping
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Literal, cast
 
 from seektalent.opencli_browser.contracts import OpenCliBrowserError, OpenCliBrowserResult
 from seektalent.providers.liepin.liepin_site_parsing import _opencli_result_text
@@ -255,20 +255,55 @@ def picker_control_ref(site: LiepinSiteAdapter, *, section: str) -> str:
 
 def picker_chip_ref(site: LiepinSiteAdapter, *, section: str, label: str) -> str | None:
     """Return the focused-probe ref for a visible quick city chip, if any."""
-    payload = _read_picker_state(site, section=section, allow_incomplete_open=True)
+    match = _unique_matching_chip(
+        _read_picker_state(site, section=section, allow_incomplete_open=True),
+        label=label,
+    )
+    if match is None:
+        return None
+    ref = match.get("ref")
+    return ref if isinstance(ref, str) else None
+
+
+def picker_chip_applied(
+    site: LiepinSiteAdapter,
+    *,
+    section: str,
+    label: str,
+) -> bool:
+    """Return True when the focused probe shows the exact chip as selected."""
+    match = _unique_matching_chip(
+        _read_picker_state(site, section=section, allow_incomplete_open=True),
+        label=label,
+    )
+    return match is not None and match.get("selected") is True
+
+
+def _unique_matching_chip(
+    payload: Mapping[str, object],
+    *,
+    label: str,
+) -> Mapping[str, object] | None:
     chips = payload.get("chips")
     if not isinstance(chips, list):
         return None
-    matches = [
-        chip["ref"]
-        for chip in chips
-        if isinstance(chip, Mapping)
-        and isinstance(chip.get("ref"), str)
-        and isinstance(chip.get("label"), str)
-        and _city_label_matches(str(chip["label"]), label)
-    ]
-    unique_refs = tuple(dict.fromkeys(matches))
-    return unique_refs[0] if len(unique_refs) == 1 else None
+    matches: list[Mapping[str, object]] = []
+    for raw_chip in chips:
+        if not isinstance(raw_chip, Mapping):
+            continue
+        chip = cast(Mapping[str, object], raw_chip)
+        ref = chip.get("ref")
+        chip_label = chip.get("label")
+        if (
+            isinstance(ref, str)
+            and isinstance(chip_label, str)
+            and _city_label_matches(chip_label, label)
+        ):
+            matches.append(chip)
+    unique_refs = tuple(dict.fromkeys(str(chip["ref"]) for chip in matches))
+    if len(unique_refs) != 1:
+        return None
+    return matches[0]
 
 
 def pending_confirm_ref(
@@ -510,21 +545,25 @@ def parse_picker_probe_output(
     else:
         if not isinstance(chips, list) or len(chips) > 24:
             raise OpenCliBrowserError("liepin_opencli_malformed_state")
-        safe_chips: list[dict[str, str]] = []
+        safe_chips: list[dict[str, object]] = []
         for chip in chips:
             if not isinstance(chip, Mapping):
                 raise OpenCliBrowserError("liepin_opencli_malformed_state")
             ref = chip.get("ref")
             label = chip.get("label")
+            selected = chip.get("selected")
             if (
                 not isinstance(ref, str)
                 or not _is_safe_ref(ref)
                 or not isinstance(label, str)
                 or not label.strip()
                 or len(label) > 80
+                or not isinstance(selected, bool)
             ):
                 raise OpenCliBrowserError("liepin_opencli_malformed_state")
-            safe_chips.append({"ref": ref, "label": label.strip()})
+            safe_chips.append(
+                {"ref": ref, "label": label.strip(), "selected": selected}
+            )
         payload["chips"] = safe_chips
     evidence_keys = (
         "pickerPhase",

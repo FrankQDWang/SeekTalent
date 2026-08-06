@@ -1111,22 +1111,27 @@ def test_city_filter_prefers_focused_chip_over_other_picker(
         automation=object(),  # type: ignore[arg-type]
     )
     state = OpenCliBrowserResult(ok=True, action="state", private_output="expected city chips")
-    applied = False
+    chip_selected = False
     clicked: list[str] = []
     events: list[dict[str, object]] = []
 
     monkeypatch.setattr(
         "seektalent.providers.liepin.liepin_site_adapter.native_filter_selection_applied",
-        lambda *_args, **_kwargs: applied,
+        lambda *_args, **_kwargs: False,
     )
     monkeypatch.setattr(runner, "state", lambda: state)
     monkeypatch.setattr(liepin_city_picker, "picker_chip_ref", lambda *_args, **_kwargs: "chip-beijing")
+    monkeypatch.setattr(
+        liepin_city_picker,
+        "picker_chip_applied",
+        lambda *_args, **_kwargs: chip_selected,
+    )
 
     def click(ref: str) -> None:
-        nonlocal applied
+        nonlocal chip_selected
         clicked.append(ref)
         if ref == "chip-beijing":
-            applied = True
+            chip_selected = True
 
     monkeypatch.setattr(runner, "_click_native_filter_ref", click)
 
@@ -1146,6 +1151,12 @@ def test_city_filter_prefers_focused_chip_over_other_picker(
     assert result is state
     assert clicked == ["chip-beijing"]
     assert any(event.get("action_kind") == "click_native_city_chip" for event in events)
+    assert any(
+        event.get("action_kind") == "verify_native_filter"
+        and event.get("ok") is True
+        and event.get("authority") == "focused_probe"
+        for event in events
+    )
     assert all(event.get("action_kind") != "open_native_filter_menu" for event in events)
 
 
@@ -1239,6 +1250,15 @@ def test_city_filter_chip_unapplied_does_not_retry_or_open_other(
     )
     monkeypatch.setattr(runner, "state", lambda: state)
     monkeypatch.setattr(liepin_city_picker, "picker_chip_ref", lambda *_args, **_kwargs: "chip-beijing")
+    monkeypatch.setattr(
+        liepin_city_picker,
+        "picker_chip_applied",
+        lambda *_args, **_kwargs: False,
+    )
+    monkeypatch.setattr(
+        "seektalent.providers.liepin.liepin_site_adapter.time.sleep",
+        lambda *_args, **_kwargs: None,
+    )
 
     def click(ref: str) -> None:
         nonlocal chip_clicks, other_opens
@@ -1256,17 +1276,22 @@ def test_city_filter_chip_unapplied_does_not_retry_or_open_other(
 
     monkeypatch.setattr(runner, "_liepin_city_picker_control_ref", fail_open)
 
+    events: list[dict[str, object]] = []
     with pytest.raises(OpenCliBrowserError, match="liepin_opencli_filter_unapplied"):
         runner._select_liepin_native_filter(
             filter_name="city",
             section="expected",
             label="北京",
             current_state=state,
-            events=[],
+            events=events,
         )
 
     assert chip_clicks == 1
     assert other_opens == 0
+    assert any(
+        event.get("action_kind") == "verify_native_filter" and event.get("ok") is False
+        for event in events
+    )
 
 
 def test_detail_url_unavailable_never_falls_back_to_clicking_card_ref(

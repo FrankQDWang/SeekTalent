@@ -1181,9 +1181,26 @@ def _liepin_city_picker_state_probe_script(*, section: str) -> str:
   const box = boxes.find((item) =>
     compact(item.querySelector(".search-item-title")?.textContent).includes(title)
   );
-  const controlCandidates = box
-    ? Array.from(box.querySelectorAll(".btn-choose, button, label, span")).filter((item) => visible(item))
+  const isSelectedChip = (node) => {
+    if (!node) return false;
+    const ariaTrue = (name) => (node.getAttribute && node.getAttribute(name)) === "true";
+    if (
+      ariaTrue("aria-pressed")
+      || ariaTrue("aria-checked")
+      || ariaTrue("aria-selected")
+    ) {
+      return true;
+    }
+    const classText = `${node.className || ""} ${node.parentElement && node.parentElement.className || ""}`;
+    return /(?:^|[\s_-])(?:active|selected|checked)(?:$|[\s_-])/i.test(String(classText));
+  };
+  const interactiveCandidates = box
+    ? Array.from(box.querySelectorAll(".btn-choose, button, label")).filter((item) => visible(item))
     : [];
+  const spanCandidates = box
+    ? Array.from(box.querySelectorAll("span")).filter((item) => visible(item))
+    : [];
+  const controlCandidates = interactiveCandidates.concat(spanCandidates);
   const control = controlCandidates.find((item) => compact(item.textContent) === "其他");
   const chips = [];
   for (const item of controlCandidates) {
@@ -1200,7 +1217,7 @@ def _liepin_city_picker_state_probe_script(*, section: str) -> str:
     ) {
       continue;
     }
-    chips.push({ ref, label: chipLabel });
+    chips.push({ ref, label: chipLabel, selected: isSelectedChip(item) });
     if (chips.length >= 24) break;
   }
   const exactSearchInputs = Array.from(document.querySelectorAll("input"))
