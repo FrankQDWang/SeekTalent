@@ -62,6 +62,7 @@ def observe_picker_ready(
                         "confirm_selection": "requested_city_selected",
                         "fill_search": "city_search_input_ready",
                         "select_candidate": "requested_city_option_ready",
+                        "no_exact_match": "city_picker_no_exact_match",
                         "closed": "city_picker_not_ready",
                         "wait": "city_picker_probe_incomplete",
                     }[decision]
@@ -94,6 +95,7 @@ def observe_picker_ready(
             "city_picker_not_ready",
             "city_picker_probe_incomplete",
             "city_picker_probe_unavailable",
+            "city_picker_no_exact_match",
         }:
             return state
         readiness_reasons.append(str(reason))
@@ -123,6 +125,8 @@ def find_liepin_city_filter_option(
     )
     if decision == "select_candidate" and ref is not None:
         return state, ref
+    if decision == "no_exact_match":
+        raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
     if decision == "fill_search" and ref is not None:
         before_effect()
         site.fill(target=ref, text=label)
@@ -140,6 +144,8 @@ def find_liepin_city_filter_option(
         decision, ref = decide_picker_action(picker_state, label=label)
         if decision == "select_candidate" and ref is not None:
             return state, ref
+        if decision == "no_exact_match":
+            raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
     raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
 
 
@@ -176,6 +182,8 @@ def _observe_city_option(
         )
         if not state.ok:
             raise OpenCliBrowserError(state.safe_reason_code)
+        if decision == "no_exact_match":
+            raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
         if picker_state is not None and decision == "select_candidate":
             return state, picker_state
         if not _wait_for_next_observation(deadline):
@@ -202,9 +210,23 @@ def decide_picker_action(
     *,
     label: str,
 ) -> tuple[
-    Literal["closed", "wait", "fill_search", "select_candidate", "confirm_selection"],
+    Literal[
+        "closed",
+        "wait",
+        "fill_search",
+        "select_candidate",
+        "confirm_selection",
+        "no_exact_match",
+    ],
     str | None,
 ]:
+    """Decide the next city-picker action from a focused probe payload.
+
+    Priority when open: confirm selected city, else click an exact candidate
+    (including hot-list tags), else fill search when the input is still empty for
+    this label. If search already targets the label but no exact candidate exists,
+    return no_exact_match — never click a non-matching first row.
+    """
     if payload.get("pickerPhase") in {"input_hidden", "input_visible_root_incomplete"}:
         return "wait", None
     if payload.get("open") is not True:
@@ -215,6 +237,8 @@ def decide_picker_action(
     candidate_ref = _picker_candidate_ref(payload, label=label)
     if candidate_ref is not None:
         return "select_candidate", candidate_ref
+    if _search_value_targets_label(payload, label=label):
+        return "no_exact_match", None
     input_ref = payload.get("searchInputRef")
     if isinstance(input_ref, str):
         return "fill_search", input_ref
@@ -227,6 +251,24 @@ def picker_control_ref(site: LiepinSiteAdapter, *, section: str) -> str:
     if not isinstance(control_ref, str):
         raise OpenCliBrowserError("liepin_opencli_filter_option_unavailable")
     return control_ref
+
+
+def picker_chip_ref(site: LiepinSiteAdapter, *, section: str, label: str) -> str | None:
+    """Return the focused-probe ref for a visible quick city chip, if any."""
+    payload = _read_picker_state(site, section=section, allow_incomplete_open=True)
+    chips = payload.get("chips")
+    if not isinstance(chips, list):
+        return None
+    matches = [
+        chip["ref"]
+        for chip in chips
+        if isinstance(chip, Mapping)
+        and isinstance(chip.get("ref"), str)
+        and isinstance(chip.get("label"), str)
+        and _city_label_matches(str(chip["label"]), label)
+    ]
+    unique_refs = tuple(dict.fromkeys(matches))
+    return unique_refs[0] if len(unique_refs) == 1 else None
 
 
 def pending_confirm_ref(
@@ -462,6 +504,28 @@ def parse_picker_probe_output(
     ):
         raise OpenCliBrowserError("liepin_opencli_malformed_state")
     payload["confirmRefs"] = list(confirm_refs)
+    chips = parsed.get("chips")
+    if chips is None:
+        payload["chips"] = []
+    else:
+        if not isinstance(chips, list) or len(chips) > 24:
+            raise OpenCliBrowserError("liepin_opencli_malformed_state")
+        safe_chips: list[dict[str, str]] = []
+        for chip in chips:
+            if not isinstance(chip, Mapping):
+                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            ref = chip.get("ref")
+            label = chip.get("label")
+            if (
+                not isinstance(ref, str)
+                or not _is_safe_ref(ref)
+                or not isinstance(label, str)
+                or not label.strip()
+                or len(label) > 80
+            ):
+                raise OpenCliBrowserError("liepin_opencli_malformed_state")
+            safe_chips.append({"ref": ref, "label": label.strip()})
+        payload["chips"] = safe_chips
     evidence_keys = (
         "pickerPhase",
         "searchInputPresent",
@@ -622,6 +686,17 @@ def _picker_candidate_ref(payload: dict[str, object], *, label: str) -> str | No
         ):
             return ref
     return None
+
+
+def _search_value_targets_label(payload: dict[str, object], *, label: str) -> bool:
+    search_value = payload.get("searchValue")
+    if not isinstance(search_value, str):
+        return False
+    normalized_search = _normalized_city(search_value)
+    normalized_label = _normalized_city(label)
+    if not normalized_search or not normalized_label:
+        return False
+    return normalized_search == normalized_label or _city_label_matches(search_value, label)
 
 
 def _city_label_matches(visible_label: str, requested_label: str) -> bool:
