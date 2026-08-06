@@ -2963,7 +2963,10 @@ class LiepinSiteAdapter:
                 )
                 return state
             except OpenCliBrowserError as exc:
-                if filter_effect_started:
+                if filter_effect_started and not isinstance(
+                    exc,
+                    city_picker.CityPickerControlNoEffect,
+                ):
                     raise
                 if exc.safe_reason_code not in RETRYABLE_NATIVE_FILTER_REASONS or attempt_index == 2:
                     raise
